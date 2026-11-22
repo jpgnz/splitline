@@ -1,0 +1,216 @@
+<?php
+
+namespace App\Console\Commands;
+
+use App\Jobs\SyncActivityStreamJob;
+use App\Models\Activity;
+use App\Models\SyncRun;
+use App\Services\Garmin\ActivityStreamSyncService;
+use App\Services\Garmin\GarminClient;
+use Carbon\CarbonImmutable;
+use Illuminate\Console\Command;
+use Throwable;
+
+class GarminSyncStreamsCommand extends Command
+{
+    /**
+     * The name and signature of the console command.
+     *
+     * @var string
+     */
+    protected $signature = 'garmin:sync-streams
+        {--limit= : Maximum number of activities to sync (defaults to all matching)}
+        {--activity= : Sync a single activity by local ID or Garmin activity ID}
+        {--force : Re-sync activities that already have streams (reuses local FIT archives unless --redownload is set)}
+        {--redownload : Re-download FIT archives from Garmin even when a local archive already exists}
+        {--queue : Dispatch jobs to the queue instead of running synchronously}';
+
+    /**
+     * The console command description.
+     *
+     * @var string
+     */
+    protected $description = 'Download, cache, and parse FIT telemetry streams and Best Efforts for all non-manual activities';
+
+    /**
+     * Execute the console command.
+     */
+    public function handle(ActivityStreamSyncService $streamSyncService, GarminClient $client): int
+    {
+        $rawLimit = $this->option('limit');
+        $limit = null;
+
+        if ($rawLimit !== null && $rawLimit !== '') {
+            if (! is_numeric($rawLimit) || (int) $rawLimit < 1 || (string) (int) $rawLimit !== trim((string) $rawLimit)) {
+                $this->components->error('The --limit option must be a positive integer.');
+
+                return self::FAILURE;
+            }
+
+            $limit = (int) $rawLimit;
+        }
+
+        $rawActivity = $this->option('activity');
+        $activityOption = is_string($rawActivity) && trim($rawActivity) !== '' ? trim($rawActivity) : null;
+
+        if ($activityOption !== null && (! ctype_digit($activityOption) || (int) $activityOption <= 0)) {
+            $this->components->error('The --activity option must be a positive integer ID.');
+
+            return self::FAILURE;
+        }
+
+        $force = (bool) $this->option('force');
+        $redownload = (bool) $this->option('redownload');
+        $queue = (bool) $this->option('queue');
+
+        $activityIds = $this->resolveTargetActivityIds($activityOption, $limit, $force);
+
+        if ($activityOption !== null && $activityIds === []) {
+            $this->components->error("No activity found matching ID {$activityOption}.");
+
+            return self::FAILURE;
+        }
+
+        if ($activityIds === []) {
+            $this->components->info('No activities require stream synchronization.');
+
+            return self::SUCCESS;
+        }
+
+        if ($queue) {
+            foreach ($activityIds as $activityId) {
+                SyncActivityStreamJob::dispatch($activityId, forceDownload: $redownload);
+            }
+
+            $count = count($activityIds);
+            $this->components->info("Dispatched {$count} stream sync job(s) to the queue.");
+
+            return self::SUCCESS;
+        }
+
+        $startedAt = microtime(true);
+        $syncRun = SyncRun::query()->create([
+            'type' => 'streams',
+            'status' => 'running',
+            'started_at' => CarbonImmutable::now(),
+            'items_synced' => 0,
+        ]);
+
+        $total = count($activityIds);
+        $itemsSynced = 0;
+        $cachedHits = 0;
+        /** @var list<string> $errors */
+        $errors = [];
+
+        $this->components->info("Syncing FIT streams for {$total} activity(ies)...");
+
+        $client->onRateLimitWait(function (float $waitSeconds, string $reason): void {
+            $seconds = (int) ceil($waitSeconds);
+            $this->components->twoColumnDetail("Rate limited ({$reason})", "waiting {$seconds}s");
+        });
+
+        try {
+            foreach ($activityIds as $index => $activityId) {
+                $position = $index + 1;
+                $activity = Activity::query()->find($activityId);
+
+                if ($activity === null) {
+                    continue;
+                }
+
+                $usedCache = ! $redownload && $streamSyncService->hasLocalArchive($activity);
+
+                try {
+                    $streamSyncService->sync($activity, forceDownload: $redownload);
+                    $itemsSynced++;
+
+                    if ($usedCache) {
+                        $cachedHits++;
+                    }
+
+                    $this->components->twoColumnDetail(
+                        "[{$position}/{$total}] #{$activity->id} {$activity->name}",
+                        $usedCache ? 'synced (local)' : 'synced',
+                    );
+                } catch (Throwable $exception) {
+                    $message = "Activity #{$activity->id} ({$activity->garmin_activity_id}): {$exception->getMessage()}";
+                    $errors[] = $message;
+                    $this->components->twoColumnDetail(
+                        "[{$position}/{$total}] #{$activity->id} {$activity->name}",
+                        '<fg=red>failed</>',
+                    );
+                }
+
+                unset($activity);
+
+                if ($position % 25 === 0) {
+                    gc_collect_cycles();
+                }
+            }
+        } finally {
+            $client->onRateLimitWait(null);
+        }
+
+        $status = $errors !== [] && $itemsSynced === 0 ? 'failed' : 'completed';
+
+        $syncRun->update([
+            'status' => $status,
+            'finished_at' => CarbonImmutable::now(),
+            'items_synced' => $itemsSynced,
+            'error_message' => $errors !== [] ? implode("\n", $errors) : null,
+        ]);
+
+        $elapsedSeconds = round(microtime(true) - $startedAt, 2);
+
+        if ($status === 'failed') {
+            $this->components->error('Garmin stream sync failed: '.$errors[0]);
+
+            return self::FAILURE;
+        }
+
+        $this->components->info('Garmin stream sync completed.');
+        $this->components->twoColumnDetail('Items Synced', (string) $itemsSynced);
+        $this->components->twoColumnDetail('From Local Cache', (string) $cachedHits);
+        $this->components->twoColumnDetail('Errors', (string) count($errors));
+        $this->components->twoColumnDetail('Duration', "{$elapsedSeconds}s");
+
+        return self::SUCCESS;
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function resolveTargetActivityIds(?string $activityOption, ?int $limit, bool $force): array
+    {
+        if ($activityOption !== null) {
+            $targetId = (int) $activityOption;
+
+            return array_values(array_map(
+                'intval',
+                Activity::query()
+                    ->where('id', $targetId)
+                    ->orWhere('garmin_activity_id', $targetId)
+                    ->limit(1)
+                    ->pluck('id')
+                    ->all(),
+            ));
+        }
+
+        $query = Activity::query()
+            ->where('is_manual', false);
+
+        if (! $force) {
+            $query->whereNull('streams_synced_at');
+        }
+
+        $query
+            ->orderByDesc('started_at_local')
+            ->orderByDesc('id');
+
+        if ($limit !== null) {
+            $query->limit($limit);
+        }
+
+        return array_values(array_map('intval', $query->pluck('id')->all()));
+    }
+}
