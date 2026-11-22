@@ -1,0 +1,55 @@
+# Splitline — Self-Hosting Docker Compose Template
+#
+# Quick start:
+#   cp .env.example .env
+#   # Edit .env to set TIMEZONE, GARMIN_KEY, and APP_URL
+#   docker compose up -d
+#
+# Security: Splitline serves plain HTTP on port 8080 and delegates authentication
+# and TLS to your upstream reverse proxy or private network (Tailscale, Cloudflare
+# Access, Authelia, Authentik, or Caddy/Nginx auth). Do not expose port 8080
+# directly to the public internet without upstream authentication.
+
+services:
+    splitline:
+        image: ghcr.io/jpgnz/splitline:latest
+        container_name: splitline
+        restart: unless-stopped
+        ports:
+            - '8080:8080'
+        environment:
+            # Core application settings
+            APP_URL: ${APP_URL:-http://localhost:8080}
+            # Display timezone for activity dates, streaks, and daily telemetry.
+            # Defaults to UTC; also honors standard container TZ if TIMEZONE is unset.
+            TIMEZONE: ${TIMEZONE:-UTC}
+            TZ: ${TIMEZONE:-UTC}
+            # Default measurement system for first run: metric | imperial
+            DEFAULT_UNITS: ${DEFAULT_UNITS:-metric}
+            # Default sports navigation mode: auto | custom
+            DEFAULT_SPORTS_MODE: ${DEFAULT_SPORTS_MODE:-auto}
+
+            # Data provider — Garmin Connect Personal API
+            GARMIN_KEY: ${GARMIN_KEY:-}
+
+            # Reverse proxy & HTTPS settings (uncomment/configure behind Caddy, Traefik,
+            # Nginx, Tailscale Serve, or Cloudflare Tunnels)
+            TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+            SESSION_SECURE_COOKIE: ${SESSION_SECURE_COOKIE:-false}
+
+            # Logging & SQLite concurrency
+            LOG_CHANNEL: ${LOG_CHANNEL:-stderr}
+            DB_SQLITE_JOURNAL_MODE: ${DB_SQLITE_JOURNAL_MODE:-WAL}
+            DB_SQLITE_BUSY_TIMEOUT: ${DB_SQLITE_BUSY_TIMEOUT:-5000}
+
+            # Optional: leave blank to auto-generate and persist in /data/.app_key
+            APP_KEY: ${APP_KEY:-}
+        volumes:
+            # Persistent SQLite database (/data/database.sqlite) and auto-generated APP_KEY (/data/.app_key)
+            - splitline_data:/data
+            # Cached Garmin FIT archive ZIPs for offline Best Effort recalculation
+            - splitline_fits:/var/www/html/storage/app/private
+
+volumes:
+    splitline_data:
+    splitline_fits:

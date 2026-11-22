@@ -1,0 +1,11 @@
+# Local build override for testing or building Splitline from source.
+#
+# Usage (from deploy/docker/):
+#   docker compose -f compose.yaml -f compose.local.yaml up -d --build
+
+services:
+    splitline:
+        build:
+            context: ../..
+            dockerfile: deploy/docker/Dockerfile
+        image: splitline:local

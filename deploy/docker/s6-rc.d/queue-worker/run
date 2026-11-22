@@ -1,0 +1,13 @@
+#!/command/with-contenv sh
+set -eu
+
+if [ -z "${APP_KEY:-}" ] && [ -s /data/.app_key ]; then
+    APP_KEY="$(tr -d '\r\n' < /data/.app_key)"
+    export APP_KEY
+fi
+
+if [ "$(id -u)" -eq 0 ]; then
+    exec s6-setuidgid www-data php /var/www/html/artisan queue:work --sleep=3 --tries=5 --timeout=600
+fi
+
+exec php /var/www/html/artisan queue:work --sleep=3 --tries=5 --timeout=600

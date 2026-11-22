@@ -1,0 +1,84 @@
+# Version control & CI
+.git
+.gitignore
+.gitattributes
+.github
+
+# Environment & local secrets
+.env
+.env.*
+deploy/docker/.env
+deploy/docker/.env.*
+auth.json
+
+# Databases & local runtime state
+database/*.sqlite*
+storage/app/private/*
+!storage/app/private/.gitignore
+storage/logs/*
+!storage/logs/.gitignore
+storage/pail
+storage/inertia-devtools/*
+storage/framework/cache/*
+!storage/framework/cache/.gitignore
+storage/framework/sessions/*
+!storage/framework/sessions/.gitignore
+storage/framework/testing/*
+!storage/framework/testing/.gitignore
+storage/framework/views/*
+!storage/framework/views/.gitignore
+bootstrap/cache/*
+!bootstrap/cache/.gitignore
+
+# Dependencies & build artifacts (rebuilt in Docker stages)
+vendor/
+node_modules/
+public/build/
+public/hot
+public/fonts-manifest.dev.json
+public/storage
+resources/js/actions/
+resources/js/routes/
+resources/js/wayfinder/
+
+# Tests, tooling & documentation
+tests/
+.phpunit.cache
+.phpunit.result.cache
+phpstan.neon
+phpunit.xml
+pint.json
+*.md
+LICENSE
+screenshot-*.png
+
+# Docker Compose templates (not needed inside image)
+deploy/docker/compose.yaml
+deploy/docker/compose.local.yaml
+
+# Editor & AI agent configs
+.DS_Store
+.editorconfig
+.fleet/
+.idea/
+.nova/
+.vscode/
+.zed/
+.agents/
+.amp/
+.claude/
+.codex/
+.cursor/
+.factory/
+.grok/
+.junie/
+.kiro/
+.pi/
+.mcp.json
+AGENTS.md
+CLAUDE.md
+boost.json
+opencode.json
+opencode.jsonc
+npm-debug.log
+yarn-error.log
