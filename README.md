@@ -4,6 +4,10 @@ Local-first, self-hosted personal endurance and health telemetry platform. Split
 
 Currently supports the **Garmin Connect Personal API** (`GARMIN_KEY`).
 
+![Splitline overview: health dashboard, wind-colored route maps, running best efforts, and cycling power analytics](docs/screenshots/00-hero.png)
+
+> See more screenshots of dashboards, sport hubs, FIT telemetry, and settings in [docs/screenshots](docs/screenshots/README.md).
+
 ## Features
 
 - **Daily Health & Recovery**: Sleep stages, HRV, resting heart rate, Body Battery, stress, SpO2, weight, VO2 Max, training readiness, and trend charts.
