@@ -44,7 +44,7 @@ RUN mkdir -p \
 # Stage 2: Build frontend assets natively on $BUILDPLATFORM
 # Uses Wayfinder files generated in Stage 1 so Node needs no PHP runtime.
 # ------------------------------------------------------------------------------
-FROM --platform=$BUILDPLATFORM node:22-alpine AS assets
+FROM --platform=$BUILDPLATFORM node:26-alpine AS assets
 
 WORKDIR /app
 

@@ -4,7 +4,7 @@
 
 - **PHP 8.4+** (8.5 recommended) with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, `intl`, `bcmath`, and `pcntl`
 - **Composer 2**
-- **Node.js 22+** and **npm**
+- **Node.js 26+** and **npm**
 - **SQLite 3**
 
 ## Local Setup
