@@ -58,6 +58,14 @@
             "Composer\\Config::disableProcessTimeout",
             "@php artisan dev"
         ],
+        "dev:upgrade": [
+            "Composer\\Config::disableProcessTimeout",
+            "composer upgrade",
+            "npm upgrade",
+            "@php artisan boost:update --discover --ansi",
+            "composer outdated --direct",
+            "npm outdated || true"
+        ],
         "lint": [
             "pint --parallel"
         ],
