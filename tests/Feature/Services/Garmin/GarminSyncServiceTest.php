@@ -668,3 +668,231 @@ it('backfills daily summaries in batched v2 range requests without overwriting s
     expect(implode("\n", $progress))->toContain('Rate limited');
     Sleep::assertSleptTimes(1);
 });
+
+it('syncs missing fitness age dates in incremental sync while skipping stored past dates and refreshing today', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
+    Http::preventStrayRequests();
+    configureGarminForSyncTest();
+
+    // 2026-11-20 already exists (should be skipped); 2026-11-19 is missing (should be fetched); 2026-11-21 is today (should be refreshed)
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-20',
+        'chronological_age' => 43.0,
+        'fitness_age' => 36.0,
+    ]);
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-21',
+        'chronological_age' => 43.0,
+        'fitness_age' => 35.9,
+    ]);
+
+    $requestedDates = [];
+
+    Http::fake(function (Request $request) use (&$requestedDates) {
+        $url = $request->url();
+
+        if (str_contains($url, '/personalapitoken-service/')) {
+            return Http::response(syncFakeJwt(), 200);
+        }
+
+        if (preg_match('#/fitnessage-service/fitnessage/v2/(\d{4}-\d{2}-\d{2})#', $url, $matches) === 1) {
+            $date = $matches[1];
+            $requestedDates[] = $date;
+
+            return Http::response([
+                'chronologicalAge' => 43,
+                'fitnessAge' => $date === '2026-11-21' ? 34.8 : 36.4,
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    app(GarminSyncService::class)->syncIncremental(days: 3);
+
+    expect($requestedDates)->toBe(['2026-11-21', '2026-11-19'])
+        ->and(FitnessAgeRecord::query()->where('calendar_date', '2026-11-21')->first()?->fitness_age)->toBe(34.8)
+        ->and(FitnessAgeRecord::query()->where('calendar_date', '2026-11-20')->first()?->fitness_age)->toBe(36.0)
+        ->and(FitnessAgeRecord::query()->where('calendar_date', '2026-11-19')->first()?->fitness_age)->toBe(36.4);
+});
+
+it('samples fitness age weekly during backfill and skips already-stored historical dates', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
+    Http::preventStrayRequests();
+    configureGarminForSyncTest();
+
+    // Existing historical checkpoint should not be re-fetched
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-14',
+        'chronological_age' => 43.0,
+        'fitness_age' => 36.1,
+    ]);
+
+    $requestedDates = [];
+
+    Http::fake(function (Request $request) use (&$requestedDates) {
+        $url = $request->url();
+
+        if (str_contains($url, '/personalapitoken-service/')) {
+            return Http::response(syncFakeJwt(), 200);
+        }
+
+        if (str_contains($url, '/activitylist-service/activities/search/activities')) {
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+            if ((int) ($query['start'] ?? 0) === 0) {
+                return Http::response([
+                    [
+                        'activityId' => 888,
+                        'activityName' => 'Earlier Run',
+                        'startTimeLocal' => '2026-10-20 07:00:00',
+                        'startTimeGMT' => '2026-10-19 18:00:00',
+                        'activityType' => ['typeKey' => 'running'],
+                        'distance' => 8000,
+                        'duration' => 2400,
+                    ],
+                ], 200);
+            }
+
+            return Http::response([], 200);
+        }
+
+        if (preg_match('#/fitnessage-service/fitnessage/v2/(\d{4}-\d{2}-\d{2})#', $url, $matches) === 1) {
+            $requestedDates[] = $matches[1];
+
+            return Http::response([
+                'chronologicalAge' => 43,
+                'fitnessAge' => 35.5,
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    app(GarminSyncService::class)->syncBackfill();
+
+    // Window 1 (2026-10-25..2026-11-21): 11-21, 11-14 (skipped), 11-07, 10-31
+    // Window 2 (2026-10-20..2026-10-24): 10-24
+    expect($requestedDates)->toBe([
+        '2026-11-21',
+        '2026-11-07',
+        '2026-10-31',
+        '2026-10-24',
+    ])
+        ->and(FitnessAgeRecord::query()->count())->toBe(5);
+});
+
+it('starts backfill from today instead of a stale interrupted run when a newer backfill already completed', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
+    Http::preventStrayRequests();
+    configureGarminForSyncTest();
+
+    // Older interrupted backfill left stuck in "running" with a 2021 cursor
+    SyncRun::query()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::parse('2026-11-20 07:00:00'),
+        'cursor_date' => '2021-06-12',
+        'items_synced' => 100,
+    ]);
+
+    // Later completed backfill
+    SyncRun::query()->create([
+        'type' => 'backfill',
+        'status' => 'completed',
+        'started_at' => CarbonImmutable::parse('2026-11-20 08:00:00'),
+        'finished_at' => CarbonImmutable::parse('2026-11-20 08:10:00'),
+        'cursor_date' => null,
+        'items_synced' => 200,
+    ]);
+
+    $requestedDates = [];
+
+    Http::fake(function (Request $request) use (&$requestedDates) {
+        $url = $request->url();
+
+        if (str_contains($url, '/personalapitoken-service/')) {
+            return Http::response(syncFakeJwt(), 200);
+        }
+
+        if (preg_match('#/fitnessage-service/fitnessage/v2/(\d{4}-\d{2}-\d{2})#', $url, $matches) === 1) {
+            $requestedDates[] = $matches[1];
+
+            return Http::response([
+                'chronologicalAge' => 43,
+                'fitnessAge' => 35.2,
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    app(GarminSyncService::class)->syncBackfill(untilDate: '2026-11-01');
+
+    // Must start from today (2026-11-21), NOT the stale 2021-06-12 cursor
+    expect($requestedDates)->toBe([
+        '2026-11-21',
+        '2026-11-14',
+        '2026-11-07',
+    ]);
+});
+
+it('backs off to once-per-window fitness age sampling when consecutive historical windows return null fitness_age', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
+    Http::preventStrayRequests();
+    configureGarminForSyncTest();
+
+    $requestedDates = [];
+
+    Http::fake(function (Request $request) use (&$requestedDates) {
+        $url = $request->url();
+
+        if (str_contains($url, '/personalapitoken-service/')) {
+            return Http::response(syncFakeJwt(), 200);
+        }
+
+        if (str_contains($url, '/usersummary-service/v2/dailysummaries')) {
+            // Return 1 daily summary per window so backfill doesn't stop early on empty windows
+            parse_str((string) parse_url($url, PHP_URL_QUERY), $query);
+
+            return Http::response([
+                'data' => [
+                    [
+                        'calendarDate' => $query['endDate'] ?? '2026-11-21',
+                        'movement' => ['steps' => ['value' => 5000]],
+                    ],
+                ],
+            ], 200);
+        }
+
+        if (preg_match('#/fitnessage-service/fitnessage/v2/(\d{4}-\d{2}-\d{2})#', $url, $matches) === 1) {
+            $requestedDates[] = $matches[1];
+
+            // Chronological age present, fitnessAge null (stale / pre-feature era)
+            return Http::response([
+                'chronologicalAge' => 35,
+                'fitnessAge' => null,
+            ], 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    // 3 full 28-day windows:
+    // Window 1 (2026-10-25..2026-11-21): weekly (4 calls) -> empty count = 1
+    // Window 2 (2026-09-27..2026-10-24): weekly (4 calls) -> empty count = 2
+    // Window 3 (2026-08-30..2026-09-26): backed off to 1 call (2026-09-26 only)
+    app(GarminSyncService::class)->syncBackfill(untilDate: '2026-08-30');
+
+    expect($requestedDates)->toBe([
+        '2026-11-21',
+        '2026-11-14',
+        '2026-11-07',
+        '2026-10-31',
+        '2026-10-24',
+        '2026-10-17',
+        '2026-10-10',
+        '2026-10-03',
+        '2026-09-26',
+    ]);
+});

@@ -65,6 +65,7 @@ class HandleInertiaRequests extends Middleware
      *     items_synced: int,
      *     started_at: ?string,
      *     finished_at: ?string,
+     *     cursor_date: ?string,
      *     last_synced_at: ?string,
      *     error_message: ?string,
      *     provider_configured: bool
@@ -81,16 +82,18 @@ class HandleInertiaRequests extends Middleware
                 'items_synced' => 0,
                 'started_at' => null,
                 'finished_at' => null,
+                'cursor_date' => null,
                 'last_synced_at' => null,
                 'error_message' => null,
                 'provider_configured' => $providerConfigured,
             ];
         }
 
-        $latest = SyncRun::query()->latest('started_at')->first();
+        $latest = SyncRun::query()->latest('started_at')->latest('id')->first();
         $lastCompleted = SyncRun::query()
             ->where('status', 'completed')
             ->latest('finished_at')
+            ->latest('id')
             ->first();
 
         return [
@@ -99,6 +102,7 @@ class HandleInertiaRequests extends Middleware
             'items_synced' => $latest !== null ? $latest->items_synced : 0,
             'started_at' => $latest?->started_at?->toIso8601String(),
             'finished_at' => $latest?->finished_at?->toIso8601String(),
+            'cursor_date' => $latest?->cursor_date,
             'last_synced_at' => $lastCompleted?->finished_at?->toIso8601String(),
             'error_message' => $latest?->error_message,
             'provider_configured' => $providerConfigured,

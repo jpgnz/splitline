@@ -16,7 +16,8 @@ class GarminSyncCommand extends Command
     protected $signature = 'garmin:sync
         {--days=7 : Number of recent days to sync incrementally}
         {--backfill : Run full all-time resumable history backfill}
-        {--from= : Optional YYYY-MM-DD date to resume backfill from}';
+        {--from= : Optional YYYY-MM-DD date to resume backfill from}
+        {--until= : Optional earliest YYYY-MM-DD date to stop backfill at}';
 
     /**
      * The console command description.
@@ -36,6 +37,15 @@ class GarminSyncCommand extends Command
 
         if ($fromDate !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $fromDate) !== 1) {
             $this->components->error('The --from option must be a valid YYYY-MM-DD date.');
+
+            return self::FAILURE;
+        }
+
+        $rawUntil = $this->option('until');
+        $untilDate = is_string($rawUntil) && trim($rawUntil) !== '' ? trim($rawUntil) : null;
+
+        if ($untilDate !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $untilDate) !== 1) {
+            $this->components->error('The --until option must be a valid YYYY-MM-DD date.');
 
             return self::FAILURE;
         }
@@ -63,7 +73,7 @@ class GarminSyncCommand extends Command
 
         try {
             $syncRun = $isBackfill
-                ? $syncService->syncBackfill($fromDate, $onProgress)
+                ? $syncService->syncBackfill($fromDate, $onProgress, $untilDate)
                 : $syncService->syncIncremental($days, $onProgress);
         } catch (Throwable $exception) {
             $this->components->error('Garmin sync failed: '.$exception->getMessage());

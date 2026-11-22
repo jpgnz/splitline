@@ -48,6 +48,7 @@ Route::post('/gear/{gearItem}/retire', [GearController::class, 'toggleRetire'])-
 Route::delete('/gear/{gearItem}', [GearController::class, 'destroy'])->name('gear.destroy');
 
 Route::post('/sync', [SyncController::class, 'store'])->name('sync.store');
+Route::post('/sync/backfill', [SyncController::class, 'backfill'])->name('sync.backfill');
 Route::get('/sync/status', [SyncController::class, 'status'])->name('sync.status');
 
 require __DIR__.'/settings.php';
