@@ -30,6 +30,8 @@ class GarminSyncService
 
     private const int BACKFILL_WINDOW_DAYS = 28;
 
+    private const int BACKFILL_FITNESS_AGE_STEP_DAYS = 7;
+
     private const int MAX_CONSECUTIVE_EMPTY_WINDOWS = 4;
 
     /**
@@ -131,8 +133,14 @@ class GarminSyncService
             $itemsSynced += $this->syncWeightMeasurements($weightStartStr, $todayStr);
             $itemsSynced += $this->syncWeightGoals($weightStartStr, $todayStr);
 
-            $this->report($onProgress, "Syncing fitness age ({$todayStr})");
-            $itemsSynced += $this->syncFitnessAge($todayStr);
+            $this->report($onProgress, "Syncing fitness age ({$startStr} to {$todayStr})");
+            $itemsSynced += $this->syncFitnessAgeRange(
+                $startStr,
+                $todayStr,
+                stepDays: 1,
+                skipExisting: true,
+                alwaysRefreshDate: $todayStr,
+            );
 
             $this->report($onProgress, 'Syncing recent activities');
             $itemsSynced += $this->syncRecentActivities();
@@ -163,8 +171,11 @@ class GarminSyncService
      *
      * @param  (callable(string): void)|null  $onProgress
      */
-    public function syncBackfill(?string $resumeFromDate = null, ?callable $onProgress = null): SyncRun
-    {
+    public function syncBackfill(
+        ?string $resumeFromDate = null,
+        ?callable $onProgress = null,
+        ?string $untilDate = null,
+    ): SyncRun {
         $cursorDate = $this->resolveBackfillCursorDate($resumeFromDate);
 
         $syncRun = SyncRun::query()->create([
@@ -175,7 +186,38 @@ class GarminSyncService
             'items_synced' => 0,
         ]);
 
-        $itemsSynced = 0;
+        $this->syncBackfillChunk(
+            syncRun: $syncRun,
+            maxWindows: PHP_INT_MAX,
+            untilDate: $untilDate,
+            includeInitialSetup: true,
+            onProgress: $onProgress,
+        );
+
+        return $syncRun->refresh();
+    }
+
+    /**
+     * Advance a resumable backfill run by up to $maxWindows 28-day windows.
+     *
+     * @param  (callable(string): void)|null  $onProgress
+     * @return array{
+     *     completed: bool,
+     *     consecutiveEmptyWindows: int,
+     *     consecutiveEmptyFitnessAgeWindows: int
+     * }
+     */
+    public function syncBackfillChunk(
+        SyncRun $syncRun,
+        int $maxWindows = 10,
+        ?string $untilDate = null,
+        bool $includeInitialSetup = true,
+        int $consecutiveEmptyWindows = 0,
+        int $consecutiveEmptyFitnessAgeWindows = 0,
+        ?callable $onProgress = null,
+    ): array {
+        $itemsSynced = (int) $syncRun->items_synced;
+        $windowLimit = max(1, $maxWindows);
 
         if ($onProgress !== null) {
             $this->client->onRateLimitWait(function (float $waitSeconds, string $reason) use ($onProgress): void {
@@ -185,18 +227,30 @@ class GarminSyncService
         }
 
         try {
-            $this->report($onProgress, 'Syncing heart rate zones');
-            $itemsSynced += $this->syncHeartRateZones();
+            if ($includeInitialSetup) {
+                $this->report($onProgress, 'Syncing heart rate zones');
+                $itemsSynced += $this->syncHeartRateZones();
 
-            $this->report($onProgress, 'Backfilling all activities');
-            $itemsSynced += $this->syncAllActivities($onProgress);
+                $this->report($onProgress, 'Backfilling all activities');
+                $itemsSynced += $this->syncAllActivities($onProgress);
 
-            $earliestDate = $this->resolveEarliestBackfillDate();
-            $windowEnd = $cursorDate;
-            $consecutiveEmptyWindows = 0;
+                $syncRun->update([
+                    'items_synced' => $itemsSynced,
+                ]);
+            }
+
+            $todayStr = $this->today()->format('Y-m-d');
+            $earliestDate = $untilDate !== null && trim($untilDate) !== ''
+                ? CarbonImmutable::parse($untilDate, $this->timezone())->startOfDay()
+                : $this->resolveEarliestBackfillDate();
+            $windowEnd = is_string($syncRun->cursor_date) && $syncRun->cursor_date !== ''
+                ? CarbonImmutable::parse($syncRun->cursor_date, $this->timezone())->startOfDay()
+                : $this->today();
+            $windowsProcessed = 0;
 
             while (
-                $windowEnd->greaterThanOrEqualTo($earliestDate)
+                $windowsProcessed < $windowLimit
+                && $windowEnd->greaterThanOrEqualTo($earliestDate)
                 && $consecutiveEmptyWindows < self::MAX_CONSECUTIVE_EMPTY_WINDOWS
             ) {
                 $windowStart = $windowEnd->subDays(self::BACKFILL_WINDOW_DAYS - 1);
@@ -219,7 +273,28 @@ class GarminSyncService
                 $windowItems += $this->syncWeightMeasurements($startStr, $endStr);
                 $windowItems += $this->syncWeightGoals($startStr, $endStr);
                 $windowItems += $this->syncDailyHydration($startStr, $endStr);
-                $windowItems += $this->syncFitnessAge($endStr);
+
+                $fitnessAgeStep = $consecutiveEmptyFitnessAgeWindows < 2
+                    ? self::BACKFILL_FITNESS_AGE_STEP_DAYS
+                    : self::BACKFILL_WINDOW_DAYS;
+
+                $fitnessSynced = $this->syncFitnessAgeRange(
+                    $startStr,
+                    $endStr,
+                    stepDays: $fitnessAgeStep,
+                    skipExisting: true,
+                    alwaysRefreshDate: $todayStr,
+                );
+                $windowItems += $fitnessSynced;
+
+                $windowHasFitnessAge = $fitnessSynced > 0 || FitnessAgeRecord::query()
+                    ->whereBetween('calendar_date', [$startStr, $endStr])
+                    ->whereNotNull('fitness_age')
+                    ->exists();
+
+                $consecutiveEmptyFitnessAgeWindows = $windowHasFitnessAge
+                    ? 0
+                    : $consecutiveEmptyFitnessAgeWindows + 1;
 
                 $itemsSynced += $windowItems;
                 $consecutiveEmptyWindows = $windowItems === 0 ? $consecutiveEmptyWindows + 1 : 0;
@@ -232,16 +307,26 @@ class GarminSyncService
                 ]);
 
                 $windowEnd = $nextCursor;
+                $windowsProcessed++;
             }
 
-            $syncRun->update([
-                'status' => 'completed',
-                'finished_at' => CarbonImmutable::now(),
-                'cursor_date' => null,
-                'items_synced' => $itemsSynced,
-            ]);
+            $completed = $windowEnd->lessThan($earliestDate)
+                || $consecutiveEmptyWindows >= self::MAX_CONSECUTIVE_EMPTY_WINDOWS;
 
-            return $syncRun->refresh();
+            if ($completed) {
+                $syncRun->update([
+                    'status' => 'completed',
+                    'finished_at' => CarbonImmutable::now(),
+                    'cursor_date' => null,
+                    'items_synced' => $itemsSynced,
+                ]);
+            }
+
+            return [
+                'completed' => $completed,
+                'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+            ];
         } catch (Throwable $exception) {
             $syncRun->update([
                 'status' => 'failed',
@@ -730,6 +815,54 @@ class GarminSyncService
         return $synced;
     }
 
+    public function syncFitnessAgeRange(
+        string $startDate,
+        string $endDate,
+        int $stepDays = 1,
+        bool $skipExisting = true,
+        ?string $alwaysRefreshDate = null,
+    ): int {
+        $step = max(1, $stepDays);
+        $start = CarbonImmutable::parse($startDate)->startOfDay();
+        $cursor = CarbonImmutable::parse($endDate)->startOfDay();
+
+        if ($cursor->lessThan($start)) {
+            return 0;
+        }
+
+        /** @var list<string> $candidateDates */
+        $candidateDates = [];
+
+        while ($cursor->greaterThanOrEqualTo($start)) {
+            $candidateDates[] = $cursor->format('Y-m-d');
+            $cursor = $cursor->subDays($step);
+        }
+
+        $existingDates = [];
+
+        if ($skipExisting) {
+            $existingDates = array_fill_keys(
+                FitnessAgeRecord::query()
+                    ->whereIn('calendar_date', $candidateDates)
+                    ->pluck('calendar_date')
+                    ->all(),
+                true,
+            );
+        }
+
+        $synced = 0;
+
+        foreach ($candidateDates as $dateStr) {
+            if ($skipExisting && isset($existingDates[$dateStr]) && $dateStr !== $alwaysRefreshDate) {
+                continue;
+            }
+
+            $synced += $this->syncFitnessAge($dateStr);
+        }
+
+        return $synced;
+    }
+
     public function syncFitnessAge(string $date): int
     {
         $data = $this->callOptional(fn (): ?array => $this->client->fitnessAge($date));
@@ -756,7 +889,7 @@ class GarminSyncService
             ],
         );
 
-        return 1;
+        return $fitnessAge !== null ? 1 : 0;
     }
 
     public function syncWeightMeasurements(string $startDate, string $endDate): int
@@ -1598,15 +1731,18 @@ class GarminSyncService
             return CarbonImmutable::parse($resumeFromDate, $timezone)->startOfDay();
         }
 
-        $previousCursor = SyncRun::query()
+        $latestBackfill = SyncRun::query()
             ->where('type', 'backfill')
-            ->whereIn('status', ['failed', 'running'])
-            ->whereNotNull('cursor_date')
             ->orderByDesc('id')
-            ->value('cursor_date');
+            ->first();
 
-        if (is_string($previousCursor) && $previousCursor !== '') {
-            return CarbonImmutable::parse($previousCursor, $timezone)->startOfDay();
+        if (
+            $latestBackfill !== null
+            && in_array($latestBackfill->status, ['failed', 'running'], true)
+            && is_string($latestBackfill->cursor_date)
+            && $latestBackfill->cursor_date !== ''
+        ) {
+            return CarbonImmutable::parse($latestBackfill->cursor_date, $timezone)->startOfDay();
         }
 
         return $this->today();

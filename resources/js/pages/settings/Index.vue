@@ -1,22 +1,26 @@
 <script setup lang="ts">
-import { Head, router, useForm } from '@inertiajs/vue3';
+import { Head, router, useForm, usePage } from '@inertiajs/vue3';
 import {
+    AlertTriangle,
     ArrowDown,
     ArrowUp,
     Check,
     ChevronDown,
     Clock,
     Database,
+    History,
+    RefreshCw,
     Sparkles,
 } from '@lucide/vue';
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import {
     updateSports,
     updateUnits,
 } from '@/actions/App/Http/Controllers/SettingsController';
 import AppearanceTabs from '@/components/AppearanceTabs.vue';
-import { formatNumber } from '@/lib/format';
+import { formatNumber, formatRelativeTime } from '@/lib/format';
+import { backfill as syncBackfill, status as syncStatus } from '@/routes/sync';
 import type { UnitSystem } from '@/types/global';
 
 type FamilyMode = 'off' | 'unified' | 'split';
@@ -55,6 +59,13 @@ interface DiscoveryHint {
     count: number;
 }
 
+interface BackfillSummary {
+    last_completed_at: string | null;
+    can_resume: boolean;
+    resume_cursor_date: string | null;
+    last_error: string | null;
+}
+
 interface SettingsProps {
     unit_system: UnitSystem;
     timezone: string;
@@ -62,6 +73,7 @@ interface SettingsProps {
         name: string;
         configured: boolean;
     };
+    backfill: BackfillSummary;
     sports_settings: {
         config: SportsConfig;
         counts: Record<string, number>;
@@ -70,6 +82,189 @@ interface SettingsProps {
 }
 
 const props = defineProps<SettingsProps>();
+const page = usePage();
+
+type BackfillRange = '90d' | '1y' | '3y' | 'all';
+
+const BACKFILL_RANGE_OPTIONS: Array<{
+    value: BackfillRange;
+    label: string;
+}> = [
+    { value: '90d', label: 'Last 90 days' },
+    { value: '1y', label: 'Last 1 year' },
+    { value: '3y', label: 'Last 3 years' },
+    { value: 'all', label: 'All history' },
+];
+
+const selectedBackfillRange = ref<BackfillRange>('1y');
+const isBackfillPosting = ref(false);
+
+interface LiveSyncSnapshot {
+    status: string;
+    type: string | null;
+    cursor_date: string | null;
+    items_synced: number;
+    error_message: string | null;
+}
+
+const liveSync = ref<LiveSyncSnapshot>({
+    status: page.props.sync?.status ?? 'idle',
+    type: page.props.sync?.type ?? null,
+    cursor_date: page.props.sync?.cursor_date ?? null,
+    items_synced: page.props.sync?.items_synced ?? 0,
+    error_message: page.props.sync?.error_message ?? null,
+});
+
+watch(
+    () => page.props.sync,
+    (nextSync) => {
+        if (!nextSync) {
+            return;
+        }
+
+        liveSync.value = {
+            status: nextSync.status,
+            type: nextSync.type,
+            cursor_date: nextSync.cursor_date ?? null,
+            items_synced: nextSync.items_synced,
+            error_message: nextSync.error_message,
+        };
+    },
+    { deep: true },
+);
+
+const isAnySyncRunning = computed<boolean>(
+    () =>
+        isBackfillPosting.value ||
+        liveSync.value.status === 'running' ||
+        liveSync.value.status === 'queued',
+);
+
+const isBackfillActive = computed<boolean>(
+    () =>
+        (liveSync.value.status === 'running' ||
+            liveSync.value.status === 'queued') &&
+        liveSync.value.type === 'backfill',
+);
+
+const lastBackfillLabel = computed<string>(() =>
+    props.backfill.last_completed_at
+        ? formatRelativeTime(props.backfill.last_completed_at)
+        : 'Never',
+);
+
+let backfillPollTimer: ReturnType<typeof setInterval> | null = null;
+let backfillPollInFlight = false;
+
+function stopBackfillPolling(): void {
+    if (backfillPollTimer !== null) {
+        clearInterval(backfillPollTimer);
+        backfillPollTimer = null;
+    }
+}
+
+async function pollBackfillStatus(): Promise<void> {
+    if (backfillPollInFlight) {
+        return;
+    }
+
+    backfillPollInFlight = true;
+
+    try {
+        const response = await fetch(syncStatus.url(), {
+            headers: {
+                Accept: 'application/json',
+            },
+        });
+
+        if (!response.ok) {
+            return;
+        }
+
+        const data = (await response.json()) as Partial<LiveSyncSnapshot>;
+        const nextStatus = data.status ?? 'idle';
+
+        liveSync.value = {
+            status: nextStatus,
+            type: data.type ?? null,
+            cursor_date: data.cursor_date ?? null,
+            items_synced: data.items_synced ?? 0,
+            error_message: data.error_message ?? null,
+        };
+
+        if (nextStatus !== 'running' && nextStatus !== 'queued') {
+            stopBackfillPolling();
+
+            if (data.type === 'backfill') {
+                if (nextStatus === 'completed') {
+                    toast.success('Historical backfill completed.');
+                } else if (nextStatus === 'failed') {
+                    toast.error(
+                        data.error_message || 'Historical backfill failed.',
+                    );
+                }
+            }
+
+            router.reload({ only: ['backfill', 'sync'] });
+        }
+    } catch {
+        // Transient network error while polling; retry on next tick.
+    } finally {
+        backfillPollInFlight = false;
+    }
+}
+
+watch(
+    () =>
+        liveSync.value.status === 'running' ||
+        liveSync.value.status === 'queued',
+    (running) => {
+        if (running) {
+            if (backfillPollTimer === null) {
+                backfillPollTimer = setInterval(() => {
+                    void pollBackfillStatus();
+                }, 2500);
+            }
+        } else {
+            stopBackfillPolling();
+        }
+    },
+    { immediate: true },
+);
+
+onUnmounted(() => {
+    stopBackfillPolling();
+});
+
+function triggerBackfill(range: BackfillRange | 'resume'): void {
+    if (isAnySyncRunning.value || !props.provider.configured) {
+        return;
+    }
+
+    router.post(
+        syncBackfill.url(),
+        { range },
+        {
+            preserveScroll: true,
+            onStart: () => {
+                isBackfillPosting.value = true;
+            },
+            onSuccess: () => {
+                toast.success(
+                    range === 'resume'
+                        ? 'Resuming historical backfill in the background.'
+                        : 'Historical backfill started in the background.',
+                );
+            },
+            onError: () => {
+                toast.error('Unable to start historical backfill.');
+            },
+            onFinish: () => {
+                isBackfillPosting.value = false;
+            },
+        },
+    );
+}
 
 const UNIT_OPTIONS: Array<{
     value: UnitSystem;
@@ -1377,6 +1572,137 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
                             Background sync imports activities, wellness
                             metrics, and route data.
                         </p>
+                    </div>
+                </div>
+
+                <!-- Historical Backfill -->
+                <div
+                    class="mt-4 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/60 p-4 dark:border-zinc-800 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex flex-wrap items-start justify-between gap-3"
+                    >
+                        <div class="space-y-1">
+                            <div
+                                class="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            >
+                                <History class="size-3" />
+                                Historical Backfill
+                            </div>
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                Re-fetch historical health metrics (including
+                                weekly Fitness Age, VO2 Max, sleep, HRV, and
+                                weight) in resumable background chunks.
+                            </p>
+                        </div>
+
+                        <span
+                            class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        >
+                            Last completed: {{ lastBackfillLabel }}
+                        </span>
+                    </div>
+
+                    <!-- Live Progress Banner -->
+                    <div
+                        v-if="isAnySyncRunning"
+                        class="mt-3.5 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/8 px-3.5 py-2.5 text-xs dark:border-amber-500/25 dark:bg-amber-500/10"
+                    >
+                        <span
+                            class="flex items-center gap-2 font-medium text-amber-800 dark:text-amber-300"
+                        >
+                            <span
+                                class="size-2 animate-pulse rounded-full bg-amber-500"
+                            />
+                            {{
+                                isBackfillActive
+                                    ? 'Historical backfill running in background...'
+                                    : 'Garmin sync in progress...'
+                            }}
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-amber-700/90 tabular-nums dark:text-amber-300/90"
+                        >
+                            <template v-if="liveSync.cursor_date">
+                                Cursor {{ liveSync.cursor_date }} ·
+                            </template>
+                            {{ formatNumber(liveSync.items_synced) }} items
+                        </span>
+                    </div>
+
+                    <!-- Previous Backfill Error -->
+                    <div
+                        v-else-if="backfill.last_error"
+                        class="mt-3.5 flex items-start gap-2 rounded-lg border border-rose-500/30 bg-rose-500/8 px-3.5 py-2.5 text-xs text-rose-700 dark:border-rose-500/25 dark:bg-rose-500/10 dark:text-rose-300"
+                    >
+                        <AlertTriangle class="mt-0.5 size-3.5 shrink-0" />
+                        <span class="break-words">{{
+                            backfill.last_error
+                        }}</span>
+                    </div>
+
+                    <div
+                        class="mt-4 flex flex-wrap items-center justify-between gap-3"
+                    >
+                        <!-- Range Selector -->
+                        <div
+                            class="inline-flex flex-wrap rounded-lg border border-zinc-200/90 bg-white p-1 dark:border-zinc-800 dark:bg-[#141417]"
+                        >
+                            <button
+                                v-for="option in BACKFILL_RANGE_OPTIONS"
+                                :key="option.value"
+                                type="button"
+                                :disabled="isAnySyncRunning"
+                                class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                                :class="
+                                    selectedBackfillRange === option.value
+                                        ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                                        : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                "
+                                @click="selectedBackfillRange = option.value"
+                            >
+                                {{ option.label }}
+                            </button>
+                        </div>
+
+                        <!-- Actions -->
+                        <div class="flex flex-wrap items-center gap-2">
+                            <button
+                                v-if="
+                                    backfill.can_resume &&
+                                    backfill.resume_cursor_date &&
+                                    !isAnySyncRunning
+                                "
+                                type="button"
+                                :disabled="!provider.configured"
+                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                                @click="triggerBackfill('resume')"
+                            >
+                                <History class="size-3.5" />
+                                Resume from {{ backfill.resume_cursor_date }}
+                            </button>
+
+                            <button
+                                type="button"
+                                :disabled="
+                                    isAnySyncRunning || !provider.configured
+                                "
+                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                                @click="triggerBackfill(selectedBackfillRange)"
+                            >
+                                <RefreshCw
+                                    :class="[
+                                        'size-3.5',
+                                        isAnySyncRunning && 'animate-spin',
+                                    ]"
+                                />
+                                {{
+                                    isBackfillActive
+                                        ? 'Backfilling...'
+                                        : 'Start Backfill'
+                                }}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>

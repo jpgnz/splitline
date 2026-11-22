@@ -61,6 +61,7 @@ it('renders the health metric drilldown page for every supported metric', functi
     'intensity-minutes' => ['intensity-minutes', 'amber', 'intensity-stacked', 'min'],
     'weight' => ['weight', 'emerald', 'weight-comp', 'kg'],
     'vo2-max' => ['vo2-max', 'indigo', 'vo2-dual', 'mL/kg/min'],
+    'fitness-age' => ['fitness-age', 'violet', 'fitness-age', 'yrs'],
     'calories' => ['calories', 'orange', 'calories-stacked', 'kcal'],
     'floors' => ['floors', 'teal', 'bar-goal', 'floors'],
     'respiration-spo2' => ['respiration-spo2', 'teal', 'dual-line', 'brpm / %'],

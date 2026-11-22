@@ -1252,6 +1252,7 @@ class DashboardService
 
         $fitnessAgeRecord = FitnessAgeRecord::query()
             ->where('calendar_date', '<=', $selectedDateStr)
+            ->whereNotNull('fitness_age')
             ->orderByDesc('calendar_date')
             ->first();
 

@@ -1,8 +1,10 @@
 <?php
 
 use App\Models\Activity;
+use App\Models\SyncRun;
 use App\Support\AppSettings;
 use App\Support\SportRegistry;
+use Carbon\CarbonImmutable;
 use Inertia\Testing\AssertableInertia as Assert;
 
 it('renders the unified settings page with units, timezone, provider status, and sports settings', function () {
@@ -24,6 +26,8 @@ it('renders the unified settings page with units, timezone, provider status, and
             ->where('timezone', 'Pacific/Auckland')
             ->where('provider.name', 'Garmin Connect')
             ->where('provider.configured', true)
+            ->where('backfill.can_resume', false)
+            ->where('backfill.resume_cursor_date', null)
             ->where('sports_settings.config.mode', 'auto')
             ->where('sports_settings.counts.hiking', 1)
             ->has('sports_settings.hints', 1)
@@ -42,6 +46,37 @@ it('reports provider as unconfigured when GARMIN_KEY is empty', function () {
             ->component('settings/Index')
             ->where('provider.name', 'Garmin Connect')
             ->where('provider.configured', false),
+        );
+});
+
+it('exposes resumable backfill metadata on settings when the latest backfill failed with a cursor', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00'));
+
+    SyncRun::factory()->create([
+        'type' => 'backfill',
+        'status' => 'completed',
+        'started_at' => CarbonImmutable::now()->subDays(2),
+        'finished_at' => CarbonImmutable::now()->subDays(2)->addMinutes(10),
+        'cursor_date' => null,
+    ]);
+
+    SyncRun::factory()->create([
+        'type' => 'backfill',
+        'status' => 'failed',
+        'started_at' => CarbonImmutable::now()->subHour(),
+        'finished_at' => CarbonImmutable::now()->subMinutes(50),
+        'cursor_date' => '2025-03-10',
+        'error_message' => 'Temporary Garmin API outage',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('settings/Index')
+            ->where('backfill.can_resume', true)
+            ->where('backfill.resume_cursor_date', '2025-03-10')
+            ->where('backfill.last_error', 'Temporary Garmin API outage')
+            ->where('backfill.last_completed_at', fn ($value): bool => is_string($value) && $value !== ''),
         );
 });
 
