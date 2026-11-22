@@ -1,0 +1,10 @@
+<?php
+
+use App\Http\Controllers\SettingsController;
+use Illuminate\Support\Facades\Route;
+
+Route::get('/settings', [SettingsController::class, 'index'])->name('settings.index');
+Route::patch('/settings/units', [SettingsController::class, 'updateUnits'])->name('settings.units.update');
+Route::patch('/settings/sports', [SettingsController::class, 'updateSports'])->name('settings.sports.update');
+
+Route::redirect('/settings/appearance', '/settings')->name('appearance.edit');
