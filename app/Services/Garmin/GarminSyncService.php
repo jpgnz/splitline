@@ -17,6 +17,9 @@ use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
 use App\Services\Gear\GearService;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class GarminSyncService
@@ -263,6 +266,16 @@ class GarminSyncService
 
                 $this->report($onProgress, 'Backfilling all activities');
                 $itemsSynced += $this->syncAllActivities($onProgress, $syncRun, $itemsSynced);
+
+                if (! $this->isRunStillActive($syncRun)) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
+
+                $this->queueMissingActivityEnrichments($effectiveUntilDate);
 
                 if (! $this->updateActiveRun($syncRun, [
                     'initial_setup_completed' => true,
@@ -1429,6 +1442,104 @@ class GarminSyncService
             ->whereKey($syncRun->id)
             ->whereIn('status', ['running', 'queued'])
             ->exists();
+    }
+
+    /**
+     * Queue missing FIT stream and historical weather enrichment jobs for existing activities in range.
+     */
+    private function queueMissingActivityEnrichments(?string $untilDate): void
+    {
+        $cutoffLocal = $untilDate !== null && trim($untilDate) !== ''
+            ? trim($untilDate).' 00:00:00'
+            : null;
+
+        if ((bool) config('services.garmin.auto_sync_streams', true)) {
+            $streamQuery = Activity::query()
+                ->where('is_manual', false)
+                ->whereNull('streams_synced_at')
+                ->whereNull('streams_unavailable_at')
+                ->orderByDesc('started_at_local')
+                ->orderByDesc('id');
+
+            if ($cutoffLocal !== null) {
+                $streamQuery->where('started_at_local', '>=', $cutoffLocal);
+            }
+
+            /** @var list<int> $streamIds */
+            $streamIds = array_values(array_map('intval', $streamQuery->pluck('id')->all()));
+
+            if ($streamIds !== []) {
+                DB::transaction(function () use ($streamIds): void {
+                    foreach ($streamIds as $activityId) {
+                        SyncActivityStreamJob::dispatch($activityId);
+                    }
+                });
+            }
+        }
+
+        if (
+            (bool) config('services.open_meteo.enabled', true)
+            && (bool) config('services.open_meteo.auto_sync', true)
+        ) {
+            $weatherQuery = Activity::query()
+                ->where('is_indoor', false)
+                ->where(function (Builder $coordQuery): void {
+                    $coordQuery
+                        ->where(function (Builder $startCoords): void {
+                            $startCoords
+                                ->whereNotNull('start_lat')
+                                ->whereNotNull('start_lng');
+                        })
+                        ->orWhereExists(function (QueryBuilder $streamSub): void {
+                            $streamSub
+                                ->selectRaw('1')
+                                ->from('activity_streams')
+                                ->whereColumn('activity_streams.activity_id', 'activities.id');
+                        });
+                })
+                ->where(function (Builder $missingOrUpgradeQuery): void {
+                    $missingOrUpgradeQuery
+                        ->whereNotExists(function (QueryBuilder $weatherSub): void {
+                            $weatherSub
+                                ->selectRaw('1')
+                                ->from('activity_weathers')
+                                ->whereColumn('activity_weathers.activity_id', 'activities.id');
+                        })
+                        ->orWhere(function (Builder $upgradeQuery): void {
+                            $upgradeQuery
+                                ->whereExists(function (QueryBuilder $weatherSub): void {
+                                    $weatherSub
+                                        ->selectRaw('1')
+                                        ->from('activity_weathers')
+                                        ->whereColumn('activity_weathers.activity_id', 'activities.id')
+                                        ->where('activity_weathers.sampling_mode', 'start_point');
+                                })
+                                ->whereExists(function (QueryBuilder $streamSub): void {
+                                    $streamSub
+                                        ->selectRaw('1')
+                                        ->from('activity_streams')
+                                        ->whereColumn('activity_streams.activity_id', 'activities.id');
+                                });
+                        });
+                })
+                ->orderByDesc('started_at_local')
+                ->orderByDesc('id');
+
+            if ($cutoffLocal !== null) {
+                $weatherQuery->where('started_at_local', '>=', $cutoffLocal);
+            }
+
+            /** @var list<int> $weatherIds */
+            $weatherIds = array_values(array_map('intval', $weatherQuery->pluck('id')->all()));
+
+            if ($weatherIds !== []) {
+                DB::transaction(function () use ($weatherIds): void {
+                    foreach ($weatherIds as $activityId) {
+                        SyncActivityWeatherJob::dispatch($activityId);
+                    }
+                });
+            }
+        }
     }
 
     /**
