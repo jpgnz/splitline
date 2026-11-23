@@ -6,6 +6,7 @@ use App\Jobs\SyncActivityStreamJob;
 use App\Models\Activity;
 use App\Models\SyncRun;
 use App\Services\Garmin\ActivityStreamSyncService;
+use App\Services\Garmin\GarminApiException;
 use App\Services\Garmin\GarminClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
@@ -83,7 +84,7 @@ class GarminSyncStreamsCommand extends Command
             }
 
             $count = count($activityIds);
-            $this->components->info("Dispatched {$count} stream sync job(s) to the queue.");
+            $this->components->info("Requested stream sync for {$count} activity(ies) on the streams queue.");
 
             return self::SUCCESS;
         }
@@ -133,6 +134,16 @@ class GarminSyncStreamsCommand extends Command
                         $usedCache ? 'synced (local)' : 'synced',
                     );
                 } catch (Throwable $exception) {
+                    if (
+                        $exception instanceof GarminApiException
+                        && $exception->isArchiveUnavailable()
+                        && $activity->started_at_utc->lessThanOrEqualTo(CarbonImmutable::now('UTC')->subDay())
+                    ) {
+                        $activity->update([
+                            'streams_unavailable_at' => CarbonImmutable::now(),
+                        ]);
+                    }
+
                     $message = "Activity #{$activity->id} ({$activity->garmin_activity_id}): {$exception->getMessage()}";
                     $errors[] = $message;
                     $this->components->twoColumnDetail(
@@ -200,7 +211,7 @@ class GarminSyncStreamsCommand extends Command
             ->where('is_manual', false);
 
         if (! $force) {
-            $query->whereNull('streams_synced_at');
+            $query->awaitingStreams();
         }
 
         $query

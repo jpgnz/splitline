@@ -512,3 +512,29 @@ it('retries transient HTTP 5xx responses and records a failed weather SyncRun wh
         ->and($failedRun->items_synced)->toBe(0)
         ->and($failedRun->error_message)->toContain('HTTP 400');
 });
+
+it('deduplicates identical SyncActivityWeatherJob dispatches while allowing explicit forced refreshes', function () {
+    Queue::fake([SyncActivityWeatherJob::class]);
+
+    $activity = Activity::factory()->create([
+        'start_lat' => -36.8485,
+        'start_lng' => 174.7633,
+    ]);
+
+    SyncActivityWeatherJob::dispatch($activity->id);
+    SyncActivityWeatherJob::dispatch($activity->id);
+    SyncActivityWeatherJob::dispatch($activity->id, force: true);
+    SyncActivityWeatherJob::dispatch($activity->id, force: true);
+
+    Queue::assertPushed(SyncActivityWeatherJob::class, 2);
+    Queue::assertPushedOn(
+        'weather',
+        SyncActivityWeatherJob::class,
+        fn (SyncActivityWeatherJob $job): bool => $job->activityId === $activity->id && $job->force === false,
+    );
+    Queue::assertPushedOn(
+        'weather',
+        SyncActivityWeatherJob::class,
+        fn (SyncActivityWeatherJob $job): bool => $job->activityId === $activity->id && $job->force === true,
+    );
+});

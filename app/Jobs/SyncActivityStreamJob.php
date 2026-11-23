@@ -5,14 +5,20 @@ namespace App\Jobs;
 use App\Models\Activity;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Garmin\GarminApiException;
+use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
-class SyncActivityStreamJob implements ShouldQueue
+class SyncActivityStreamJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    public const string QUEUE = 'streams';
+
     public int $tries = 5;
+
+    public int $uniqueFor = 14400;
 
     /**
      * @var list<int>
@@ -23,7 +29,12 @@ class SyncActivityStreamJob implements ShouldQueue
         public readonly int $activityId,
         public readonly bool $forceDownload = false,
     ) {
-        $this->onQueue('streams');
+        $this->onQueue(self::QUEUE);
+    }
+
+    public function uniqueId(): string
+    {
+        return "{$this->activityId}:".($this->forceDownload ? '1' : '0');
     }
 
     /**
@@ -42,6 +53,16 @@ class SyncActivityStreamJob implements ShouldQueue
         } catch (GarminApiException $exception) {
             if ($exception->isRateLimited() && $this->job !== null) {
                 $this->release($exception->retryAfterSeconds ?? 60);
+
+                return;
+            }
+
+            if ($exception->isArchiveUnavailable()) {
+                if ($activity->started_at_utc->lessThanOrEqualTo(CarbonImmutable::now('UTC')->subDay())) {
+                    $activity->update([
+                        'streams_unavailable_at' => CarbonImmutable::now(),
+                    ]);
+                }
 
                 return;
             }

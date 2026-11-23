@@ -39,6 +39,7 @@ return [
         'key' => env('GARMIN_KEY'),
         'base_url' => env('GARMIN_BASE_URL', 'https://personal.connectapi.garmin.com'),
         'timeout' => (int) env('GARMIN_TIMEOUT', 30),
+        'auto_sync_streams' => (bool) env('GARMIN_AUTO_SYNC_STREAMS', true),
         'rate_limit' => [
             'max_requests_per_minute' => (int) env('GARMIN_RATE_LIMIT_PER_MINUTE', 85),
             'max_retries' => (int) env('GARMIN_RATE_LIMIT_MAX_RETRIES', 5),

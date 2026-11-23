@@ -7,6 +7,7 @@ use App\Models\Activity;
 use App\Services\Heatmap\HeatmapService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -31,15 +32,10 @@ class HeatmapController extends Controller
         $ids = Activity::query()
             ->where('is_indoor', false)
             ->where('is_manual', false)
-            ->whereNull('streams_synced_at')
+            ->awaitingStreams()
             ->orderByDesc('started_at_local')
-            ->limit(250)
             ->pluck('id')
             ->all();
-
-        foreach ($ids as $id) {
-            SyncActivityStreamJob::dispatch((int) $id);
-        }
 
         $count = count($ids);
 
@@ -47,6 +43,12 @@ class HeatmapController extends Controller
             return back()->with('status', 'All outdoor GNSS streams are already synced.');
         }
 
-        return back()->with('status', "Queued GNSS stream sync for {$count} outdoor activity(ies).");
+        DB::transaction(function () use ($ids): void {
+            foreach ($ids as $id) {
+                SyncActivityStreamJob::dispatch((int) $id);
+            }
+        });
+
+        return back()->with('status', "Requested GNSS stream sync for {$count} outdoor activity(ies).");
     }
 }

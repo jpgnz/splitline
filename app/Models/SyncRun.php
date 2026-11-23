@@ -26,7 +26,7 @@ class SyncRun extends Model
     /** @use HasFactory<SyncRunFactory> */
     use HasFactory;
 
-    public const int ACTIVE_WINDOW_MINUTES = 10;
+    public const int ACTIVE_WINDOW_MINUTES = 12;
 
     /**
      * @var list<string>
@@ -96,20 +96,13 @@ class SyncRun extends Model
             && $this->cursor_date !== '';
     }
 
-    public static function supersedeStaleBackfills(?CarbonImmutable $now = null): int
+    public static function supersedePendingBackfills(?CarbonImmutable $now = null): int
     {
         $timestamp = $now ?? CarbonImmutable::now();
-        $cutoff = $timestamp->subMinutes(self::ACTIVE_WINDOW_MINUTES);
 
         return self::query()
             ->where('type', 'backfill')
             ->whereIn('status', ['running', 'queued'])
-            ->where('started_at', '<', $cutoff)
-            ->where(function ($query) use ($cutoff): void {
-                $query
-                    ->whereNull('updated_at')
-                    ->orWhere('updated_at', '<', $cutoff);
-            })
             ->update([
                 'status' => 'interrupted',
                 'finished_at' => $timestamp,
