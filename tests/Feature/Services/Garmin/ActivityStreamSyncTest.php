@@ -386,14 +386,15 @@ it('syncs all non-manual activities newest-first by default via garmin:sync-stre
     $this->artisan('garmin:sync-streams', ['--activity' => '600001'])
         ->assertSuccessful();
 
-    // --force + --queue + --redownload dispatches jobs with forceDownload=true
+    // --force + --queue + --redownload dispatches jobs with forceDownload=true onto the streams queue
     Queue::fake([SyncActivityStreamJob::class]);
 
     $this->artisan('garmin:sync-streams', ['--force' => true, '--redownload' => true, '--limit' => 2, '--queue' => true])
         ->assertSuccessful();
 
     Queue::assertPushed(SyncActivityStreamJob::class, 2);
-    Queue::assertPushed(
+    Queue::assertPushedOn(
+        'streams',
         SyncActivityStreamJob::class,
         fn (SyncActivityStreamJob $job): bool => $job->activityId === $alreadySynced->id && $job->forceDownload === true,
     );
