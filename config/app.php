@@ -17,6 +17,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Application Version
+    |--------------------------------------------------------------------------
+    |
+    | The release version string baked into container builds via APP_VERSION.
+    | When unset in local development, AppVersion falls back to
+    | `git describe --tags --always --dirty`, which reflects tags reachable
+    | from the checked-out branch's history (branches like `dev` that diverge
+    | from tagged `main` releases will report the last shared ancestor tag).
+    |
+    */
+
+    'version' => env('APP_VERSION'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Environment
     |--------------------------------------------------------------------------
     |
