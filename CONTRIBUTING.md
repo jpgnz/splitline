@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **PHP 8.4+** (8.5 recommended) with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, `intl`, `bcmath`, and `pcntl`
+- **PHP 8.5+** with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, `intl`, `bcmath`, and `pcntl`
 - **Composer 2**
 - **Node.js 26+** and **npm**
 - **SQLite 3**

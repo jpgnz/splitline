@@ -28,6 +28,7 @@ interface HealthMetricProps {
         extraValue: string | null;
     };
     baseline: { low: number | null; high: number | null } | null;
+    priorPoint?: Record<string, unknown> | null;
     points: Array<Record<string, number | string | null>>;
     columns: Array<{ key: string; label: string }>;
     rows: Array<Record<string, number | string | null>>;
@@ -63,6 +64,7 @@ const METRIC_SWITCHER: Array<{
     },
     { key: 'weight', label: 'Weight', dotClass: 'bg-emerald-500' },
     { key: 'vo2-max', label: 'VO2 Max', dotClass: 'bg-indigo-500' },
+    { key: 'fitness-age', label: 'Fitness Age', dotClass: 'bg-violet-500' },
     { key: 'calories', label: 'Calories', dotClass: 'bg-orange-500' },
     { key: 'floors', label: 'Floors', dotClass: 'bg-teal-500' },
     {
@@ -89,6 +91,11 @@ const ACCENT_MAP: Record<string, AccentPalette> = {
         hex: '#6366f1',
         barClass: 'bg-indigo-500',
         textClass: 'text-indigo-600 dark:text-indigo-400',
+    },
+    violet: {
+        hex: '#8b5cf6',
+        barClass: 'bg-violet-500',
+        textClass: 'text-violet-600 dark:text-violet-400',
     },
     emerald: {
         hex: '#10b981',
@@ -672,8 +679,21 @@ const chartOption = computed<EChartsOption>(() => {
             ? `<strong>${dateHeading}</strong>${travelLabel ? ` <span style="opacity:0.75">· ${travelLabel}</span>` : ''}`
             : '';
 
+        const seenSeries = new Set<string>();
         const rows = list
-            .filter((item) => item.seriesName && item.seriesName !== '_base')
+            .filter((item) => {
+                if (!item.seriesName || item.seriesName === '_base') {
+                    return false;
+                }
+
+                if (seenSeries.has(item.seriesName)) {
+                    return false;
+                }
+
+                seenSeries.add(item.seriesName);
+
+                return true;
+            })
             .map((item) => {
                 const val = extractTooltipNumericValue(item);
 
@@ -785,6 +805,124 @@ const chartOption = computed<EChartsOption>(() => {
         }
 
         return seriesData;
+    };
+
+    const pickPriorAnchor = (
+        source: Record<string, unknown> | null | undefined,
+        valueKey: string,
+        transform?: (value: number) => number,
+    ): { ts: number; value: number } | null => {
+        if (!source) {
+            return null;
+        }
+
+        const nested = source[valueKey];
+
+        if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+            const record = nested as Record<string, unknown>;
+            const ts = parseCalendarDateUtc(
+                typeof record.date === 'string' ? record.date : null,
+            );
+            const raw = record.value;
+            const numeric =
+                typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+
+            if (ts === null || numeric === null) {
+                return null;
+            }
+
+            return {
+                ts,
+                value: transform ? transform(numeric) : numeric,
+            };
+        }
+
+        const ts = parseCalendarDateUtc(
+            typeof source.date === 'string' ? source.date : null,
+        );
+        const raw = source[valueKey];
+        const numeric =
+            typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+
+        if (ts === null || numeric === null) {
+            return null;
+        }
+
+        return {
+            ts,
+            value: transform ? transform(numeric) : numeric,
+        };
+    };
+
+    const buildLeadInSeries = (
+        seriesName: string,
+        prior: { ts: number; value: number } | null,
+        seriesData: Array<[number, number | null]>,
+        options: {
+            color: string;
+            width?: number;
+            yAxisIndex?: number;
+            step?: boolean;
+            opacity?: number;
+        },
+    ): SeriesOption | null => {
+        if (!timeWindow || !prior) {
+            return null;
+        }
+
+        const first = seriesData.find(
+            (item): item is [number, number] => item[1] !== null,
+        );
+
+        if (!first) {
+            return null;
+        }
+
+        const [firstTs, firstVal] = first;
+
+        if (firstTs <= timeWindow.startMs || prior.ts >= firstTs) {
+            return null;
+        }
+
+        const leftEdgeMs = timeWindow.startMs - DAY_MS / 2;
+        let edgeVal: number;
+
+        if (options.step) {
+            edgeVal = prior.value;
+        } else {
+            const ratio = Math.max(
+                0,
+                Math.min(1, (leftEdgeMs - prior.ts) / (firstTs - prior.ts)),
+            );
+            edgeVal = Number(
+                (prior.value + ratio * (firstVal - prior.value)).toFixed(2),
+            );
+        }
+
+        return {
+            name: seriesName,
+            type: 'line',
+            ...(options.yAxisIndex !== undefined
+                ? { yAxisIndex: options.yAxisIndex }
+                : {}),
+            ...(options.step ? { step: 'end' as const } : {}),
+            silent: true,
+            tooltip: { show: false },
+            showSymbol: false,
+            legendHoverLink: false,
+            emphasis: { disabled: true },
+            lineStyle: {
+                color: options.color,
+                width: options.width ?? 2,
+                type: 'dotted',
+                opacity: options.opacity ?? 0.65,
+            },
+            itemStyle: { color: options.color },
+            data: [
+                [leftEdgeMs, edgeVal],
+                [firstTs, firstVal],
+            ],
+        };
     };
 
     const showPrimarySymbol = pts.length <= 100;
@@ -2128,6 +2266,9 @@ const chartOption = computed<EChartsOption>(() => {
             const hasBodyFat = bodyFat.some((v) => v !== null);
             const weightSeriesName = `Weight (${weightUnitLabel})`;
 
+            const weightSeriesData = toTimeSeries(weight);
+            const bodyFatSeriesData = toTimeSeries(bodyFat);
+
             const series: SeriesOption[] = [
                 {
                     name: weightSeriesName,
@@ -2139,7 +2280,7 @@ const chartOption = computed<EChartsOption>(() => {
                     symbolSize: primarySymbolSize,
                     lineStyle: { color: '#10b981', width: 2.25 },
                     itemStyle: { color: '#10b981' },
-                    data: toTimeSeries(weight),
+                    data: weightSeriesData,
                 },
             ];
 
@@ -2158,15 +2299,48 @@ const chartOption = computed<EChartsOption>(() => {
                         type: 'dashed',
                     },
                     itemStyle: { color: '#f59e0b' },
-                    data: toTimeSeries(bodyFat),
+                    data: bodyFatSeriesData,
                 });
+            }
+
+            const legendData = series
+                .map((item) => item.name)
+                .filter((name): name is string => typeof name === 'string');
+
+            const weightLeadIn = buildLeadInSeries(
+                weightSeriesName,
+                pickPriorAnchor(props.priorPoint, 'weightKg', (kg) =>
+                    Number(units.weightFromKg(kg).toFixed(1)),
+                ),
+                weightSeriesData,
+                { color: '#10b981', width: 2.25, yAxisIndex: 0 },
+            );
+
+            if (weightLeadIn) {
+                series.push(weightLeadIn);
+            }
+
+            if (hasBodyFat) {
+                const bodyFatLeadIn = buildLeadInSeries(
+                    'Body Fat (%)',
+                    pickPriorAnchor(props.priorPoint, 'bodyFatPct'),
+                    bodyFatSeriesData,
+                    { color: '#f59e0b', width: 1.75, yAxisIndex: 1 },
+                );
+
+                if (bodyFatLeadIn) {
+                    series.push(bodyFatLeadIn);
+                }
             }
 
             return {
                 useUTC: true,
                 animation: false,
                 grid: baseGrid,
-                legend: baseLegend,
+                legend: {
+                    ...baseLegend,
+                    data: legendData,
+                },
                 tooltip: {
                     ...baseTooltip,
                     formatter: (params: unknown): string => {
@@ -2192,12 +2366,20 @@ const chartOption = computed<EChartsOption>(() => {
                             lines.push(`<strong>${dateHeading}</strong>`);
                         }
 
+                        const seenWeightSeries = new Set<string>();
+
                         for (const item of list) {
                             const val = extractTooltipNumericValue(item);
 
-                            if (val === null || !item.seriesName) {
+                            if (
+                                val === null ||
+                                !item.seriesName ||
+                                seenWeightSeries.has(item.seriesName)
+                            ) {
                                 continue;
                             }
+
+                            seenWeightSeries.add(item.seriesName);
 
                             if (item.seriesName === weightSeriesName) {
                                 lines.push(
@@ -2259,6 +2441,8 @@ const chartOption = computed<EChartsOption>(() => {
             const cycling = pts.map((p) =>
                 pickNumber(p, ['cycling', 'cyclingVo2', 'cycling_vo2']),
             );
+            const runningSeriesData = toTimeSeries(running);
+            const cyclingSeriesData = toTimeSeries(cycling);
             const series: SeriesOption[] = [];
 
             if (running.some((v) => v !== null)) {
@@ -2271,7 +2455,7 @@ const chartOption = computed<EChartsOption>(() => {
                     symbolSize: primarySymbolSize,
                     lineStyle: { color: '#f59e0b', width: 2.25 },
                     itemStyle: { color: '#f59e0b' },
-                    data: toTimeSeries(running),
+                    data: runningSeriesData,
                 });
             }
 
@@ -2285,7 +2469,7 @@ const chartOption = computed<EChartsOption>(() => {
                     symbolSize: primarySymbolSize,
                     lineStyle: { color: '#0ea5e9', width: 2.25 },
                     itemStyle: { color: '#0ea5e9' },
-                    data: toTimeSeries(cycling),
+                    data: cyclingSeriesData,
                 });
             }
 
@@ -2305,17 +2489,276 @@ const chartOption = computed<EChartsOption>(() => {
                 });
             }
 
+            const legendData = series
+                .map((item) => item.name)
+                .filter((name): name is string => typeof name === 'string');
+
+            const runningLeadIn = buildLeadInSeries(
+                'Running VO2',
+                pickPriorAnchor(props.priorPoint, 'running'),
+                runningSeriesData,
+                { color: '#f59e0b', width: 2.25 },
+            );
+
+            if (runningLeadIn) {
+                series.push(runningLeadIn);
+            }
+
+            const cyclingLeadIn = buildLeadInSeries(
+                'Cycling VO2',
+                pickPriorAnchor(props.priorPoint, 'cycling'),
+                cyclingSeriesData,
+                { color: '#0ea5e9', width: 2.25 },
+            );
+
+            if (cyclingLeadIn) {
+                series.push(cyclingLeadIn);
+            }
+
             return {
                 useUTC: true,
                 animation: false,
                 grid: baseGrid,
-                legend: baseLegend,
+                legend: {
+                    ...baseLegend,
+                    data: legendData,
+                },
                 tooltip: baseTooltip,
                 xAxis: baseXAxis,
                 yAxis: {
                     type: 'value',
                     scale: true,
                     name: 'mL/kg/min',
+                    nameGap: 14,
+                    nameTextStyle: leftYAxisNameStyle,
+                    axisLabel: axisLabelStyle,
+                    splitLine: splitLineStyle,
+                },
+                series,
+            };
+        }
+
+        case 'fitness-age': {
+            const fitnessAge = pts.map((p) =>
+                pickNumber(p, ['fitnessAge', 'fitness_age', 'value']),
+            );
+            const chronologicalAge = pts.map((p) =>
+                pickNumber(p, ['chronologicalAge', 'chronological_age', 'age']),
+            );
+            const hasChronologicalAge = chronologicalAge.some(
+                (v) => v !== null,
+            );
+
+            const fitnessAgeSeriesData = toTimeSeries(fitnessAge);
+            const chronologicalAgeSeriesData = toTimeSeries(chronologicalAge);
+
+            const series: SeriesOption[] = [
+                {
+                    name: 'Fitness Age',
+                    type: 'line',
+                    smooth: 0.25,
+                    connectNulls: true,
+                    showSymbol: showPrimarySymbol,
+                    symbolSize: primarySymbolSize,
+                    lineStyle: { color: '#8b5cf6', width: 2.25 },
+                    itemStyle: { color: '#8b5cf6' },
+                    areaStyle: {
+                        origin: 'start',
+                        color: {
+                            type: 'linear',
+                            x: 0,
+                            y: 0,
+                            x2: 0,
+                            y2: 1,
+                            colorStops: [
+                                {
+                                    offset: 0,
+                                    color: 'rgba(139, 92, 246, 0.18)',
+                                },
+                                {
+                                    offset: 1,
+                                    color: 'rgba(139, 92, 246, 0.01)',
+                                },
+                            ],
+                        },
+                    },
+                    data: fitnessAgeSeriesData,
+                },
+            ];
+
+            if (hasChronologicalAge) {
+                series.push({
+                    name: 'Chronological Age',
+                    type: 'line',
+                    step: 'end',
+                    connectNulls: true,
+                    showSymbol: showSecondarySymbol,
+                    symbolSize: 5,
+                    lineStyle: {
+                        color: theme.mutedColor.value,
+                        width: 1.5,
+                        type: 'dashed',
+                    },
+                    itemStyle: { color: theme.mutedColor.value },
+                    data: chronologicalAgeSeriesData,
+                });
+            }
+
+            const legendData = series
+                .map((item) => item.name)
+                .filter((name): name is string => typeof name === 'string');
+
+            const fitnessLeadIn = buildLeadInSeries(
+                'Fitness Age',
+                pickPriorAnchor(props.priorPoint, 'fitnessAge'),
+                fitnessAgeSeriesData,
+                { color: '#8b5cf6', width: 2.25 },
+            );
+
+            if (fitnessLeadIn) {
+                series.push(fitnessLeadIn);
+            }
+
+            if (hasChronologicalAge) {
+                const chronoLeadIn = buildLeadInSeries(
+                    'Chronological Age',
+                    pickPriorAnchor(props.priorPoint, 'chronologicalAge'),
+                    chronologicalAgeSeriesData,
+                    {
+                        color: theme.mutedColor.value,
+                        width: 1.5,
+                        step: true,
+                        opacity: 0.55,
+                    },
+                );
+
+                if (chronoLeadIn) {
+                    series.push(chronoLeadIn);
+                }
+            }
+
+            return {
+                useUTC: true,
+                animation: false,
+                grid: baseGrid,
+                legend: {
+                    ...baseLegend,
+                    data: legendData,
+                },
+                tooltip: {
+                    ...baseTooltip,
+                    formatter: (params: unknown): string => {
+                        const list = (
+                            Array.isArray(params) ? params : [params]
+                        ) as AxisTooltipItem[];
+                        const first = list[0];
+
+                        if (!first) {
+                            return '';
+                        }
+
+                        const timestamp = extractTooltipTimestamp(first);
+                        const point =
+                            timestamp !== null
+                                ? pointByTimestamp.get(timestamp)
+                                : undefined;
+                        const dateHeading =
+                            timestamp !== null
+                                ? utcFullDateFormatter.format(
+                                      new Date(timestamp),
+                                  )
+                                : '';
+                        const lines: string[] = [];
+
+                        if (dateHeading) {
+                            lines.push(`<strong>${dateHeading}</strong>`);
+                        }
+
+                        const fitnessItem = list.find(
+                            (item) => item.seriesName === 'Fitness Age',
+                        );
+                        const chronoItem = list.find(
+                            (item) => item.seriesName === 'Chronological Age',
+                        );
+                        const fitVal = point
+                            ? pickNumber(point, ['fitnessAge', 'fitness_age'])
+                            : fitnessItem
+                              ? extractTooltipNumericValue(fitnessItem)
+                              : null;
+                        const chronoVal = point
+                            ? pickNumber(point, [
+                                  'chronologicalAge',
+                                  'chronological_age',
+                              ])
+                            : chronoItem
+                              ? extractTooltipNumericValue(chronoItem)
+                              : null;
+
+                        if (fitVal !== null) {
+                            lines.push(
+                                `${fitnessItem?.marker ?? ''}Fitness Age: <strong>${fitVal.toFixed(1)} yrs</strong>`,
+                            );
+                        }
+
+                        if (chronoVal !== null) {
+                            lines.push(
+                                `${chronoItem?.marker ?? ''}Age: <strong>${chronoVal.toFixed(1)} yrs</strong>`,
+                            );
+                        }
+
+                        if (fitVal !== null && chronoVal !== null) {
+                            const delta = Number(
+                                (fitVal - chronoVal).toFixed(1),
+                            );
+                            const deltaLabel =
+                                Math.abs(delta) < 0.05
+                                    ? '0.0 yrs'
+                                    : `${delta > 0 ? '+' : ''}${delta.toFixed(1)} yrs`;
+                            lines.push(
+                                `vs. Age: <strong>${deltaLabel}</strong>`,
+                            );
+                        }
+
+                        if (point) {
+                            const factors: string[] = [];
+                            const rhr = pickNumber(point, ['rhr']);
+                            const bodyFat = pickNumber(point, ['bodyFatPct']);
+                            const bmi = pickNumber(point, ['bmi']);
+                            const vigMin = pickNumber(point, [
+                                'vigorousMinutesAvg',
+                            ]);
+
+                            if (rhr !== null) {
+                                factors.push(`RHR ${Math.round(rhr)} bpm`);
+                            }
+
+                            if (bodyFat !== null) {
+                                factors.push(`Body Fat ${bodyFat.toFixed(1)}%`);
+                            } else if (bmi !== null) {
+                                factors.push(`BMI ${bmi.toFixed(1)}`);
+                            }
+
+                            if (vigMin !== null) {
+                                factors.push(
+                                    `Vigorous ${vigMin.toFixed(1)} min/wk`,
+                                );
+                            }
+
+                            if (factors.length > 0) {
+                                lines.push(
+                                    `<span style="opacity:0.75">${factors.join(' · ')}</span>`,
+                                );
+                            }
+                        }
+
+                        return lines.join('<br/>');
+                    },
+                },
+                xAxis: baseXAxis,
+                yAxis: {
+                    type: 'value',
+                    scale: true,
+                    name: 'yrs',
                     nameGap: 14,
                     nameTextStyle: leftYAxisNameStyle,
                     axisLabel: axisLabelStyle,

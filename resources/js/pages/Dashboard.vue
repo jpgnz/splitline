@@ -2765,7 +2765,7 @@ const hrSparklineOption = computed<EChartsOption>(() => {
 
                 <!-- 7. Fitness Age (Dedicated) -->
                 <Link
-                    :href="healthShow.url('vo2-max')"
+                    :href="healthShow.url('fitness-age')"
                     class="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-4 transition-colors hover:border-zinc-300 dark:border-zinc-800/90 dark:bg-[#141417] dark:hover:border-zinc-700"
                 >
                     <span

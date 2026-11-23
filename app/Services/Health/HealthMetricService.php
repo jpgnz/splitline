@@ -104,11 +104,18 @@ class HealthMetricService
             'chartType' => 'weight-comp',
         ],
         'vo2-max' => [
-            'title' => 'VO2 Max & Fitness Age',
-            'subtitle' => 'Aerobic capacity for running and cycling alongside fitness age',
+            'title' => 'VO2 Max',
+            'subtitle' => 'Aerobic capacity trends for running and cycling',
             'accent' => 'indigo',
             'unit' => 'mL/kg/min',
             'chartType' => 'vo2-dual',
+        ],
+        'fitness-age' => [
+            'title' => 'Fitness Age',
+            'subtitle' => 'Estimated fitness age against chronological age and contributing factors',
+            'accent' => 'violet',
+            'unit' => 'yrs',
+            'chartType' => 'fitness-age',
         ],
         'calories' => [
             'title' => 'Calories',
@@ -184,6 +191,7 @@ class HealthMetricService
      *         extraValue: ?string
      *     },
      *     baseline: ?array{low: ?int, high: ?int},
+     *     priorPoint: ?array<string, mixed>,
      *     points: list<array<string, mixed>>,
      *     columns: list<array{key: string, label: string}>,
      *     rows: list<array<string, string|int|float|null>>
@@ -209,6 +217,7 @@ class HealthMetricService
             'intensity-minutes' => $this->buildIntensityMinutes($startDate, $endDate, $normalizedRange),
             'weight' => $this->buildWeight($startDate, $endDate),
             'vo2-max' => $this->buildVo2Max($startDate, $endDate),
+            'fitness-age' => $this->buildFitnessAge($startDate, $endDate),
             'calories' => $this->buildCalories($startDate, $endDate),
             'floors' => $this->buildFloors($startDate, $endDate),
             'respiration-spo2' => $this->buildRespirationSpo2($startDate, $endDate),
@@ -235,6 +244,7 @@ class HealthMetricService
             'endDate' => $endDate,
             'summary' => $data['summary'],
             'baseline' => $data['baseline'],
+            'priorPoint' => $data['priorPoint'] ?? null,
             'points' => $data['points'],
             'columns' => $data['columns'],
             'rows' => array_slice(array_reverse($data['rows']), 0, self::MAX_TABLE_ROWS),
@@ -1163,6 +1173,7 @@ class HealthMetricService
      * @return array{
      *     summary: array{latest: ?string, average: ?string, min: ?string, max: ?string, extraLabel: ?string, extraValue: ?string},
      *     baseline: ?array{low: ?int, high: ?int},
+     *     priorPoint: ?array<string, mixed>,
      *     points: list<array<string, mixed>>,
      *     columns: list<array{key: string, label: string}>,
      *     rows: list<array<string, string|int|float|null>>
@@ -1225,6 +1236,25 @@ class HealthMetricService
             ? sprintf('%+.1f %s', ($weightsKg[count($weightsKg) - 1] - $weightsKg[0]) * $massFactor, $massUnit)
             : null;
 
+        $priorPoint = null;
+
+        if ($startDate !== null) {
+            $priorRecord = WeightMeasurement::query()
+                ->where('calendar_date', '<', $startDate)
+                ->orderByDesc('calendar_date')
+                ->orderByDesc('measured_at')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($priorRecord !== null) {
+                $priorPoint = [
+                    'date' => $priorRecord->calendar_date,
+                    'weightKg' => round($priorRecord->weight_grams / 1000, 2),
+                    'bodyFatPct' => $priorRecord->body_fat_pct,
+                ];
+            }
+        }
+
         return [
             'summary' => [
                 'latest' => $weightsKg !== [] ? number_format($weightsKg[count($weightsKg) - 1] * $massFactor, 1).' '.$massUnit : null,
@@ -1235,6 +1265,7 @@ class HealthMetricService
                 'extraValue' => $delta,
             ],
             'baseline' => null,
+            'priorPoint' => $priorPoint,
             'points' => $points,
             'columns' => [
                 ['key' => 'date', 'label' => 'Date'],
@@ -1252,6 +1283,7 @@ class HealthMetricService
      * @return array{
      *     summary: array{latest: ?string, average: ?string, min: ?string, max: ?string, extraLabel: ?string, extraValue: ?string},
      *     baseline: ?array{low: ?int, high: ?int},
+     *     priorPoint: ?array<string, mixed>,
      *     points: list<array<string, mixed>>,
      *     columns: list<array{key: string, label: string}>,
      *     rows: list<array<string, string|int|float|null>>
@@ -1264,19 +1296,13 @@ class HealthMetricService
             ->whereIn('sport', ['running', 'cycling'])
             ->orderBy('calendar_date');
 
-        $fitnessQuery = FitnessAgeRecord::query()
-            ->where('calendar_date', '<=', $endDate)
-            ->orderBy('calendar_date');
-
         if ($startDate !== null) {
             $vo2Query->where('calendar_date', '>=', $startDate);
-            $fitnessQuery->where('calendar_date', '>=', $startDate);
         }
 
         $vo2Records = $vo2Query->get();
-        $fitnessRecords = $fitnessQuery->get();
 
-        /** @var array<string, array{running: ?float, cycling: ?float, fitnessAge: ?float, chronologicalAge: ?float}> $byDate */
+        /** @var array<string, array{running: ?float, cycling: ?float}> $byDate */
         $byDate = [];
 
         foreach ($vo2Records as $record) {
@@ -1290,8 +1316,6 @@ class HealthMetricService
                 $byDate[$record->calendar_date] = [
                     'running' => null,
                     'cycling' => null,
-                    'fitnessAge' => null,
-                    'chronologicalAge' => null,
                 ];
             }
 
@@ -1302,46 +1326,24 @@ class HealthMetricService
             }
         }
 
-        foreach ($fitnessRecords as $record) {
-            if ($record->fitness_age === null && $record->chronological_age === null) {
-                continue;
-            }
-
-            if (! isset($byDate[$record->calendar_date])) {
-                $byDate[$record->calendar_date] = [
-                    'running' => null,
-                    'cycling' => null,
-                    'fitnessAge' => null,
-                    'chronologicalAge' => null,
-                ];
-            }
-
-            $byDate[$record->calendar_date]['fitnessAge'] = $record->fitness_age;
-            $byDate[$record->calendar_date]['chronologicalAge'] = $record->chronological_age;
-        }
-
         ksort($byDate);
 
         $points = [];
         $rows = [];
         $runningValues = [];
         $cyclingValues = [];
-        $fitnessAges = [];
 
         foreach ($byDate as $date => $entry) {
             $points[] = [
                 'date' => $date,
                 'running' => $entry['running'],
                 'cycling' => $entry['cycling'],
-                'fitnessAge' => $entry['fitnessAge'],
             ];
 
             $rows[] = [
                 'date' => $date,
                 'running' => $entry['running'] !== null ? number_format($entry['running'], 1) : null,
                 'cycling' => $entry['cycling'] !== null ? number_format($entry['cycling'], 1) : null,
-                'fitnessAge' => $entry['fitnessAge'] !== null ? number_format($entry['fitnessAge'], 1).' yrs' : null,
-                'chronologicalAge' => $entry['chronologicalAge'] !== null ? number_format($entry['chronologicalAge'], 1).' yrs' : null,
             ];
 
             if ($entry['running'] !== null) {
@@ -1351,19 +1353,64 @@ class HealthMetricService
             if ($entry['cycling'] !== null) {
                 $cyclingValues[] = $entry['cycling'];
             }
-
-            if ($entry['fitnessAge'] !== null) {
-                $fitnessAges[] = $entry['fitnessAge'];
-            }
         }
 
         $primaryValues = $runningValues !== [] ? $runningValues : $cyclingValues;
         $avgPrimary = $this->average($primaryValues);
 
-        $extraLabel = $fitnessAges !== [] ? 'Fitness Age' : 'Cycling VO2';
-        $extraValue = $fitnessAges !== []
-            ? number_format($fitnessAges[count($fitnessAges) - 1], 1).' yrs'
-            : ($cyclingValues !== [] ? number_format($cyclingValues[count($cyclingValues) - 1], 1) : null);
+        $extraLabel = null;
+        $extraValue = null;
+
+        if ($runningValues !== [] && $cyclingValues !== []) {
+            $extraLabel = 'Cycling VO2';
+            $extraValue = number_format($cyclingValues[count($cyclingValues) - 1], 1);
+        } elseif (count($primaryValues) >= 2) {
+            $periodDelta = round($primaryValues[count($primaryValues) - 1] - $primaryValues[0], 1);
+            $extraLabel = 'Period Change';
+            $extraValue = abs($periodDelta) < 0.05 ? '0.0' : sprintf('%+.1f', $periodDelta);
+        }
+
+        $priorPoint = null;
+
+        if ($startDate !== null) {
+            $priorRunning = Vo2MaxRecord::query()
+                ->where('sport', 'running')
+                ->where('calendar_date', '<', $startDate)
+                ->where(function ($subQuery): void {
+                    $subQuery
+                        ->whereNotNull('vo2_max_precise')
+                        ->orWhereNotNull('vo2_max');
+                })
+                ->orderByDesc('calendar_date')
+                ->first();
+
+            $priorCycling = Vo2MaxRecord::query()
+                ->where('sport', 'cycling')
+                ->where('calendar_date', '<', $startDate)
+                ->where(function ($subQuery): void {
+                    $subQuery
+                        ->whereNotNull('vo2_max_precise')
+                        ->orWhereNotNull('vo2_max');
+                })
+                ->orderByDesc('calendar_date')
+                ->first();
+
+            $priorRunningVal = $priorRunning !== null ? ($priorRunning->vo2_max_precise ?? $priorRunning->vo2_max) : null;
+            $priorCyclingVal = $priorCycling !== null ? ($priorCycling->vo2_max_precise ?? $priorCycling->vo2_max) : null;
+
+            if ($priorRunningVal !== null || $priorCyclingVal !== null) {
+                $priorPoint = [
+                    'running' => $priorRunningVal !== null ? [
+                        'date' => $priorRunning->calendar_date,
+                        'value' => $priorRunningVal,
+                    ] : null,
+                    'cycling' => $priorCyclingVal !== null ? [
+                        'date' => $priorCycling->calendar_date,
+                        'value' => $priorCyclingVal,
+                    ] : null,
+                ];
+            }
+        }
 
         return [
             'summary' => [
@@ -1375,16 +1422,188 @@ class HealthMetricService
                 'extraValue' => $extraValue,
             ],
             'baseline' => null,
+            'priorPoint' => $priorPoint,
             'points' => $points,
             'columns' => [
                 ['key' => 'date', 'label' => 'Date'],
                 ['key' => 'running', 'label' => 'Running VO2'],
                 ['key' => 'cycling', 'label' => 'Cycling VO2'],
-                ['key' => 'fitnessAge', 'label' => 'Fitness Age'],
-                ['key' => 'chronologicalAge', 'label' => 'Age'],
             ],
             'rows' => $rows,
         ];
+    }
+
+    /**
+     * @return array{
+     *     summary: array{latest: ?string, average: ?string, min: ?string, max: ?string, extraLabel: ?string, extraValue: ?string},
+     *     baseline: ?array{low: ?int, high: ?int},
+     *     priorPoint: ?array<string, mixed>,
+     *     points: list<array<string, mixed>>,
+     *     columns: list<array{key: string, label: string}>,
+     *     rows: list<array<string, string|int|float|null>>
+     * }
+     */
+    private function buildFitnessAge(?string $startDate, string $endDate): array
+    {
+        $query = FitnessAgeRecord::query()
+            ->where('calendar_date', '<=', $endDate)
+            ->whereNotNull('fitness_age')
+            ->orderBy('calendar_date');
+
+        if ($startDate !== null) {
+            $query->where('calendar_date', '>=', $startDate);
+        }
+
+        $records = $query->get();
+
+        $points = [];
+        $rows = [];
+        $fitnessAges = [];
+        $latestDelta = null;
+        $hasBodyFat = false;
+        $hasBmi = false;
+
+        foreach ($records as $record) {
+            $fitnessAge = round((float) $record->fitness_age, 1);
+            $chronologicalAge = $record->chronological_age !== null
+                ? round($record->chronological_age, 1)
+                : null;
+            $delta = $chronologicalAge !== null
+                ? round($fitnessAge - $chronologicalAge, 1)
+                : null;
+
+            $components = is_array($record->components) ? $record->components : null;
+            $rhrRaw = $this->extractComponentFloat($components, 'rhr');
+            $rhr = $rhrRaw !== null ? (int) round($rhrRaw) : null;
+            $bodyFatRaw = $this->extractComponentFloat($components, 'bodyFat');
+            $bodyFatPct = $bodyFatRaw !== null ? round($bodyFatRaw, 1) : null;
+            $bmiRaw = $this->extractComponentFloat($components, 'bmi');
+            $bmi = $bmiRaw !== null ? round($bmiRaw, 1) : null;
+            $vigorousMinRaw = $this->extractComponentFloat($components, 'vigorousMinutesAvg');
+            $vigorousMinutesAvg = $vigorousMinRaw !== null ? round($vigorousMinRaw, 1) : null;
+            $vigorousDaysRaw = $this->extractComponentFloat($components, 'vigorousDaysAvg');
+            $vigorousDaysAvg = $vigorousDaysRaw !== null ? round($vigorousDaysRaw, 1) : null;
+
+            if ($bodyFatPct !== null) {
+                $hasBodyFat = true;
+            }
+
+            if ($bmi !== null) {
+                $hasBmi = true;
+            }
+
+            $fitnessAges[] = $fitnessAge;
+            $latestDelta = $delta;
+
+            $points[] = [
+                'date' => $record->calendar_date,
+                'fitnessAge' => $fitnessAge,
+                'chronologicalAge' => $chronologicalAge,
+                'delta' => $delta,
+                'rhr' => $rhr,
+                'bodyFatPct' => $bodyFatPct,
+                'bmi' => $bmi,
+                'vigorousMinutesAvg' => $vigorousMinutesAvg,
+                'vigorousDaysAvg' => $vigorousDaysAvg,
+            ];
+
+            $rows[] = [
+                'date' => $record->calendar_date,
+                'fitnessAge' => number_format($fitnessAge, 1).' yrs',
+                'chronologicalAge' => $chronologicalAge !== null ? number_format($chronologicalAge, 1).' yrs' : null,
+                'delta' => $delta !== null ? $this->formatSignedYears($delta) : null,
+                'rhr' => $rhr !== null ? "{$rhr} bpm" : null,
+                'bodyFat' => $bodyFatPct !== null ? number_format($bodyFatPct, 1).'%' : null,
+                'bmi' => $bmi !== null ? number_format($bmi, 1) : null,
+                'vigorousMinutes' => $vigorousMinutesAvg !== null ? number_format($vigorousMinutesAvg, 1).' min/wk' : null,
+            ];
+        }
+
+        $avgFitnessAge = $this->average($fitnessAges);
+
+        $extraLabel = 'vs. Age';
+        $extraValue = $latestDelta !== null ? $this->formatSignedYears($latestDelta) : null;
+
+        if ($extraValue === null && count($fitnessAges) >= 2) {
+            $periodChange = round($fitnessAges[count($fitnessAges) - 1] - $fitnessAges[0], 1);
+            $extraLabel = 'Period Change';
+            $extraValue = $this->formatSignedYears($periodChange);
+        }
+
+        $bodyCompColumn = (! $hasBodyFat && $hasBmi)
+            ? ['key' => 'bmi', 'label' => 'BMI']
+            : ['key' => 'bodyFat', 'label' => 'Body Fat'];
+
+        $priorPoint = null;
+
+        if ($startDate !== null) {
+            $priorRecord = FitnessAgeRecord::query()
+                ->where('calendar_date', '<', $startDate)
+                ->whereNotNull('fitness_age')
+                ->orderByDesc('calendar_date')
+                ->first();
+
+            if ($priorRecord !== null) {
+                $priorPoint = [
+                    'date' => $priorRecord->calendar_date,
+                    'fitnessAge' => round((float) $priorRecord->fitness_age, 1),
+                    'chronologicalAge' => $priorRecord->chronological_age !== null
+                        ? round($priorRecord->chronological_age, 1)
+                        : null,
+                ];
+            }
+        }
+
+        return [
+            'summary' => [
+                'latest' => $fitnessAges !== [] ? number_format($fitnessAges[count($fitnessAges) - 1], 1).' yrs' : null,
+                'average' => $avgFitnessAge !== null ? number_format($avgFitnessAge, 1).' yrs' : null,
+                'min' => $fitnessAges !== [] ? number_format(min($fitnessAges), 1).' yrs' : null,
+                'max' => $fitnessAges !== [] ? number_format(max($fitnessAges), 1).' yrs' : null,
+                'extraLabel' => $extraLabel,
+                'extraValue' => $extraValue,
+            ],
+            'baseline' => null,
+            'priorPoint' => $priorPoint,
+            'points' => $points,
+            'columns' => [
+                ['key' => 'date', 'label' => 'Date'],
+                ['key' => 'fitnessAge', 'label' => 'Fitness Age'],
+                ['key' => 'chronologicalAge', 'label' => 'Age'],
+                ['key' => 'delta', 'label' => 'vs. Age'],
+                ['key' => 'rhr', 'label' => 'RHR'],
+                $bodyCompColumn,
+                ['key' => 'vigorousMinutes', 'label' => 'Vigorous Min'],
+            ],
+            'rows' => $rows,
+        ];
+    }
+
+    /**
+     * @param  array<int|string, mixed>|null  $components
+     */
+    private function extractComponentFloat(?array $components, string $key): ?float
+    {
+        if ($components === null || ! isset($components[$key]) || ! is_array($components[$key])) {
+            return null;
+        }
+
+        $value = $components[$key]['value'] ?? null;
+
+        if (! is_int($value) && ! is_float($value) && ! is_numeric($value)) {
+            return null;
+        }
+
+        return (float) $value;
+    }
+
+    private function formatSignedYears(float $delta): string
+    {
+        if (abs($delta) < 0.05) {
+            return '0.0 yrs';
+        }
+
+        return sprintf('%+.1f yrs', $delta);
     }
 
     /**
