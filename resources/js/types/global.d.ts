@@ -55,11 +55,14 @@ declare module '@inertiajs/core' {
             timezone: string;
             sports?: SharedSportsMeta;
             sync?: {
+                id: number | null;
                 status: string;
                 type: string | null;
                 items_synced: number;
                 started_at: string | null;
                 finished_at: string | null;
+                cursor_date: string | null;
+                until_date: string | null;
                 last_synced_at: string | null;
                 error_message: string | null;
                 provider_configured?: boolean;

@@ -14,7 +14,7 @@ beforeEach(function () {
     $this->travelTo(CarbonImmutable::parse('2026-11-21 10:00:00', 'Pacific/Auckland'));
 });
 
-it('supports all 13 metrics with expected metadata and rejects unknown metrics', function (
+it('supports all 14 metrics with expected metadata and rejects unknown metrics', function (
     string $metric,
     string $accent,
     string $chartType,
@@ -47,6 +47,7 @@ it('supports all 13 metrics with expected metadata and rejects unknown metrics',
     'intensity-minutes' => ['intensity-minutes', 'amber', 'intensity-stacked', 'min'],
     'weight' => ['weight', 'emerald', 'weight-comp', 'kg'],
     'vo2-max' => ['vo2-max', 'indigo', 'vo2-dual', 'mL/kg/min'],
+    'fitness-age' => ['fitness-age', 'violet', 'fitness-age', 'yrs'],
     'calories' => ['calories', 'orange', 'calories-stacked', 'kcal'],
     'floors' => ['floors', 'teal', 'bar-goal', 'floors'],
     'respiration-spo2' => ['respiration-spo2', 'teal', 'dual-line', 'brpm / %'],
@@ -131,7 +132,7 @@ it('filters points by range and computes accurate summaries across models', func
         ->and($hydration['summary']['extraValue'])->toBe('2.00 L');
 });
 
-it('computes sleep, hrv baseline, weight period change, and merged vo2-max data accurately', function () {
+it('computes sleep, hrv baseline, weight period change, vo2-max, and fitness-age data accurately', function () {
     SleepRecord::factory()->create([
         'calendar_date' => '2026-11-20',
         'sleep_seconds' => 25200,
@@ -214,22 +215,227 @@ it('computes sleep, hrv baseline, weight period change, and merged vo2-max data 
         ->and($weight['summary']['extraValue'])->toBe('-1.0 kg');
 
     $vo2 = $service->forMetric('vo2-max', '28d');
-    expect($vo2['points'])->toHaveCount(2)
+    expect($vo2['points'])->toHaveCount(1)
         ->and($vo2['points'][0])->toBe([
             'date' => '2026-11-18',
             'running' => 57.5,
             'cycling' => 60.2,
-            'fitnessAge' => null,
-        ])
-        ->and($vo2['points'][1])->toBe([
-            'date' => '2026-11-21',
-            'running' => null,
-            'cycling' => null,
-            'fitnessAge' => 29.5,
         ])
         ->and($vo2['summary']['latest'])->toBe('57.5')
-        ->and($vo2['summary']['extraLabel'])->toBe('Fitness Age')
-        ->and($vo2['summary']['extraValue'])->toBe('29.5 yrs');
+        ->and($vo2['summary']['extraLabel'])->toBe('Cycling VO2')
+        ->and($vo2['summary']['extraValue'])->toBe('60.2');
+
+    $fitnessAge = $service->forMetric('fitness-age', '28d');
+    expect($fitnessAge['points'])->toHaveCount(1)
+        ->and($fitnessAge['points'][0])->toMatchArray([
+            'date' => '2026-11-21',
+            'fitnessAge' => 29.5,
+            'chronologicalAge' => 35.0,
+            'delta' => -5.5,
+        ])
+        ->and($fitnessAge['summary']['latest'])->toBe('29.5 yrs')
+        ->and($fitnessAge['summary']['extraLabel'])->toBe('vs. Age')
+        ->and($fitnessAge['summary']['extraValue'])->toBe('-5.5 yrs');
+});
+
+it('plots fitness age over time with chronological comparison, contributing factors, and excludes null fitness age records', function () {
+    // Stale historical record with no fitness_age estimate — must be excluded
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-06-01',
+        'chronological_age' => 42.0,
+        'fitness_age' => null,
+        'components' => [
+            'rhr' => ['value' => 56, 'stale' => false],
+        ],
+    ]);
+
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-08-29',
+        'chronological_age' => 43.0,
+        'fitness_age' => 41.36,
+        'components' => [
+            'rhr' => ['value' => 49, 'stale' => false],
+            'bodyFat' => ['value' => 26.0, 'stale' => false],
+            'vigorousMinutesAvg' => ['value' => 26.6, 'stale' => false],
+            'vigorousDaysAvg' => ['value' => 0.3, 'stale' => false],
+        ],
+    ]);
+
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-10',
+        'chronological_age' => 43.0,
+        'fitness_age' => 36.24,
+        'components' => [
+            'rhr' => ['value' => 47, 'stale' => false],
+            'bodyFat' => ['value' => 19.8, 'stale' => false],
+            'vigorousMinutesAvg' => ['value' => 140.2, 'stale' => false],
+            'vigorousDaysAvg' => ['value' => 3.1, 'stale' => false],
+        ],
+    ]);
+
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-21',
+        'chronological_age' => 43.0,
+        'fitness_age' => 34.81,
+        'components' => [
+            'rhr' => ['value' => 46, 'stale' => false],
+            'bodyFat' => ['value' => 17.1, 'stale' => false],
+            'vigorousMinutesAvg' => ['value' => 174.8, 'stale' => false],
+            'vigorousDaysAvg' => ['value' => 3.6, 'stale' => false],
+        ],
+    ]);
+
+    $service = app(HealthMetricService::class);
+
+    $all = $service->forMetric('fitness-age', 'all');
+    expect($all['points'])->toHaveCount(3)
+        ->and($all['points'][0])->toBe([
+            'date' => '2026-08-29',
+            'fitnessAge' => 41.4,
+            'chronologicalAge' => 43.0,
+            'delta' => -1.6,
+            'rhr' => 49,
+            'bodyFatPct' => 26.0,
+            'bmi' => null,
+            'vigorousMinutesAvg' => 26.6,
+            'vigorousDaysAvg' => 0.3,
+        ])
+        ->and($all['points'][2])->toBe([
+            'date' => '2026-11-21',
+            'fitnessAge' => 34.8,
+            'chronologicalAge' => 43.0,
+            'delta' => -8.2,
+            'rhr' => 46,
+            'bodyFatPct' => 17.1,
+            'bmi' => null,
+            'vigorousMinutesAvg' => 174.8,
+            'vigorousDaysAvg' => 3.6,
+        ])
+        ->and($all['summary'])->toBe([
+            'latest' => '34.8 yrs',
+            'average' => '37.5 yrs',
+            'min' => '34.8 yrs',
+            'max' => '41.4 yrs',
+            'extraLabel' => 'vs. Age',
+            'extraValue' => '-8.2 yrs',
+        ])
+        ->and($all['columns'])->toContain(['key' => 'bodyFat', 'label' => 'Body Fat'])
+        ->and($all['rows'])->toHaveCount(3)
+        ->and($all['rows'][0])->toMatchArray([
+            'date' => '2026-11-21',
+            'fitnessAge' => '34.8 yrs',
+            'chronologicalAge' => '43.0 yrs',
+            'delta' => '-8.2 yrs',
+            'rhr' => '46 bpm',
+            'bodyFat' => '17.1%',
+            'vigorousMinutes' => '174.8 min/wk',
+        ])
+        ->and($all['rows'][2]['date'])->toBe('2026-08-29');
+
+    $recent = $service->forMetric('fitness-age', '28d');
+    expect($recent['points'])->toHaveCount(2)
+        ->and($recent['summary']['min'])->toBe('34.8 yrs')
+        ->and($recent['summary']['max'])->toBe('36.2 yrs');
+});
+
+it('falls back to BMI column and period change summary for fitness age when body fat and chronological age are absent', function () {
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-01',
+        'chronological_age' => null,
+        'fitness_age' => 38.0,
+        'components' => [
+            'rhr' => ['value' => 52],
+            'bmi' => ['value' => 23.4],
+        ],
+    ]);
+
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-21',
+        'chronological_age' => null,
+        'fitness_age' => 36.5,
+        'components' => [
+            'rhr' => ['value' => 50],
+            'bmi' => ['value' => 22.9],
+        ],
+    ]);
+
+    $payload = app(HealthMetricService::class)->forMetric('fitness-age', '28d');
+
+    expect($payload['columns'])->toContain(['key' => 'bmi', 'label' => 'BMI'])
+        ->and($payload['summary']['extraLabel'])->toBe('Period Change')
+        ->and($payload['summary']['extraValue'])->toBe('-1.5 yrs')
+        ->and($payload['rows'][0]['bmi'])->toBe('22.9');
+});
+
+it('includes real priorPoint anchors before startDate for fitness-age, vo2-max, and weight without affecting in-window stats', function () {
+    // Prior measurements strictly before 7d window (startDate = 2026-11-15)
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-14',
+        'chronological_age' => 43.0,
+        'fitness_age' => 36.4,
+    ]);
+    FitnessAgeRecord::factory()->create([
+        'calendar_date' => '2026-11-20',
+        'chronological_age' => 43.0,
+        'fitness_age' => 35.1,
+    ]);
+
+    Vo2MaxRecord::factory()->create([
+        'calendar_date' => '2026-11-10',
+        'sport' => 'running',
+        'vo2_max_precise' => 55.2,
+    ]);
+    Vo2MaxRecord::factory()->create([
+        'calendar_date' => '2026-11-12',
+        'sport' => 'cycling',
+        'vo2_max_precise' => 58.6,
+    ]);
+    Vo2MaxRecord::factory()->create([
+        'calendar_date' => '2026-11-20',
+        'sport' => 'running',
+        'vo2_max_precise' => 56.0,
+    ]);
+
+    WeightMeasurement::factory()->create([
+        'calendar_date' => '2026-11-13',
+        'weight_grams' => 77200,
+        'body_fat_pct' => 18.4,
+    ]);
+    WeightMeasurement::factory()->create([
+        'calendar_date' => '2026-11-20',
+        'weight_grams' => 76400,
+        'body_fat_pct' => 17.9,
+    ]);
+
+    $service = app(HealthMetricService::class);
+
+    $fitness7d = $service->forMetric('fitness-age', '7d');
+    expect($fitness7d['priorPoint'])->toBe([
+        'date' => '2026-11-14',
+        'fitnessAge' => 36.4,
+        'chronologicalAge' => 43.0,
+    ])
+        ->and($fitness7d['points'])->toHaveCount(1)
+        ->and($fitness7d['summary']['average'])->toBe('35.1 yrs')
+        ->and($service->forMetric('fitness-age', 'all')['priorPoint'])->toBeNull();
+
+    $vo27d = $service->forMetric('vo2-max', '7d');
+    expect($vo27d['priorPoint'])->toBe([
+        'running' => ['date' => '2026-11-10', 'value' => 55.2],
+        'cycling' => ['date' => '2026-11-12', 'value' => 58.6],
+    ])
+        ->and($vo27d['points'])->toHaveCount(1)
+        ->and($service->forMetric('vo2-max', 'all')['priorPoint'])->toBeNull();
+
+    $weight7d = $service->forMetric('weight', '7d');
+    expect($weight7d['priorPoint'])->toBe([
+        'date' => '2026-11-13',
+        'weightKg' => 77.2,
+        'bodyFatPct' => 18.4,
+    ])
+        ->and($weight7d['points'])->toHaveCount(1)
+        ->and($weight7d['summary']['latest'])->toBe('76.4 kg')
+        ->and($service->forMetric('weight', 'all')['priorPoint'])->toBeNull();
 });
 
 it('expresses stress breakdown as percentages and annotates timezone travel days without flagging DST or today', function () {

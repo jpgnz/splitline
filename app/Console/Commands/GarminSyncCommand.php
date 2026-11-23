@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\SyncRun;
 use App\Services\Garmin\GarminSyncService;
 use Illuminate\Console\Command;
 use Throwable;
@@ -16,7 +17,8 @@ class GarminSyncCommand extends Command
     protected $signature = 'garmin:sync
         {--days=7 : Number of recent days to sync incrementally}
         {--backfill : Run full all-time resumable history backfill}
-        {--from= : Optional YYYY-MM-DD date to resume backfill from}';
+        {--from= : Optional YYYY-MM-DD date to resume backfill from}
+        {--until= : Optional earliest YYYY-MM-DD date to stop backfill at}';
 
     /**
      * The console command description.
@@ -40,6 +42,15 @@ class GarminSyncCommand extends Command
             return self::FAILURE;
         }
 
+        $rawUntil = $this->option('until');
+        $untilDate = is_string($rawUntil) && trim($rawUntil) !== '' ? trim($rawUntil) : null;
+
+        if ($untilDate !== null && preg_match('/^\d{4}-\d{2}-\d{2}$/', $untilDate) !== 1) {
+            $this->components->error('The --until option must be a valid YYYY-MM-DD date.');
+
+            return self::FAILURE;
+        }
+
         $rawDays = $this->option('days');
         $days = is_numeric($rawDays) ? (int) $rawDays : 7;
 
@@ -47,6 +58,14 @@ class GarminSyncCommand extends Command
             $this->components->error('The --days option must be a positive integer.');
 
             return self::FAILURE;
+        }
+
+        $activeRun = SyncRun::findActive();
+
+        if ($activeRun !== null) {
+            $this->components->warn("Skipping sync: a Garmin {$activeRun->type} sync (run #{$activeRun->id}) is already in progress.");
+
+            return self::SUCCESS;
         }
 
         $startedAt = microtime(true);
@@ -63,7 +82,7 @@ class GarminSyncCommand extends Command
 
         try {
             $syncRun = $isBackfill
-                ? $syncService->syncBackfill($fromDate, $onProgress)
+                ? $syncService->syncBackfill($fromDate, $onProgress, $untilDate)
                 : $syncService->syncIncremental($days, $onProgress);
         } catch (Throwable $exception) {
             $this->components->error('Garmin sync failed: '.$exception->getMessage());

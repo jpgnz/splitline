@@ -2,8 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\StartBackfillRequest;
+use App\Jobs\SyncGarminBackfillJob;
 use App\Jobs\SyncGarminJob;
 use App\Models\SyncRun;
+use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use DateTimeInterface;
@@ -13,47 +16,16 @@ use Illuminate\Http\Request;
 
 class SyncController extends Controller
 {
-    private const int CONCURRENT_SYNC_WINDOW_MINUTES = 10;
-
     public function store(Request $request): RedirectResponse|JsonResponse
     {
         if (! $this->isProviderConfigured()) {
-            $message = 'Garmin API key is not configured. Set GARMIN_KEY in your environment.';
-
-            if ($request->expectsJson()) {
-                $latestRun = SyncRun::query()
-                    ->latest('started_at')
-                    ->latest('id')
-                    ->first();
-
-                return response()->json([
-                    'message' => $message,
-                    ...$this->buildStatusPayload($latestRun),
-                ], 422);
-            }
-
-            return back()->with('syncStatus', $message);
+            return $this->unconfiguredResponse($request);
         }
 
-        $runningRun = SyncRun::query()
-            ->whereIn('status', ['running', 'queued'])
-            ->where('started_at', '>=', CarbonImmutable::now()->subMinutes(self::CONCURRENT_SYNC_WINDOW_MINUTES))
-            ->latest('started_at')
-            ->latest('id')
-            ->first();
+        $runningRun = SyncRun::findActive();
 
         if ($runningRun !== null) {
-            $notice = 'A Garmin sync is already in progress.';
-
-            if ($request->expectsJson()) {
-                return response()->json([
-                    'message' => $notice,
-                    'already_running' => true,
-                    ...$this->buildStatusPayload($runningRun),
-                ]);
-            }
-
-            return back()->with('syncStatus', $notice);
+            return $this->alreadyRunningResponse($request, $runningRun);
         }
 
         $syncRun = SyncRun::query()->create([
@@ -78,14 +50,116 @@ class SyncController extends Controller
         return back()->with('syncStatus', $message);
     }
 
-    public function status(): JsonResponse
+    public function backfill(StartBackfillRequest $request, AppSettings $settings): RedirectResponse|JsonResponse
     {
-        $latestRun = SyncRun::query()
-            ->latest('started_at')
-            ->latest('id')
-            ->first();
+        if (! $this->isProviderConfigured()) {
+            return $this->unconfiguredResponse($request);
+        }
 
-        return response()->json($this->buildStatusPayload($latestRun));
+        $runningRun = SyncRun::findActive();
+
+        if ($runningRun !== null) {
+            return $this->alreadyRunningResponse($request, $runningRun);
+        }
+
+        $range = is_string($request->validated('range')) ? $request->validated('range') : 'all';
+        $timezone = $settings->displayTimezone();
+        $today = CarbonImmutable::now($timezone)->startOfDay();
+
+        $cursorDate = $today->format('Y-m-d');
+        $untilDate = match ($range) {
+            '90d' => $today->subDays(89)->format('Y-m-d'),
+            '1y' => $today->subDays(364)->format('Y-m-d'),
+            '3y' => $today->subYears(3)->format('Y-m-d'),
+            default => null,
+        };
+        $initialSetupCompleted = false;
+
+        if ($range === 'resume') {
+            $latestBackfill = SyncRun::query()
+                ->where('type', 'backfill')
+                ->orderByDesc('id')
+                ->first();
+
+            if ($latestBackfill !== null && $latestBackfill->isResumableBackfill()) {
+                $cursorDate = (string) $latestBackfill->cursor_date;
+                $untilDate = $latestBackfill->until_date;
+                $initialSetupCompleted = $latestBackfill->initial_setup_completed;
+            }
+        }
+
+        $syncRun = SyncRun::query()->create([
+            'type' => 'backfill',
+            'status' => 'running',
+            'started_at' => CarbonImmutable::now(),
+            'cursor_date' => $cursorDate,
+            'until_date' => $untilDate,
+            'initial_setup_completed' => $initialSetupCompleted,
+            'items_synced' => 0,
+        ]);
+
+        SyncGarminBackfillJob::dispatch(
+            syncRunId: $syncRun->id,
+            untilDate: $untilDate,
+            includeInitialSetup: ! $initialSetupCompleted,
+        );
+
+        $syncRun->refresh();
+        $message = $range === 'resume'
+            ? "Resuming Garmin backfill from {$cursorDate} in the background."
+            : 'Garmin historical backfill started in the background.';
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => $message,
+                ...$this->buildStatusPayload($syncRun),
+            ], 202);
+        }
+
+        return back()->with('syncStatus', $message);
+    }
+
+    public function status(Request $request): JsonResponse
+    {
+        $runId = $request->query('run_id');
+        $targetRun = null;
+
+        if (is_numeric($runId) && (int) $runId > 0) {
+            $targetRun = SyncRun::query()->find((int) $runId);
+        }
+
+        $targetRun ??= SyncRun::findLatestForStatus();
+
+        return response()->json($this->buildStatusPayload($targetRun));
+    }
+
+    private function unconfiguredResponse(Request $request): RedirectResponse|JsonResponse
+    {
+        $message = 'Garmin API key is not configured. Set GARMIN_KEY in your environment.';
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => $message,
+                ...$this->buildStatusPayload(SyncRun::findLatestForStatus()),
+            ], 422);
+        }
+
+        return back()->with('syncStatus', $message);
+    }
+
+    private function alreadyRunningResponse(Request $request, SyncRun $runningRun): RedirectResponse|JsonResponse
+    {
+        $notice = 'A Garmin sync is already in progress.';
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => $notice,
+                'already_running' => true,
+                ...$this->buildStatusPayload($runningRun),
+            ]);
+        }
+
+        return back()->with('syncStatus', $notice);
     }
 
     private function isProviderConfigured(): bool
@@ -95,10 +169,13 @@ class SyncController extends Controller
 
     /**
      * @return array{
+     *     id: ?int,
      *     status: string,
      *     type: ?string,
      *     started_at: ?string,
      *     finished_at: ?string,
+     *     cursor_date: ?string,
+     *     until_date: ?string,
      *     items_synced: int,
      *     error_message: ?string,
      *     last_synced_at: ?string,
@@ -117,10 +194,13 @@ class SyncController extends Controller
                 ->value('finished_at');
 
         return [
-            'status' => $latestRun !== null ? (string) $latestRun->status : 'idle',
+            'id' => $latestRun?->id,
+            'status' => $latestRun !== null ? $latestRun->effectiveStatus() : 'idle',
             'type' => $latestRun?->type !== null ? (string) $latestRun->type : null,
             'started_at' => $this->formatTimestamp($latestRun?->started_at),
             'finished_at' => $this->formatTimestamp($latestRun?->finished_at),
+            'cursor_date' => $latestRun?->cursor_date !== null ? (string) $latestRun->cursor_date : null,
+            'until_date' => $latestRun?->until_date !== null ? (string) $latestRun->until_date : null,
             'items_synced' => $latestRun !== null ? (int) $latestRun->items_synced : 0,
             'error_message' => $latestRun?->error_message !== null ? (string) $latestRun->error_message : null,
             'last_synced_at' => $this->formatTimestamp($lastCompletedAt),
