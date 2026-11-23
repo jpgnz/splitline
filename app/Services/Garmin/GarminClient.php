@@ -372,10 +372,35 @@ class GarminClient
             throw GarminApiException::invalidArgument('activityId must be a positive integer.');
         }
 
-        $response = $this->requestGet(
-            path: "/download-service/files/activity/{$id}",
-            accept: 'application/zip, application/x-zip-compressed, application/octet-stream',
-        );
+        $path = "/download-service/files/activity/{$id}";
+
+        try {
+            $response = $this->requestGet(
+                path: $path,
+                accept: 'application/zip, application/x-zip-compressed, application/octet-stream',
+            );
+        } catch (GarminApiException $exception) {
+            if (
+                $exception->statusCode === 404
+                && $exception->url !== null
+                && str_contains($exception->url, $path)
+            ) {
+                throw GarminApiException::archiveUnavailable(
+                    url: $exception->url,
+                    statusCode: 404,
+                    responseBody: $exception->responseBody ?? '',
+                );
+            }
+
+            throw $exception;
+        }
+
+        if ($response->status() === 204) {
+            throw GarminApiException::archiveUnavailable(
+                url: rtrim($this->baseUrl, '/').$path,
+                statusCode: 204,
+            );
+        }
 
         $body = $response->body();
 

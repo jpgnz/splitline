@@ -239,25 +239,41 @@ class GarminSyncService
             ? trim($untilDate)
             : $syncRun->until_date;
 
-        if ($onProgress !== null) {
-            $this->client->onRateLimitWait(function (float $waitSeconds, string $reason) use ($onProgress): void {
+        $this->client->onRateLimitWait(function (float $waitSeconds, string $reason) use ($onProgress, $syncRun): void {
+            $this->updateActiveRun($syncRun, []);
+
+            if ($onProgress !== null) {
                 $seconds = (int) ceil($waitSeconds);
                 $this->report($onProgress, "Rate limited ({$reason}) — waiting {$seconds}s");
-            });
-        }
+            }
+        });
 
         try {
+            if (! $this->isRunStillActive($syncRun)) {
+                return [
+                    'completed' => true,
+                    'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                    'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                ];
+            }
+
             if ($includeInitialSetup && ! $syncRun->initial_setup_completed) {
                 $this->report($onProgress, 'Syncing heart rate zones');
                 $itemsSynced += $this->syncHeartRateZones();
 
                 $this->report($onProgress, 'Backfilling all activities');
-                $itemsSynced += $this->syncAllActivities($onProgress);
+                $itemsSynced += $this->syncAllActivities($onProgress, $syncRun, $itemsSynced);
 
-                $syncRun->update([
+                if (! $this->updateActiveRun($syncRun, [
                     'initial_setup_completed' => true,
                     'items_synced' => $itemsSynced,
-                ]);
+                ])) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
             }
 
             $todayStr = $this->today()->format('Y-m-d');
@@ -274,6 +290,14 @@ class GarminSyncService
                 && $windowEnd->greaterThanOrEqualTo($earliestDate)
                 && $consecutiveEmptyWindows < self::MAX_CONSECUTIVE_EMPTY_WINDOWS
             ) {
+                if (! $this->isRunStillActive($syncRun)) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
+
                 $windowStart = $windowEnd->subDays(self::BACKFILL_WINDOW_DAYS - 1);
 
                 if ($windowStart->lessThan($earliestDate)) {
@@ -323,10 +347,16 @@ class GarminSyncService
 
                 $nextCursor = $windowStart->subDay();
 
-                $syncRun->update([
+                if (! $this->updateActiveRun($syncRun, [
                     'cursor_date' => $nextCursor->format('Y-m-d'),
                     'items_synced' => $itemsSynced,
-                ]);
+                ])) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
 
                 $windowEnd = $nextCursor;
                 $windowsProcessed++;
@@ -336,7 +366,7 @@ class GarminSyncService
                 || $consecutiveEmptyWindows >= self::MAX_CONSECUTIVE_EMPTY_WINDOWS;
 
             if ($completed) {
-                $syncRun->update([
+                $this->updateActiveRun($syncRun, [
                     'status' => 'completed',
                     'finished_at' => CarbonImmutable::now(),
                     'cursor_date' => null,
@@ -350,7 +380,7 @@ class GarminSyncService
                 'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
             ];
         } catch (Throwable $exception) {
-            $syncRun->update([
+            $this->updateActiveRun($syncRun, [
                 'status' => 'failed',
                 'finished_at' => CarbonImmutable::now(),
                 'items_synced' => $itemsSynced,
@@ -1309,12 +1339,19 @@ class GarminSyncService
     /**
      * @param  (callable(string): void)|null  $onProgress
      */
-    private function syncAllActivities(?callable $onProgress = null): int
-    {
+    private function syncAllActivities(
+        ?callable $onProgress = null,
+        ?SyncRun $syncRun = null,
+        int $baseItemsSynced = 0,
+    ): int {
         $synced = 0;
         $offset = 0;
 
         while (true) {
+            if ($syncRun !== null && ! $this->isRunStillActive($syncRun)) {
+                break;
+            }
+
             $batch = $this->callOptional(
                 fn (): ?array => $this->client->searchActivities([
                     'start' => $offset,
@@ -1343,12 +1380,55 @@ class GarminSyncService
 
             $this->report($onProgress, "Synced {$synced} activities so far");
 
+            if ($syncRun !== null && ! $this->updateActiveRun($syncRun, [
+                'items_synced' => $baseItemsSynced + $synced,
+            ])) {
+                break;
+            }
+
             if ($batchCount < self::BACKFILL_ACTIVITY_PAGE_SIZE) {
                 break;
             }
         }
 
         return $synced;
+    }
+
+    /**
+     * Update a SyncRun only while it is still running or queued (not superseded).
+     *
+     * @param  array<string, mixed>  $attributes
+     */
+    private function updateActiveRun(SyncRun $syncRun, array $attributes): bool
+    {
+        $now = CarbonImmutable::now();
+
+        $updated = SyncRun::query()
+            ->whereKey($syncRun->id)
+            ->whereIn('status', ['running', 'queued'])
+            ->update([
+                ...$attributes,
+                'updated_at' => $now,
+            ]);
+
+        if ($updated > 0) {
+            $syncRun->forceFill([
+                ...$attributes,
+                'updated_at' => $now,
+            ]);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isRunStillActive(SyncRun $syncRun): bool
+    {
+        return SyncRun::query()
+            ->whereKey($syncRun->id)
+            ->whereIn('status', ['running', 'queued'])
+            ->exists();
     }
 
     /**

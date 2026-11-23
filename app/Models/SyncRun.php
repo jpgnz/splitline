@@ -26,7 +26,7 @@ class SyncRun extends Model
     /** @use HasFactory<SyncRunFactory> */
     use HasFactory;
 
-    public const int ACTIVE_WINDOW_MINUTES = 10;
+    public const int ACTIVE_WINDOW_MINUTES = 12;
 
     /**
      * @var list<string>
