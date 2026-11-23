@@ -679,13 +679,21 @@ const chartOption = computed<EChartsOption>(() => {
             ? `<strong>${dateHeading}</strong>${travelLabel ? ` <span style="opacity:0.75">· ${travelLabel}</span>` : ''}`
             : '';
 
+        const seenSeries = new Set<string>();
         const rows = list
-            .filter(
-                (item) =>
-                    item.seriesName &&
-                    item.seriesName !== '_base' &&
-                    item.seriesName !== '_leadIn',
-            )
+            .filter((item) => {
+                if (!item.seriesName || item.seriesName === '_base') {
+                    return false;
+                }
+
+                if (seenSeries.has(item.seriesName)) {
+                    return false;
+                }
+
+                seenSeries.add(item.seriesName);
+
+                return true;
+            })
             .map((item) => {
                 const val = extractTooltipNumericValue(item);
 
@@ -847,6 +855,7 @@ const chartOption = computed<EChartsOption>(() => {
     };
 
     const buildLeadInSeries = (
+        seriesName: string,
         prior: { ts: number; value: number } | null,
         seriesData: Array<[number, number | null]>,
         options: {
@@ -891,7 +900,7 @@ const chartOption = computed<EChartsOption>(() => {
         }
 
         return {
-            name: '_leadIn',
+            name: seriesName,
             type: 'line',
             ...(options.yAxisIndex !== undefined
                 ? { yAxisIndex: options.yAxisIndex }
@@ -2299,6 +2308,7 @@ const chartOption = computed<EChartsOption>(() => {
                 .filter((name): name is string => typeof name === 'string');
 
             const weightLeadIn = buildLeadInSeries(
+                weightSeriesName,
                 pickPriorAnchor(props.priorPoint, 'weightKg', (kg) =>
                     Number(units.weightFromKg(kg).toFixed(1)),
                 ),
@@ -2312,6 +2322,7 @@ const chartOption = computed<EChartsOption>(() => {
 
             if (hasBodyFat) {
                 const bodyFatLeadIn = buildLeadInSeries(
+                    'Body Fat (%)',
                     pickPriorAnchor(props.priorPoint, 'bodyFatPct'),
                     bodyFatSeriesData,
                     { color: '#f59e0b', width: 1.75, yAxisIndex: 1 },
@@ -2355,16 +2366,20 @@ const chartOption = computed<EChartsOption>(() => {
                             lines.push(`<strong>${dateHeading}</strong>`);
                         }
 
+                        const seenWeightSeries = new Set<string>();
+
                         for (const item of list) {
                             const val = extractTooltipNumericValue(item);
 
                             if (
                                 val === null ||
                                 !item.seriesName ||
-                                item.seriesName === '_leadIn'
+                                seenWeightSeries.has(item.seriesName)
                             ) {
                                 continue;
                             }
+
+                            seenWeightSeries.add(item.seriesName);
 
                             if (item.seriesName === weightSeriesName) {
                                 lines.push(
@@ -2479,6 +2494,7 @@ const chartOption = computed<EChartsOption>(() => {
                 .filter((name): name is string => typeof name === 'string');
 
             const runningLeadIn = buildLeadInSeries(
+                'Running VO2',
                 pickPriorAnchor(props.priorPoint, 'running'),
                 runningSeriesData,
                 { color: '#f59e0b', width: 2.25 },
@@ -2489,6 +2505,7 @@ const chartOption = computed<EChartsOption>(() => {
             }
 
             const cyclingLeadIn = buildLeadInSeries(
+                'Cycling VO2',
                 pickPriorAnchor(props.priorPoint, 'cycling'),
                 cyclingSeriesData,
                 { color: '#0ea5e9', width: 2.25 },
@@ -2592,6 +2609,7 @@ const chartOption = computed<EChartsOption>(() => {
                 .filter((name): name is string => typeof name === 'string');
 
             const fitnessLeadIn = buildLeadInSeries(
+                'Fitness Age',
                 pickPriorAnchor(props.priorPoint, 'fitnessAge'),
                 fitnessAgeSeriesData,
                 { color: '#8b5cf6', width: 2.25 },
@@ -2603,6 +2621,7 @@ const chartOption = computed<EChartsOption>(() => {
 
             if (hasChronologicalAge) {
                 const chronoLeadIn = buildLeadInSeries(
+                    'Chronological Age',
                     pickPriorAnchor(props.priorPoint, 'chronologicalAge'),
                     chronologicalAgeSeriesData,
                     {

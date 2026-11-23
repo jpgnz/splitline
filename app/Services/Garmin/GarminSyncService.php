@@ -176,21 +176,35 @@ class GarminSyncService
         ?callable $onProgress = null,
         ?string $untilDate = null,
     ): SyncRun {
-        $cursorDate = $this->resolveBackfillCursorDate($resumeFromDate);
+        $resumable = ($resumeFromDate === null || trim($resumeFromDate) === '')
+            ? $this->findResumableBackfillRun()
+            : null;
+
+        $cursorDate = $resumable !== null && is_string($resumable->cursor_date)
+            ? CarbonImmutable::parse($resumable->cursor_date, $this->timezone())->startOfDay()
+            : $this->resolveBackfillCursorDate($resumeFromDate);
+
+        $effectiveUntilDate = ($untilDate !== null && trim($untilDate) !== '')
+            ? trim($untilDate)
+            : $resumable?->until_date;
+
+        $initialSetupCompleted = $resumable !== null && $resumable->initial_setup_completed;
 
         $syncRun = SyncRun::query()->create([
             'type' => 'backfill',
             'status' => 'running',
             'started_at' => CarbonImmutable::now(),
             'cursor_date' => $cursorDate->format('Y-m-d'),
+            'until_date' => $effectiveUntilDate,
+            'initial_setup_completed' => $initialSetupCompleted,
             'items_synced' => 0,
         ]);
 
         $this->syncBackfillChunk(
             syncRun: $syncRun,
             maxWindows: PHP_INT_MAX,
-            untilDate: $untilDate,
-            includeInitialSetup: true,
+            untilDate: $effectiveUntilDate,
+            includeInitialSetup: ! $initialSetupCompleted,
             onProgress: $onProgress,
         );
 
@@ -218,6 +232,9 @@ class GarminSyncService
     ): array {
         $itemsSynced = (int) $syncRun->items_synced;
         $windowLimit = max(1, $maxWindows);
+        $effectiveUntilDate = ($untilDate !== null && trim($untilDate) !== '')
+            ? trim($untilDate)
+            : $syncRun->until_date;
 
         if ($onProgress !== null) {
             $this->client->onRateLimitWait(function (float $waitSeconds, string $reason) use ($onProgress): void {
@@ -227,7 +244,7 @@ class GarminSyncService
         }
 
         try {
-            if ($includeInitialSetup) {
+            if ($includeInitialSetup && ! $syncRun->initial_setup_completed) {
                 $this->report($onProgress, 'Syncing heart rate zones');
                 $itemsSynced += $this->syncHeartRateZones();
 
@@ -235,13 +252,14 @@ class GarminSyncService
                 $itemsSynced += $this->syncAllActivities($onProgress);
 
                 $syncRun->update([
+                    'initial_setup_completed' => true,
                     'items_synced' => $itemsSynced,
                 ]);
             }
 
             $todayStr = $this->today()->format('Y-m-d');
-            $earliestDate = $untilDate !== null && trim($untilDate) !== ''
-                ? CarbonImmutable::parse($untilDate, $this->timezone())->startOfDay()
+            $earliestDate = $effectiveUntilDate !== null && trim($effectiveUntilDate) !== ''
+                ? CarbonImmutable::parse($effectiveUntilDate, $this->timezone())->startOfDay()
                 : $this->resolveEarliestBackfillDate();
             $windowEnd = is_string($syncRun->cursor_date) && $syncRun->cursor_date !== ''
                 ? CarbonImmutable::parse($syncRun->cursor_date, $this->timezone())->startOfDay()
@@ -297,7 +315,8 @@ class GarminSyncService
                     : $consecutiveEmptyFitnessAgeWindows + 1;
 
                 $itemsSynced += $windowItems;
-                $consecutiveEmptyWindows = $windowItems === 0 ? $consecutiveEmptyWindows + 1 : 0;
+                $windowHasData = $windowItems > 0 || $windowHasFitnessAge;
+                $consecutiveEmptyWindows = $windowHasData ? 0 : $consecutiveEmptyWindows + 1;
 
                 $nextCursor = $windowStart->subDay();
 
@@ -844,6 +863,7 @@ class GarminSyncService
             $existingDates = array_fill_keys(
                 FitnessAgeRecord::query()
                     ->whereIn('calendar_date', $candidateDates)
+                    ->whereNotNull('fitness_age')
                     ->pluck('calendar_date')
                     ->all(),
                 true,
@@ -1723,6 +1743,20 @@ class GarminSyncService
         return [$local, $utc];
     }
 
+    private function findResumableBackfillRun(): ?SyncRun
+    {
+        $latestBackfill = SyncRun::query()
+            ->where('type', 'backfill')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($latestBackfill !== null && $latestBackfill->isResumableBackfill()) {
+            return $latestBackfill;
+        }
+
+        return null;
+    }
+
     private function resolveBackfillCursorDate(?string $resumeFromDate): CarbonImmutable
     {
         $timezone = $this->timezone();
@@ -1731,18 +1765,10 @@ class GarminSyncService
             return CarbonImmutable::parse($resumeFromDate, $timezone)->startOfDay();
         }
 
-        $latestBackfill = SyncRun::query()
-            ->where('type', 'backfill')
-            ->orderByDesc('id')
-            ->first();
+        $resumable = $this->findResumableBackfillRun();
 
-        if (
-            $latestBackfill !== null
-            && in_array($latestBackfill->status, ['failed', 'running'], true)
-            && is_string($latestBackfill->cursor_date)
-            && $latestBackfill->cursor_date !== ''
-        ) {
-            return CarbonImmutable::parse($latestBackfill->cursor_date, $timezone)->startOfDay();
+        if ($resumable !== null && is_string($resumable->cursor_date)) {
+            return CarbonImmutable::parse($resumable->cursor_date, $timezone)->startOfDay();
         }
 
         return $this->today();

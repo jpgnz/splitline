@@ -63,6 +63,7 @@ interface BackfillSummary {
     last_completed_at: string | null;
     can_resume: boolean;
     resume_cursor_date: string | null;
+    resume_until_date: string | null;
     last_error: string | null;
 }
 
@@ -100,17 +101,21 @@ const selectedBackfillRange = ref<BackfillRange>('1y');
 const isBackfillPosting = ref(false);
 
 interface LiveSyncSnapshot {
+    id: number | null;
     status: string;
     type: string | null;
     cursor_date: string | null;
+    until_date: string | null;
     items_synced: number;
     error_message: string | null;
 }
 
 const liveSync = ref<LiveSyncSnapshot>({
+    id: page.props.sync?.id ?? null,
     status: page.props.sync?.status ?? 'idle',
     type: page.props.sync?.type ?? null,
     cursor_date: page.props.sync?.cursor_date ?? null,
+    until_date: page.props.sync?.until_date ?? null,
     items_synced: page.props.sync?.items_synced ?? 0,
     error_message: page.props.sync?.error_message ?? null,
 });
@@ -123,9 +128,11 @@ watch(
         }
 
         liveSync.value = {
+            id: nextSync.id ?? null,
             status: nextSync.status,
             type: nextSync.type,
             cursor_date: nextSync.cursor_date ?? null,
+            until_date: nextSync.until_date ?? null,
             items_synced: nextSync.items_synced,
             error_message: nextSync.error_message,
         };
@@ -171,7 +178,16 @@ async function pollBackfillStatus(): Promise<void> {
     backfillPollInFlight = true;
 
     try {
-        const response = await fetch(syncStatus.url(), {
+        const trackedRunId =
+            liveSync.value.type === 'backfill' && liveSync.value.id !== null
+                ? liveSync.value.id
+                : null;
+        const pollUrl =
+            trackedRunId !== null
+                ? syncStatus.url({ query: { run_id: trackedRunId } })
+                : syncStatus.url();
+
+        const response = await fetch(pollUrl, {
             headers: {
                 Accept: 'application/json',
             },
@@ -185,9 +201,11 @@ async function pollBackfillStatus(): Promise<void> {
         const nextStatus = data.status ?? 'idle';
 
         liveSync.value = {
+            id: data.id ?? null,
             status: nextStatus,
             type: data.type ?? null,
             cursor_date: data.cursor_date ?? null,
+            until_date: data.until_date ?? null,
             items_synced: data.items_synced ?? 0,
             error_message: data.error_message ?? null,
         };
@@ -201,6 +219,10 @@ async function pollBackfillStatus(): Promise<void> {
                 } else if (nextStatus === 'failed') {
                     toast.error(
                         data.error_message || 'Historical backfill failed.',
+                    );
+                } else if (nextStatus === 'interrupted') {
+                    toast.warning(
+                        'Historical backfill stopped before completing. You can resume it below.',
                     );
                 }
             }
@@ -1675,6 +1697,11 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
                                 "
                                 type="button"
                                 :disabled="!provider.configured"
+                                :title="
+                                    backfill.resume_until_date
+                                        ? `Resumes back to ${backfill.resume_until_date}`
+                                        : 'Resumes all-time history backfill'
+                                "
                                 class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
                                 @click="triggerBackfill('resume')"
                             >

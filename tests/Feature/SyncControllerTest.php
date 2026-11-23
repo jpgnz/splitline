@@ -240,7 +240,7 @@ it('queues a chunked SyncGarminBackfillJob for each supported range', function (
     'all' => ['all', null],
 ]);
 
-it('resumes from the latest failed backfill cursor when range is resume', function () {
+it('resumes from the latest failed backfill cursor while preserving original until_date and initial_setup_completed', function () {
     Queue::fake([SyncGarminBackfillJob::class]);
     config([
         'services.garmin.key' => 'test-garmin-key',
@@ -253,7 +253,9 @@ it('resumes from the latest failed backfill cursor when range is resume', functi
         'status' => 'failed',
         'started_at' => CarbonImmutable::now()->subHour(),
         'finished_at' => CarbonImmutable::now()->subMinutes(50),
-        'cursor_date' => '2025-04-15',
+        'cursor_date' => '2026-10-01',
+        'until_date' => '2026-08-24',
+        'initial_setup_completed' => true,
     ]);
 
     $this->postJson(route('sync.backfill'), ['range' => 'resume'])
@@ -261,12 +263,102 @@ it('resumes from the latest failed backfill cursor when range is resume', functi
         ->assertJson([
             'status' => 'running',
             'type' => 'backfill',
-            'cursor_date' => '2025-04-15',
+            'cursor_date' => '2026-10-01',
+            'until_date' => '2026-08-24',
         ]);
 
+    $resumedRun = SyncRun::query()->latest('id')->firstOrFail();
+
+    expect($resumedRun->until_date)->toBe('2026-08-24')
+        ->and($resumedRun->initial_setup_completed)->toBeTrue();
+
     Queue::assertPushed(SyncGarminBackfillJob::class, function (SyncGarminBackfillJob $job): bool {
-        return $job->untilDate === null && $job->includeInitialSetup === true;
+        return $job->untilDate === '2026-08-24'
+            && $job->includeInitialSetup === false;
     });
+});
+
+it('reports stale running backfills as interrupted and prefers active runs over newer completed runs in status polling', function () {
+    config(['services.garmin.key' => 'test-garmin-key']);
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00'));
+
+    // Stale running backfill (killed worker 30 minutes ago)
+    $staleBackfill = SyncRun::factory()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::now()->subMinutes(30),
+        'finished_at' => null,
+        'cursor_date' => '2025-05-01',
+    ]);
+    $staleBackfill->forceFill(['updated_at' => CarbonImmutable::now()->subMinutes(20)])->save();
+
+    $this->getJson(route('sync.status'))
+        ->assertOk()
+        ->assertJson([
+            'id' => $staleBackfill->id,
+            'status' => 'interrupted',
+            'type' => 'backfill',
+            'cursor_date' => '2025-05-01',
+        ]);
+
+    // Active backfill must not be masked by a newer completed incremental sync
+    $activeBackfill = SyncRun::factory()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::now()->subMinutes(5),
+        'finished_at' => null,
+        'cursor_date' => '2026-06-01',
+    ]);
+    $activeBackfill->forceFill(['updated_at' => CarbonImmutable::now()->subMinute()])->save();
+
+    $completedIncremental = SyncRun::factory()->create([
+        'type' => 'incremental',
+        'status' => 'completed',
+        'started_at' => CarbonImmutable::now()->subSeconds(30),
+        'finished_at' => CarbonImmutable::now()->subSeconds(10),
+    ]);
+
+    $this->getJson(route('sync.status'))
+        ->assertOk()
+        ->assertJson([
+            'id' => $activeBackfill->id,
+            'status' => 'running',
+            'type' => 'backfill',
+            'cursor_date' => '2026-06-01',
+        ]);
+
+    // Explicit run_id polling targets that specific run
+    $this->getJson(route('sync.status', ['run_id' => $completedIncremental->id]))
+        ->assertOk()
+        ->assertJson([
+            'id' => $completedIncremental->id,
+            'status' => 'completed',
+            'type' => 'incremental',
+        ]);
+});
+
+it('skips scheduled garmin:sync CLI runs while another sync or backfill is actively running and keeps database queue retry_after above job timeout', function () {
+    Http::preventStrayRequests();
+    config(['services.garmin.key' => 'test-garmin-key']);
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00'));
+
+    expect(config('queue.connections.database.retry_after'))
+        ->toBeGreaterThan((new SyncGarminBackfillJob(1))->timeout);
+
+    $activeBackfill = SyncRun::factory()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::now()->subMinutes(4),
+        'finished_at' => null,
+        'cursor_date' => '2026-09-01',
+    ]);
+    $activeBackfill->forceFill(['updated_at' => CarbonImmutable::now()->subSeconds(30)])->save();
+
+    $this->artisan('garmin:sync', ['--days' => 1])
+        ->assertSuccessful();
+
+    expect(SyncRun::query()->count())->toBe(1);
+    Http::assertNothingSent();
 });
 
 it('blocks overlapping syncs while a long-running chunked backfill is still actively updating', function () {
