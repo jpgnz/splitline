@@ -465,7 +465,8 @@ it('releases SyncActivityStreamJob back to the queue when Garmin rate limits per
     expect($activity->refresh()->streams_synced_at)->toBeNull();
 });
 
-it('marks activities as streams_unavailable_at on missing FIT archives (HTTP 404 and 204) and excludes them from future default syncs', function () {
+it('marks older activities as streams_unavailable_at on missing FIT archives (HTTP 404 and 204) while sparing brand-new uploads', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-22 12:00:00', 'UTC'));
     Http::preventStrayRequests();
     Queue::fake([SyncActivityStreamJob::class]);
     configureGarminForStreamTest();
@@ -473,12 +474,21 @@ it('marks activities as streams_unavailable_at on missing FIT archives (HTTP 404
     $missing404 = Activity::factory()->create([
         'garmin_activity_id' => 600124,
         'sport_category' => 'running',
+        'started_at_utc' => CarbonImmutable::now('UTC')->subDays(5),
         'streams_synced_at' => null,
         'streams_unavailable_at' => null,
     ]);
     $missing204 = Activity::factory()->create([
         'garmin_activity_id' => 600125,
         'sport_category' => 'running',
+        'started_at_utc' => CarbonImmutable::now('UTC')->subDays(5),
+        'streams_synced_at' => null,
+        'streams_unavailable_at' => null,
+    ]);
+    $recent404 = Activity::factory()->create([
+        'garmin_activity_id' => 600128,
+        'sport_category' => 'running',
+        'started_at_utc' => CarbonImmutable::now('UTC')->subHour(),
         'streams_synced_at' => null,
         'streams_unavailable_at' => null,
     ]);
@@ -491,23 +501,32 @@ it('marks activities as streams_unavailable_at on missing FIT archives (HTTP 404
             ->push('Not found', 404)
             ->push($zipBytes, 200),
         'https://personal.connectapi.garmin.com/download-service/files/activity/600125' => Http::response('', 204),
+        'https://personal.connectapi.garmin.com/download-service/files/activity/600128' => Http::response('Not found', 404),
     ]);
 
     (new SyncActivityStreamJob($missing404->id))->handle(app(ActivityStreamSyncService::class));
     (new SyncActivityStreamJob($missing204->id))->handle(app(ActivityStreamSyncService::class));
+    (new SyncActivityStreamJob($recent404->id))->handle(app(ActivityStreamSyncService::class));
 
     expect($missing404->refresh()->streams_synced_at)->toBeNull()
         ->and($missing404->streams_unavailable_at)->not->toBeNull()
         ->and($missing204->refresh()->streams_synced_at)->toBeNull()
-        ->and($missing204->streams_unavailable_at)->not->toBeNull();
+        ->and($missing204->streams_unavailable_at)->not->toBeNull()
+        ->and($recent404->refresh()->streams_synced_at)->toBeNull()
+        ->and($recent404->streams_unavailable_at)->toBeNull();
 
-    // Default garmin:sync-streams --queue skips activities marked unavailable
+    // Default garmin:sync-streams --queue skips older unavailable activities but still includes the recent one
     $this->artisan('garmin:sync-streams', ['--queue' => true])
         ->assertSuccessful();
 
-    Queue::assertNothingPushed();
+    Queue::assertPushed(SyncActivityStreamJob::class, 1);
+    Queue::assertPushedOn(
+        'streams',
+        SyncActivityStreamJob::class,
+        fn (SyncActivityStreamJob $job): bool => $job->activityId === $recent404->id,
+    );
 
-    // Explicit --force still includes them and clears streams_unavailable_at once synced
+    // Explicit --force still includes unavailable activities and clears streams_unavailable_at once synced
     app(ActivityStreamSyncService::class)->sync($missing404, forceDownload: true);
 
     expect($missing404->refresh()->streams_synced_at)->not->toBeNull()

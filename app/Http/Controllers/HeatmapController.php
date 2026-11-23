@@ -32,8 +32,7 @@ class HeatmapController extends Controller
         $ids = Activity::query()
             ->where('is_indoor', false)
             ->where('is_manual', false)
-            ->whereNull('streams_synced_at')
-            ->whereNull('streams_unavailable_at')
+            ->awaitingStreams()
             ->orderByDesc('started_at_local')
             ->pluck('id')
             ->all();
