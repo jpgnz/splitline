@@ -9,6 +9,7 @@ use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Foundation\DevCommands;
 use Illuminate\Support\Facades\Date;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\ServiceProvider;
@@ -52,6 +53,8 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         $this->configureDefaults();
+
+        DevCommands::artisan('queue:listen --queue=default,streams,weather --tries=1 --timeout=0', 'queue');
     }
 
     /**

@@ -68,7 +68,7 @@ class SyncGarminBackfillJob implements ShouldQueue
     {
         $syncRun = SyncRun::query()->find($this->syncRunId);
 
-        if ($syncRun === null || in_array($syncRun->status, ['completed', 'failed'], true)) {
+        if ($syncRun === null || in_array($syncRun->status, ['completed', 'failed', 'interrupted'], true)) {
             return;
         }
 

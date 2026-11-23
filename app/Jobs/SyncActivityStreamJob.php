@@ -22,7 +22,9 @@ class SyncActivityStreamJob implements ShouldQueue
     public function __construct(
         public readonly int $activityId,
         public readonly bool $forceDownload = false,
-    ) {}
+    ) {
+        $this->onQueue('streams');
+    }
 
     /**
      * Execute the job.

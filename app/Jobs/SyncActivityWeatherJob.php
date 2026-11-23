@@ -22,7 +22,9 @@ class SyncActivityWeatherJob implements ShouldQueue
     public function __construct(
         public readonly int $activityId,
         public readonly bool $force = false,
-    ) {}
+    ) {
+        $this->onQueue('weather');
+    }
 
     /**
      * Execute the job.
