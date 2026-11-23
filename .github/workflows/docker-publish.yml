@@ -99,6 +99,20 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
 
+      - name: Determine application version
+        id: app_version
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "value=${GITHUB_REF_NAME}" >> "${GITHUB_OUTPUT}"
+          elif [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            echo "value=edge-${GITHUB_SHA::7}" >> "${GITHUB_OUTPUT}"
+          else
+            SHA="${PR_HEAD_SHA:-${GITHUB_SHA}}"
+            echo "value=dev-${SHA::7}" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v7
         with:
@@ -108,5 +122,7 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ steps.app_version.outputs.value }}
           cache-from: type=gha
           cache-to: ${{ github.event_name != 'pull_request' && 'type=gha,mode=max' || '' }}
