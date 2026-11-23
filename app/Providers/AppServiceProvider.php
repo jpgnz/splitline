@@ -2,6 +2,8 @@
 
 namespace App\Providers;
 
+use App\Jobs\SyncActivityStreamJob;
+use App\Jobs\SyncActivityWeatherJob;
 use App\Services\Garmin\GarminClient;
 use App\Services\Garmin\GarminTokenManager;
 use App\Support\AppSettings;
@@ -54,7 +56,15 @@ class AppServiceProvider extends ServiceProvider
     {
         $this->configureDefaults();
 
-        DevCommands::artisan('queue:listen --queue=default,streams,weather --tries=1 --timeout=0', 'queue');
+        $connection = (string) config('queue.default', 'database');
+        $primaryQueue = trim((string) config("queue.connections.{$connection}.queue", 'default'));
+        $queues = implode(',', array_values(array_unique([
+            $primaryQueue !== '' ? $primaryQueue : 'default',
+            SyncActivityStreamJob::QUEUE,
+            SyncActivityWeatherJob::QUEUE,
+        ])));
+
+        DevCommands::artisan("queue:listen --queue={$queues} --tries=1 --timeout=0", 'queue');
     }
 
     /**

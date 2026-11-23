@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Models\Activity;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Garmin\GarminApiException;
+use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -12,6 +13,8 @@ use Illuminate\Foundation\Queue\Queueable;
 class SyncActivityStreamJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
+
+    public const string QUEUE = 'streams';
 
     public int $tries = 5;
 
@@ -26,12 +29,12 @@ class SyncActivityStreamJob implements ShouldBeUnique, ShouldQueue
         public readonly int $activityId,
         public readonly bool $forceDownload = false,
     ) {
-        $this->onQueue('streams');
+        $this->onQueue(self::QUEUE);
     }
 
     public function uniqueId(): string
     {
-        return (string) $this->activityId;
+        return "{$this->activityId}:".($this->forceDownload ? '1' : '0');
     }
 
     /**
@@ -54,7 +57,11 @@ class SyncActivityStreamJob implements ShouldBeUnique, ShouldQueue
                 return;
             }
 
-            if (in_array($exception->statusCode, [204, 404], true)) {
+            if ($exception->isArchiveUnavailable()) {
+                $activity->update([
+                    'streams_unavailable_at' => CarbonImmutable::now(),
+                ]);
+
                 return;
             }
 

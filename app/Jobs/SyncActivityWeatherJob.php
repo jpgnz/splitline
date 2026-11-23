@@ -13,6 +13,8 @@ class SyncActivityWeatherJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    public const string QUEUE = 'weather';
+
     public int $tries = 5;
 
     public int $uniqueFor = 14400;
@@ -26,12 +28,12 @@ class SyncActivityWeatherJob implements ShouldBeUnique, ShouldQueue
         public readonly int $activityId,
         public readonly bool $force = false,
     ) {
-        $this->onQueue('weather');
+        $this->onQueue(self::QUEUE);
     }
 
     public function uniqueId(): string
     {
-        return (string) $this->activityId;
+        return "{$this->activityId}:".($this->force ? '1' : '0');
     }
 
     /**

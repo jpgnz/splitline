@@ -59,6 +59,7 @@ class ActivityStreamSyncService
 
         $activityUpdates = [
             'streams_synced_at' => CarbonImmutable::now(),
+            'streams_unavailable_at' => null,
         ];
 
         $rawSummaryUpdates = $this->extractExtendedSummaryFromRaw($activity->raw_summary);

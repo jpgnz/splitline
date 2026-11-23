@@ -135,10 +135,17 @@ it('does not share external map API keys via Inertia props', function () {
 it('queues stream sync jobs on the streams queue for all unsynced outdoor non-manual activities without duplicating', function () {
     Queue::fake([SyncActivityStreamJob::class]);
 
-    $unsyncedOutdoor = Activity::factory()->create([
+    $firstOutdoor = Activity::factory()->create([
         'is_indoor' => false,
         'is_manual' => false,
         'streams_synced_at' => null,
+        'streams_unavailable_at' => null,
+    ]);
+    $secondOutdoor = Activity::factory()->create([
+        'is_indoor' => false,
+        'is_manual' => false,
+        'streams_synced_at' => null,
+        'streams_unavailable_at' => null,
     ]);
     Activity::factory()->indoor()->create([
         'is_manual' => false,
@@ -154,14 +161,31 @@ it('queues stream sync jobs on the streams queue for all unsynced outdoor non-ma
         'is_manual' => false,
         'streams_synced_at' => CarbonImmutable::now()->subHour(),
     ]);
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'is_manual' => false,
+        'streams_synced_at' => null,
+        'streams_unavailable_at' => CarbonImmutable::now()->subHour(),
+    ]);
+
+    $this->get('/heatmap')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('summary.unsynced_gnss_count', 2),
+        );
 
     $this->post('/heatmap/sync-streams')->assertRedirect();
     $this->post('/heatmap/sync-streams')->assertRedirect();
 
-    Queue::assertPushed(SyncActivityStreamJob::class, 1);
+    Queue::assertPushed(SyncActivityStreamJob::class, 2);
     Queue::assertPushedOn(
         'streams',
         SyncActivityStreamJob::class,
-        fn (SyncActivityStreamJob $job): bool => $job->activityId === $unsyncedOutdoor->id,
+        fn (SyncActivityStreamJob $job): bool => $job->activityId === $firstOutdoor->id,
+    );
+    Queue::assertPushedOn(
+        'streams',
+        SyncActivityStreamJob::class,
+        fn (SyncActivityStreamJob $job): bool => $job->activityId === $secondOutdoor->id,
     );
 });

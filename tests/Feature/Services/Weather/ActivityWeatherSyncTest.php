@@ -513,7 +513,7 @@ it('retries transient HTTP 5xx responses and records a failed weather SyncRun wh
         ->and($failedRun->error_message)->toContain('HTTP 400');
 });
 
-it('deduplicates SyncActivityWeatherJob dispatches for the same activity', function () {
+it('deduplicates identical SyncActivityWeatherJob dispatches while allowing explicit forced refreshes', function () {
     Queue::fake([SyncActivityWeatherJob::class]);
 
     $activity = Activity::factory()->create([
@@ -522,12 +522,19 @@ it('deduplicates SyncActivityWeatherJob dispatches for the same activity', funct
     ]);
 
     SyncActivityWeatherJob::dispatch($activity->id);
+    SyncActivityWeatherJob::dispatch($activity->id);
+    SyncActivityWeatherJob::dispatch($activity->id, force: true);
     SyncActivityWeatherJob::dispatch($activity->id, force: true);
 
-    Queue::assertPushed(SyncActivityWeatherJob::class, 1);
+    Queue::assertPushed(SyncActivityWeatherJob::class, 2);
     Queue::assertPushedOn(
         'weather',
         SyncActivityWeatherJob::class,
-        fn (SyncActivityWeatherJob $job): bool => $job->activityId === $activity->id,
+        fn (SyncActivityWeatherJob $job): bool => $job->activityId === $activity->id && $job->force === false,
+    );
+    Queue::assertPushedOn(
+        'weather',
+        SyncActivityWeatherJob::class,
+        fn (SyncActivityWeatherJob $job): bool => $job->activityId === $activity->id && $job->force === true,
     );
 });

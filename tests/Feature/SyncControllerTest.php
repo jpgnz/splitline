@@ -622,3 +622,68 @@ it('supersedes older stale backfill runs when resuming so leftover queued chunks
     Queue::assertPushed(SyncGarminBackfillJob::class, 1);
     Http::assertNothingSent();
 });
+
+it('stops an in-flight backfill chunk cleanly without overwriting interrupted status when superseded mid-run', function () {
+    Queue::fake([SyncGarminBackfillJob::class]);
+    Http::preventStrayRequests();
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
+
+    expect(SyncRun::ACTIVE_WINDOW_MINUTES * 60)
+        ->toBeGreaterThan((new SyncGarminBackfillJob(1))->timeout);
+
+    config([
+        'services.garmin.key' => 'test-garmin-key',
+        'services.garmin.base_url' => 'https://personal.connectapi.garmin.com',
+        'app.display_timezone' => 'Pacific/Auckland',
+    ]);
+
+    $header = rtrim(strtr(base64_encode('{"alg":"RS256","typ":"JWT"}'), '+/', '-_'), '=');
+    $payload = rtrim(strtr(base64_encode(json_encode(['exp' => CarbonImmutable::now()->addHours(24)->getTimestamp()], JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+    $jwt = "{$header}.{$payload}.sig";
+
+    $syncRun = SyncRun::query()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::now(),
+        'cursor_date' => '2026-11-21',
+        'until_date' => '2026-09-01',
+        'initial_setup_completed' => true,
+        'items_synced' => 0,
+    ]);
+
+    $superseded = false;
+
+    Http::fake(function (Request $request) use ($jwt, $syncRun, &$superseded) {
+        $url = $request->url();
+
+        if (str_contains($url, '/personalapitoken-service/')) {
+            return Http::response($jwt, 200);
+        }
+
+        // Simulate the run being superseded mid-window by a concurrent resume/restart
+        if (! $superseded) {
+            $superseded = true;
+            SyncRun::query()
+                ->whereKey($syncRun->id)
+                ->update([
+                    'status' => 'interrupted',
+                    'finished_at' => CarbonImmutable::now(),
+                ]);
+        }
+
+        return Http::response([], 200);
+    });
+
+    (new SyncGarminBackfillJob(
+        syncRunId: $syncRun->id,
+        untilDate: '2026-09-01',
+        includeInitialSetup: false,
+        windowsPerChunk: 3,
+    ))->handle(app(GarminSyncService::class));
+
+    $syncRun->refresh();
+    expect($syncRun->status)->toBe('interrupted')
+        ->and($syncRun->finished_at)->not->toBeNull();
+
+    Queue::assertNothingPushed();
+});
