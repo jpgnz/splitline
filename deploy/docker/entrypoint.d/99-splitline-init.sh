@@ -5,6 +5,15 @@ DATA_DIR="${SPLITLINE_DATA_DIR:-/data}"
 DB_PATH="${DB_DATABASE:-${DATA_DIR}/database.sqlite}"
 APP_KEY_FILE="${DATA_DIR}/.app_key"
 
+for volume_dir in "$DATA_DIR" /var/www/html/storage/app/private; do
+    if [ -d "$volume_dir" ] && [ "$(id -u)" -ne 0 ] && [ ! -w "$volume_dir" ]; then
+        echo "[splitline] ERROR: ${volume_dir} is not writable by $(id -un) (uid $(id -u))." >&2
+        echo "[splitline] Volumes created by Splitline v0.1.x (Debian image, uid 33) are incompatible with this Alpine-based image (uid 82)." >&2
+        echo "[splitline] Recreate your Docker volumes and re-import your data. See the README section 'Upgrading from v0.1.x'." >&2
+        exit 1
+    fi
+done
+
 mkdir -p \
     "$DATA_DIR" \
     "$(dirname "$DB_PATH")" \

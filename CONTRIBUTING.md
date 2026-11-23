@@ -2,10 +2,13 @@
 
 ## Prerequisites
 
-- **PHP 8.5+** with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, `intl`, `bcmath`, and `pcntl`
+- **PHP 8.5+** with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, and `pcntl`
 - **Composer 2**
 - **Node.js 26+** and **npm**
 - **SQLite 3**
+
+> [!NOTE]
+> The production Docker image deliberately ships without the `intl` and `bcmath` extensions, and CI disables them to match. Laravel features that depend on them, such as the `Number` helpers (`Number::format()`, `Number::currency()`, `Number::percentage()`, etc.), will fail in production. If you need them, add the extensions back in `deploy/docker/Dockerfile` and in the `extensions:` lists in `.github/workflows/tests.yml` and `.github/workflows/docker-publish.yml`.
 
 ## Local Setup
 
