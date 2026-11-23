@@ -190,6 +190,8 @@ class GarminSyncService
 
         $initialSetupCompleted = $resumable !== null && $resumable->initial_setup_completed;
 
+        SyncRun::supersedeStaleBackfills();
+
         $syncRun = SyncRun::query()->create([
             'type' => 'backfill',
             'status' => 'running',

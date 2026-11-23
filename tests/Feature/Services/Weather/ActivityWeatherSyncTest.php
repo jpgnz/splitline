@@ -456,14 +456,15 @@ it('supports weather:sync command flags (--limit, --activity, --force, --upgrade
 
     expect(ActivityWeather::query()->where('activity_id', $olderOutdoor->id)->exists())->toBeTrue();
 
-    // 4. --force + --queue dispatches SyncActivityWeatherJob with force=true
+    // 4. --force + --queue dispatches SyncActivityWeatherJob with force=true onto the weather queue
     Queue::fake([SyncActivityWeatherJob::class]);
 
     $this->artisan('weather:sync', ['--force' => true, '--limit' => 2, '--queue' => true])
         ->assertSuccessful();
 
     Queue::assertPushed(SyncActivityWeatherJob::class, 2);
-    Queue::assertPushed(
+    Queue::assertPushedOn(
+        'weather',
         SyncActivityWeatherJob::class,
         fn (SyncActivityWeatherJob $job): bool => $job->activityId === $newestOutdoor->id && $job->force === true,
     );
