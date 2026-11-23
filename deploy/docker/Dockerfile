@@ -121,7 +121,10 @@ USER www-data
 RUN APP_ENV=production APP_KEY=base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA= \
     php artisan package:discover --ansi
 
+ARG APP_VERSION=dev
+
 ENV APP_NAME=Splitline \
+    APP_VERSION=${APP_VERSION} \
     APP_ENV=production \
     APP_DEBUG=false \
     PHP_OPCACHE_ENABLE=1 \

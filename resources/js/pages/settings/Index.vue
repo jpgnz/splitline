@@ -8,9 +8,11 @@ import {
     ChevronDown,
     Clock,
     Database,
+    ExternalLink,
     History,
     RefreshCw,
     Sparkles,
+    Tag,
 } from '@lucide/vue';
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
@@ -84,6 +86,18 @@ interface SettingsProps {
 
 const props = defineProps<SettingsProps>();
 const page = usePage();
+
+const appName = computed<string>(() => page.props.name || 'Splitline');
+const appVersion = computed<string>(() => page.props.appVersion);
+const releaseNotesUrl = computed<string | null>(() => {
+    const tag = page.props.releaseTag;
+
+    if (!tag) {
+        return null;
+    }
+
+    return `https://github.com/jpgnz/splitline/releases/tag/${encodeURIComponent(tag)}`;
+});
 
 type BackfillRange = '90d' | '1y' | '3y' | 'all';
 
@@ -1731,6 +1745,47 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
                                 }}
                             </button>
                         </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. About -->
+            <section
+                class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
+            >
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                    <div class="space-y-1">
+                        <h2
+                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        >
+                            About {{ appName }}
+                        </h2>
+                        <p class="text-sm text-zinc-500 dark:text-zinc-400">
+                            Local-first, self-hosted endurance and health
+                            telemetry.
+                        </p>
+                    </div>
+
+                    <div class="flex flex-wrap items-center gap-2">
+                        <span
+                            class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1 font-mono text-xs font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300"
+                        >
+                            <Tag
+                                class="size-3 text-zinc-400 dark:text-zinc-500"
+                            />
+                            {{ appVersion }}
+                        </span>
+
+                        <a
+                            v-if="releaseNotesUrl"
+                            :href="releaseNotesUrl"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="inline-flex items-center gap-1 rounded-lg border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                        >
+                            <span>Release Notes</span>
+                            <ExternalLink class="size-3" />
+                        </a>
                     </div>
                 </div>
             </section>
