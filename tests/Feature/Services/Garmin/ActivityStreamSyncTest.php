@@ -463,3 +463,29 @@ it('releases SyncActivityStreamJob back to the queue when Garmin rate limits per
 
     expect($activity->refresh()->streams_synced_at)->toBeNull();
 });
+
+it('skips missing FIT archives (HTTP 404) without retrying and deduplicates SyncActivityStreamJob dispatches per activity', function () {
+    Http::preventStrayRequests();
+    Queue::fake([SyncActivityStreamJob::class]);
+    configureGarminForStreamTest();
+
+    $activity = Activity::factory()->create([
+        'garmin_activity_id' => 600124,
+        'sport_category' => 'running',
+        'streams_synced_at' => null,
+    ]);
+
+    SyncActivityStreamJob::dispatch($activity->id);
+    SyncActivityStreamJob::dispatch($activity->id);
+
+    Queue::assertPushed(SyncActivityStreamJob::class, 1);
+
+    Http::fake([
+        'https://personal.connectapi.garmin.com/personalapitoken-service/*' => Http::response(streamSyncFakeJwt(), 200),
+        'https://personal.connectapi.garmin.com/download-service/files/activity/600124' => Http::response('Not found', 404),
+    ]);
+
+    (new SyncActivityStreamJob($activity->id))->handle(app(ActivityStreamSyncService::class));
+
+    expect($activity->refresh()->streams_synced_at)->toBeNull();
+});

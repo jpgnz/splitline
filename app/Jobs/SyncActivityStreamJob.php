@@ -5,14 +5,17 @@ namespace App\Jobs;
 use App\Models\Activity;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Garmin\GarminApiException;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
-class SyncActivityStreamJob implements ShouldQueue
+class SyncActivityStreamJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
     public int $tries = 5;
+
+    public int $uniqueFor = 14400;
 
     /**
      * @var list<int>
@@ -24,6 +27,11 @@ class SyncActivityStreamJob implements ShouldQueue
         public readonly bool $forceDownload = false,
     ) {
         $this->onQueue('streams');
+    }
+
+    public function uniqueId(): string
+    {
+        return (string) $this->activityId;
     }
 
     /**
@@ -43,6 +51,10 @@ class SyncActivityStreamJob implements ShouldQueue
             if ($exception->isRateLimited() && $this->job !== null) {
                 $this->release($exception->retryAfterSeconds ?? 60);
 
+                return;
+            }
+
+            if (in_array($exception->statusCode, [204, 404], true)) {
                 return;
             }
 

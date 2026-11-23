@@ -33,7 +33,6 @@ class HeatmapController extends Controller
             ->where('is_manual', false)
             ->whereNull('streams_synced_at')
             ->orderByDesc('started_at_local')
-            ->limit(250)
             ->pluck('id')
             ->all();
 
