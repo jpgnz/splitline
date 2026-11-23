@@ -7,6 +7,7 @@ use App\Jobs\SyncActivityWeatherJob;
 use App\Services\Garmin\GarminClient;
 use App\Services\Garmin\GarminTokenManager;
 use App\Support\AppSettings;
+use App\Support\AppVersion;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Cache\Repository as CacheRepository;
@@ -25,6 +26,7 @@ class AppServiceProvider extends ServiceProvider
     public function register(): void
     {
         $this->app->scoped(AppSettings::class);
+        $this->app->singleton(AppVersion::class);
         $this->app->scoped(SportRegistry::class);
 
         $this->app->singleton(GarminTokenManager::class, function (Application $app): GarminTokenManager {

@@ -4,6 +4,7 @@ namespace App\Http\Middleware;
 
 use App\Models\SyncRun;
 use App\Support\AppSettings;
+use App\Support\AppVersion;
 use App\Support\SportRegistry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -13,6 +14,7 @@ class HandleInertiaRequests extends Middleware
 {
     public function __construct(
         private readonly AppSettings $settings,
+        private readonly AppVersion $appVersion,
         private readonly SportRegistry $sports,
     ) {}
 
@@ -47,6 +49,8 @@ class HandleInertiaRequests extends Middleware
         return [
             ...parent::share($request),
             'name' => config('app.name'),
+            'appVersion' => fn (): string => $this->appVersion->current(),
+            'releaseTag' => fn (): ?string => $this->appVersion->releaseTag(),
             'units' => fn (): string => $this->settings->unitSystem(),
             'timezone' => fn (): string => $this->settings->displayTimezone(),
             'sports' => fn (): array => $this->sports->sharedFrontendPayload(),

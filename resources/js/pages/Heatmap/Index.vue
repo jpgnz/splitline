@@ -6,7 +6,6 @@ import {
     Map,
     RefreshCw,
     RotateCcw,
-    Terminal,
     X,
 } from '@lucide/vue';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
@@ -1125,19 +1124,6 @@ onBeforeUnmount(() => {
                             {{ formatNumber(summary.unsynced_gnss_count, 0) }}
                         </span>
                     </button>
-                    <span
-                        class="inline-flex items-center gap-1 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
-                    >
-                        <Terminal class="size-3 shrink-0" />
-                        <span>
-                            CLI:
-                            <code
-                                class="rounded border border-zinc-200/80 bg-[#f7f7f5] px-1 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400"
-                            >
-                                docker exec ... php artisan garmin:sync-streams
-                            </code>
-                        </span>
-                    </span>
                 </div>
             </div>
         </section>

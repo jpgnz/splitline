@@ -51,6 +51,8 @@ declare module '@inertiajs/core' {
     export interface InertiaConfig {
         sharedPageProps: {
             name: string;
+            appVersion: string;
+            releaseTag: string | null;
             units: UnitSystem;
             timezone: string;
             sports?: SharedSportsMeta;
