@@ -2,6 +2,7 @@
 
 namespace App\Services\Garmin;
 
+use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\BestEffort;
@@ -1215,6 +1216,14 @@ class GarminSyncService
         );
 
         $this->gearService->autoAssignDefaultGear($activity);
+
+        if (
+            $existing === null
+            && ! $activity->is_manual
+            && (bool) config('services.garmin.auto_sync_streams', true)
+        ) {
+            SyncActivityStreamJob::dispatch($activity->id);
+        }
 
         if (
             $existing === null

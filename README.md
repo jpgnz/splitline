@@ -112,22 +112,23 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 
 ## Configuration
 
-| Variable                 | Default                               | Description                                                               |
-| :----------------------- | :------------------------------------ | :------------------------------------------------------------------------ |
-| `APP_URL`                | `http://localhost:8080`               | Public URL of your instance (`https://...` behind TLS termination).       |
-| `APP_KEY`                | _(auto-generated)_                    | Laravel encryption key; auto-generated at `/data/.app_key` if omitted.    |
-| `TIMEZONE`               | `UTC`                                 | IANA timezone for dates, streaks, and daily rollups (falls back to `TZ`). |
-| `DEFAULT_UNITS`          | `metric`                              | Initial unit system (`metric` or `imperial`); overridable in Settings.    |
-| `DEFAULT_SPORTS_MODE`    | `auto`                                | Initial Sports & Disciplines navigation mode (`auto` or `custom`).        |
-| `GARMIN_KEY`             | _(empty)_                             | Garmin Connect Personal API key.                                          |
-| `TRUSTED_PROXIES`        | _(empty)_                             | Reverse proxy IP/CIDR list or `*` for forwarded HTTPS headers.            |
-| `SESSION_SECURE_COOKIE`  | `false`                               | Set to `true` when serving over HTTPS.                                    |
-| `LOG_CHANNEL`            | `stderr` _(Docker)_ / `stack` _(dev)_ | Log destination (`stderr` for `docker logs`).                             |
-| `DB_DATABASE`            | `/data/database.sqlite` _(Docker)_    | Path to the SQLite database file.                                         |
-| `DB_SQLITE_JOURNAL_MODE` | `WAL` _(Docker)_                      | SQLite journal mode for concurrent web, queue, and scheduler access.      |
-| `DB_SQLITE_BUSY_TIMEOUT` | `5000` _(Docker)_                     | SQLite busy timeout in milliseconds.                                      |
-| `OPEN_METEO_ENABLED`     | `true`                                | Enable historical activity weather lookups.                               |
-| `OPEN_METEO_AUTO_SYNC`   | `true`                                | Automatically queue weather lookups for newly synced outdoor activities.  |
+| Variable                   | Default                               | Description                                                                        |
+| :------------------------- | :------------------------------------ | :--------------------------------------------------------------------------------- |
+| `APP_URL`                  | `http://localhost:8080`               | Public URL of your instance (`https://...` behind TLS termination).                |
+| `APP_KEY`                  | _(auto-generated)_                    | Laravel encryption key; auto-generated at `/data/.app_key` if omitted.             |
+| `TIMEZONE`                 | `UTC`                                 | IANA timezone for dates, streaks, and daily rollups (falls back to `TZ`).          |
+| `DEFAULT_UNITS`            | `metric`                              | Initial unit system (`metric` or `imperial`); overridable in Settings.             |
+| `DEFAULT_SPORTS_MODE`      | `auto`                                | Initial Sports & Disciplines navigation mode (`auto` or `custom`).                 |
+| `GARMIN_KEY`               | _(empty)_                             | Garmin Connect Personal API key.                                                   |
+| `GARMIN_AUTO_SYNC_STREAMS` | `true`                                | Automatically queue FIT stream & GNSS route downloads for newly synced activities. |
+| `TRUSTED_PROXIES`          | _(empty)_                             | Reverse proxy IP/CIDR list or `*` for forwarded HTTPS headers.                     |
+| `SESSION_SECURE_COOKIE`    | `false`                               | Set to `true` when serving over HTTPS.                                             |
+| `LOG_CHANNEL`              | `stderr` _(Docker)_ / `stack` _(dev)_ | Log destination (`stderr` for `docker logs`).                                      |
+| `DB_DATABASE`              | `/data/database.sqlite` _(Docker)_    | Path to the SQLite database file.                                                  |
+| `DB_SQLITE_JOURNAL_MODE`   | `WAL` _(Docker)_                      | SQLite journal mode for concurrent web, queue, and scheduler access.               |
+| `DB_SQLITE_BUSY_TIMEOUT`   | `5000` _(Docker)_                     | SQLite busy timeout in milliseconds.                                               |
+| `OPEN_METEO_ENABLED`       | `true`                                | Enable historical activity weather lookups.                                        |
+| `OPEN_METEO_AUTO_SYNC`     | `true`                                | Automatically queue weather lookups for newly synced outdoor activities.           |
 
 ## Development
 

@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Jobs\SyncGarminBackfillJob;
 use App\Jobs\SyncGarminJob;
@@ -484,14 +485,15 @@ it('self-chains SyncGarminBackfillJob across chunks until the target date is rea
         ->and($failedRun->error_message)->toBe('Rate limit exhausted');
 });
 
-it('dispatches auto-synced weather jobs onto the weather queue while keeping chained backfill chunks on the default queue', function () {
-    Queue::fake([SyncGarminBackfillJob::class, SyncActivityWeatherJob::class]);
+it('dispatches auto-synced stream and weather jobs onto dedicated lower-priority queues while keeping chained backfill chunks on the default queue', function () {
+    Queue::fake([SyncGarminBackfillJob::class, SyncActivityStreamJob::class, SyncActivityWeatherJob::class]);
     Http::preventStrayRequests();
     $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
 
     config([
         'services.garmin.key' => 'test-garmin-key',
         'services.garmin.base_url' => 'https://personal.connectapi.garmin.com',
+        'services.garmin.auto_sync_streams' => true,
         'services.open_meteo.enabled' => true,
         'services.open_meteo.auto_sync' => true,
         'app.display_timezone' => 'Pacific/Auckland',
@@ -527,6 +529,16 @@ it('dispatches auto-synced weather jobs onto the weather queue while keeping cha
                     'startLatitude' => -36.8485,
                     'startLongitude' => 174.7633,
                 ],
+                [
+                    'activityId' => 991002,
+                    'activityName' => 'Manual Gym Session',
+                    'startTimeLocal' => '2026-11-20 12:00:00',
+                    'startTimeGMT' => '2026-11-19 23:00:00',
+                    'activityType' => ['typeKey' => 'strength_training'],
+                    'distance' => 0.0,
+                    'duration' => 1800.0,
+                    'manualActivity' => true,
+                ],
             ], 200);
         }
 
@@ -556,6 +568,9 @@ it('dispatches auto-synced weather jobs onto the weather queue while keeping cha
     );
     $chunk1->handle(app(GarminSyncService::class));
 
+    Queue::assertPushed(SyncActivityStreamJob::class, 1);
+    Queue::assertPushedOn('streams', SyncActivityStreamJob::class);
+    Queue::assertPushed(SyncActivityWeatherJob::class, 1);
     Queue::assertPushedOn('weather', SyncActivityWeatherJob::class);
     Queue::assertPushed(
         SyncGarminBackfillJob::class,

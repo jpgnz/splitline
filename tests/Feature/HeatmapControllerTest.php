@@ -1,9 +1,11 @@
 <?php
 
+use App\Jobs\SyncActivityStreamJob;
 use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Services\Heatmap\HeatmapService;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function () {
@@ -128,4 +130,38 @@ it('does not share external map API keys via Inertia props', function () {
         ->assertInertia(fn (Assert $page) => $page
             ->missing('maps'),
         );
+});
+
+it('queues stream sync jobs on the streams queue for all unsynced outdoor non-manual activities without duplicating', function () {
+    Queue::fake([SyncActivityStreamJob::class]);
+
+    $unsyncedOutdoor = Activity::factory()->create([
+        'is_indoor' => false,
+        'is_manual' => false,
+        'streams_synced_at' => null,
+    ]);
+    Activity::factory()->indoor()->create([
+        'is_manual' => false,
+        'streams_synced_at' => null,
+    ]);
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'is_manual' => true,
+        'streams_synced_at' => null,
+    ]);
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'is_manual' => false,
+        'streams_synced_at' => CarbonImmutable::now()->subHour(),
+    ]);
+
+    $this->post('/heatmap/sync-streams')->assertRedirect();
+    $this->post('/heatmap/sync-streams')->assertRedirect();
+
+    Queue::assertPushed(SyncActivityStreamJob::class, 1);
+    Queue::assertPushedOn(
+        'streams',
+        SyncActivityStreamJob::class,
+        fn (SyncActivityStreamJob $job): bool => $job->activityId === $unsyncedOutdoor->id,
+    );
 });
