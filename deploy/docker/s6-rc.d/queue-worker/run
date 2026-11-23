@@ -6,8 +6,19 @@ if [ -z "${APP_KEY:-}" ] && [ -s /data/.app_key ]; then
     export APP_KEY
 fi
 
+PRIMARY_QUEUE="${DB_QUEUE:-default}"
+QUEUES="${PRIMARY_QUEUE}"
+case ",${QUEUES}," in
+    *,streams,*) ;;
+    *) QUEUES="${QUEUES},streams" ;;
+esac
+case ",${QUEUES}," in
+    *,weather,*) ;;
+    *) QUEUES="${QUEUES},weather" ;;
+esac
+
 if [ "$(id -u)" -eq 0 ]; then
-    exec s6-setuidgid www-data php /var/www/html/artisan queue:work --queue=default,streams,weather --sleep=3 --tries=5 --timeout=600
+    exec s6-setuidgid www-data php /var/www/html/artisan queue:work --queue="${QUEUES}" --sleep=3 --tries=5 --timeout=600
 fi
 
-exec php /var/www/html/artisan queue:work --queue=default,streams,weather --sleep=3 --tries=5 --timeout=600
+exec php /var/www/html/artisan queue:work --queue="${QUEUES}" --sleep=3 --tries=5 --timeout=600

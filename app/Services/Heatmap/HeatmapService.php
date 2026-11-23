@@ -70,7 +70,7 @@ class HeatmapService
         $unsyncedGnssCount = (clone $baseQuery)
             ->where('activities.is_indoor', false)
             ->where('activities.is_manual', false)
-            ->whereNull('activities.streams_synced_at')
+            ->awaitingStreams()
             ->count();
 
         $rows = (clone $baseQuery)

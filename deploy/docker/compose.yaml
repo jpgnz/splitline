@@ -31,6 +31,11 @@ services:
 
             # Data provider — Garmin Connect Personal API
             GARMIN_KEY: ${GARMIN_KEY:-}
+            GARMIN_AUTO_SYNC_STREAMS: ${GARMIN_AUTO_SYNC_STREAMS:-true}
+
+            # Optional: Open-Meteo historical activity weather (free, no API key required)
+            OPEN_METEO_ENABLED: ${OPEN_METEO_ENABLED:-true}
+            OPEN_METEO_AUTO_SYNC: ${OPEN_METEO_AUTO_SYNC:-true}
 
             # Reverse proxy & HTTPS settings (uncomment/configure behind Caddy, Traefik,
             # Nginx, Tailscale Serve, or Cloudflare Tunnels)

@@ -113,6 +113,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property bool $is_pr
  * @property bool $is_manual
  * @property CarbonImmutable|null $streams_synced_at
+ * @property CarbonImmutable|null $streams_unavailable_at
  * @property array<int|string, mixed>|null $raw_summary
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -228,6 +229,7 @@ class Activity extends Model
         'is_pr',
         'is_manual',
         'streams_synced_at',
+        'streams_unavailable_at',
         'raw_summary',
     ];
 
@@ -329,6 +331,7 @@ class Activity extends Model
             'is_pr' => 'boolean',
             'is_manual' => 'boolean',
             'streams_synced_at' => 'immutable_datetime',
+            'streams_unavailable_at' => 'immutable_datetime',
             'raw_summary' => 'array',
         ];
     }
@@ -419,5 +422,18 @@ class Activity extends Model
         return $query
             ->where('sport_category', 'biking')
             ->whereRaw('COALESCE(discipline_override, sport_discipline) = ?', ['other']);
+    }
+
+    /**
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingStreams(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->whereNull("{$table}.streams_synced_at")
+            ->whereNull("{$table}.streams_unavailable_at");
     }
 }

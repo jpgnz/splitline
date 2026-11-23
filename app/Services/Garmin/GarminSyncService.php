@@ -2,6 +2,7 @@
 
 namespace App\Services\Garmin;
 
+use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\BestEffort;
@@ -16,6 +17,9 @@ use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
 use App\Services\Gear\GearService;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\Query\Builder as QueryBuilder;
+use Illuminate\Support\Facades\DB;
 use Throwable;
 
 class GarminSyncService
@@ -190,7 +194,7 @@ class GarminSyncService
 
         $initialSetupCompleted = $resumable !== null && $resumable->initial_setup_completed;
 
-        SyncRun::supersedeStaleBackfills();
+        SyncRun::supersedePendingBackfills();
 
         $syncRun = SyncRun::query()->create([
             'type' => 'backfill',
@@ -208,6 +212,7 @@ class GarminSyncService
             untilDate: $effectiveUntilDate,
             includeInitialSetup: ! $initialSetupCompleted,
             onProgress: $onProgress,
+            queueEnrichment: true,
         );
 
         return $syncRun->refresh();
@@ -231,6 +236,7 @@ class GarminSyncService
         int $consecutiveEmptyWindows = 0,
         int $consecutiveEmptyFitnessAgeWindows = 0,
         ?callable $onProgress = null,
+        bool $queueEnrichment = true,
     ): array {
         $itemsSynced = (int) $syncRun->items_synced;
         $windowLimit = max(1, $maxWindows);
@@ -238,25 +244,53 @@ class GarminSyncService
             ? trim($untilDate)
             : $syncRun->until_date;
 
-        if ($onProgress !== null) {
-            $this->client->onRateLimitWait(function (float $waitSeconds, string $reason) use ($onProgress): void {
+        $this->client->onRateLimitWait(function (float $waitSeconds, string $reason) use ($onProgress, $syncRun): void {
+            $this->updateActiveRun($syncRun, []);
+
+            if ($onProgress !== null) {
                 $seconds = (int) ceil($waitSeconds);
                 $this->report($onProgress, "Rate limited ({$reason}) — waiting {$seconds}s");
-            });
-        }
+            }
+        });
 
         try {
+            if (! $this->isRunStillActive($syncRun)) {
+                return [
+                    'completed' => true,
+                    'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                    'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                ];
+            }
+
             if ($includeInitialSetup && ! $syncRun->initial_setup_completed) {
                 $this->report($onProgress, 'Syncing heart rate zones');
                 $itemsSynced += $this->syncHeartRateZones();
 
                 $this->report($onProgress, 'Backfilling all activities');
-                $itemsSynced += $this->syncAllActivities($onProgress);
+                $itemsSynced += $this->syncAllActivities($onProgress, $syncRun, $itemsSynced);
 
-                $syncRun->update([
+                if (! $this->updateActiveRun($syncRun, [
                     'initial_setup_completed' => true,
                     'items_synced' => $itemsSynced,
-                ]);
+                ])) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
+            }
+
+            if ($queueEnrichment) {
+                if (! $this->isRunStillActive($syncRun)) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
+
+                $this->queueMissingActivityEnrichments($effectiveUntilDate);
             }
 
             $todayStr = $this->today()->format('Y-m-d');
@@ -273,6 +307,14 @@ class GarminSyncService
                 && $windowEnd->greaterThanOrEqualTo($earliestDate)
                 && $consecutiveEmptyWindows < self::MAX_CONSECUTIVE_EMPTY_WINDOWS
             ) {
+                if (! $this->isRunStillActive($syncRun)) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
+
                 $windowStart = $windowEnd->subDays(self::BACKFILL_WINDOW_DAYS - 1);
 
                 if ($windowStart->lessThan($earliestDate)) {
@@ -322,10 +364,16 @@ class GarminSyncService
 
                 $nextCursor = $windowStart->subDay();
 
-                $syncRun->update([
+                if (! $this->updateActiveRun($syncRun, [
                     'cursor_date' => $nextCursor->format('Y-m-d'),
                     'items_synced' => $itemsSynced,
-                ]);
+                ])) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
 
                 $windowEnd = $nextCursor;
                 $windowsProcessed++;
@@ -335,7 +383,7 @@ class GarminSyncService
                 || $consecutiveEmptyWindows >= self::MAX_CONSECUTIVE_EMPTY_WINDOWS;
 
             if ($completed) {
-                $syncRun->update([
+                $this->updateActiveRun($syncRun, [
                     'status' => 'completed',
                     'finished_at' => CarbonImmutable::now(),
                     'cursor_date' => null,
@@ -349,7 +397,7 @@ class GarminSyncService
                 'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
             ];
         } catch (Throwable $exception) {
-            $syncRun->update([
+            $this->updateActiveRun($syncRun, [
                 'status' => 'failed',
                 'finished_at' => CarbonImmutable::now(),
                 'items_synced' => $itemsSynced,
@@ -1051,7 +1099,7 @@ class GarminSyncService
      *
      * @param  array<string, mixed>  $raw
      */
-    public function upsertActivity(array $raw): ?Activity
+    public function upsertActivity(array $raw, bool $dispatchEnrichments = true): ?Activity
     {
         $garminActivityId = $this->asInt($raw['activityId'] ?? null);
 
@@ -1217,7 +1265,17 @@ class GarminSyncService
         $this->gearService->autoAssignDefaultGear($activity);
 
         if (
-            $existing === null
+            $dispatchEnrichments
+            && $existing === null
+            && ! $activity->is_manual
+            && (bool) config('services.garmin.auto_sync_streams', true)
+        ) {
+            SyncActivityStreamJob::dispatch($activity->id);
+        }
+
+        if (
+            $dispatchEnrichments
+            && $existing === null
             && ! $activity->is_indoor
             && $activity->start_lat !== null
             && $activity->start_lng !== null
@@ -1300,12 +1358,19 @@ class GarminSyncService
     /**
      * @param  (callable(string): void)|null  $onProgress
      */
-    private function syncAllActivities(?callable $onProgress = null): int
-    {
+    private function syncAllActivities(
+        ?callable $onProgress = null,
+        ?SyncRun $syncRun = null,
+        int $baseItemsSynced = 0,
+    ): int {
         $synced = 0;
         $offset = 0;
 
         while (true) {
+            if ($syncRun !== null && ! $this->isRunStillActive($syncRun)) {
+                break;
+            }
+
             $batch = $this->callOptional(
                 fn (): ?array => $this->client->searchActivities([
                     'start' => $offset,
@@ -1324,7 +1389,7 @@ class GarminSyncService
                     continue;
                 }
 
-                if ($this->upsertActivity($raw) !== null) {
+                if ($this->upsertActivity($raw, dispatchEnrichments: false) !== null) {
                     $synced++;
                 }
             }
@@ -1334,12 +1399,152 @@ class GarminSyncService
 
             $this->report($onProgress, "Synced {$synced} activities so far");
 
+            if ($syncRun !== null && ! $this->updateActiveRun($syncRun, [
+                'items_synced' => $baseItemsSynced + $synced,
+            ])) {
+                break;
+            }
+
             if ($batchCount < self::BACKFILL_ACTIVITY_PAGE_SIZE) {
                 break;
             }
         }
 
         return $synced;
+    }
+
+    /**
+     * Update a SyncRun only while it is still running or queued (not superseded).
+     *
+     * @param  array<string, mixed>  $attributes
+     */
+    private function updateActiveRun(SyncRun $syncRun, array $attributes): bool
+    {
+        $now = CarbonImmutable::now();
+
+        $updated = SyncRun::query()
+            ->whereKey($syncRun->id)
+            ->whereIn('status', ['running', 'queued'])
+            ->update([
+                ...$attributes,
+                'updated_at' => $now,
+            ]);
+
+        if ($updated > 0) {
+            $syncRun->forceFill([
+                ...$attributes,
+                'updated_at' => $now,
+            ]);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private function isRunStillActive(SyncRun $syncRun): bool
+    {
+        return SyncRun::query()
+            ->whereKey($syncRun->id)
+            ->whereIn('status', ['running', 'queued'])
+            ->exists();
+    }
+
+    /**
+     * Queue missing FIT stream and historical weather enrichment jobs for existing activities in range.
+     */
+    private function queueMissingActivityEnrichments(?string $untilDate): void
+    {
+        $cutoffLocal = $untilDate !== null && trim($untilDate) !== ''
+            ? trim($untilDate).' 00:00:00'
+            : null;
+
+        if ((bool) config('services.garmin.auto_sync_streams', true)) {
+            $streamQuery = Activity::query()
+                ->where('is_manual', false)
+                ->awaitingStreams()
+                ->orderByDesc('started_at_local')
+                ->orderByDesc('id');
+
+            if ($cutoffLocal !== null) {
+                $streamQuery->where('started_at_local', '>=', $cutoffLocal);
+            }
+
+            /** @var list<int> $streamIds */
+            $streamIds = array_values(array_map('intval', $streamQuery->pluck('id')->all()));
+
+            if ($streamIds !== []) {
+                DB::transaction(function () use ($streamIds): void {
+                    foreach ($streamIds as $activityId) {
+                        SyncActivityStreamJob::dispatch($activityId);
+                    }
+                });
+            }
+        }
+
+        if (
+            (bool) config('services.open_meteo.enabled', true)
+            && (bool) config('services.open_meteo.auto_sync', true)
+        ) {
+            $weatherQuery = Activity::query()
+                ->where('is_indoor', false)
+                ->where(function (Builder $coordQuery): void {
+                    $coordQuery
+                        ->where(function (Builder $startCoords): void {
+                            $startCoords
+                                ->whereNotNull('start_lat')
+                                ->whereNotNull('start_lng');
+                        })
+                        ->orWhereExists(function (QueryBuilder $streamSub): void {
+                            $streamSub
+                                ->selectRaw('1')
+                                ->from('activity_streams')
+                                ->whereColumn('activity_streams.activity_id', 'activities.id');
+                        });
+                })
+                ->where(function (Builder $missingOrUpgradeQuery): void {
+                    $missingOrUpgradeQuery
+                        ->whereNotExists(function (QueryBuilder $weatherSub): void {
+                            $weatherSub
+                                ->selectRaw('1')
+                                ->from('activity_weathers')
+                                ->whereColumn('activity_weathers.activity_id', 'activities.id');
+                        })
+                        ->orWhere(function (Builder $upgradeQuery): void {
+                            $upgradeQuery
+                                ->whereExists(function (QueryBuilder $weatherSub): void {
+                                    $weatherSub
+                                        ->selectRaw('1')
+                                        ->from('activity_weathers')
+                                        ->whereColumn('activity_weathers.activity_id', 'activities.id')
+                                        ->where('activity_weathers.sampling_mode', 'start_point');
+                                })
+                                ->whereExists(function (QueryBuilder $streamSub): void {
+                                    $streamSub
+                                        ->selectRaw('1')
+                                        ->from('activity_streams')
+                                        ->whereColumn('activity_streams.activity_id', 'activities.id');
+                                });
+                        });
+                })
+                ->orderByDesc('started_at_local')
+                ->orderByDesc('id');
+
+            if ($cutoffLocal !== null) {
+                $weatherQuery->where('started_at_local', '>=', $cutoffLocal);
+            }
+
+            /** @var list<int> $weatherIds */
+            $weatherIds = array_values(array_map('intval', $weatherQuery->pluck('id')->all()));
+
+            if ($weatherIds !== []) {
+                DB::transaction(function () use ($weatherIds): void {
+                    foreach ($weatherIds as $activityId) {
+                        SyncActivityWeatherJob::dispatch($activityId);
+                    }
+                });
+            }
+        }
     }
 
     /**

@@ -85,7 +85,7 @@ class WeatherSyncCommand extends Command
             }
 
             $count = count($activityIds);
-            $this->components->info("Dispatched {$count} weather sync job(s) to the queue.");
+            $this->components->info("Requested weather sync for {$count} activity(ies) on the weather queue.");
 
             return self::SUCCESS;
         }

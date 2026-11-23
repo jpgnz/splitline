@@ -5,14 +5,19 @@ namespace App\Jobs;
 use App\Models\Activity;
 use App\Services\Weather\ActivityWeatherSyncService;
 use App\Services\Weather\OpenMeteoException;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 
-class SyncActivityWeatherJob implements ShouldQueue
+class SyncActivityWeatherJob implements ShouldBeUnique, ShouldQueue
 {
     use Queueable;
 
+    public const string QUEUE = 'weather';
+
     public int $tries = 5;
+
+    public int $uniqueFor = 14400;
 
     /**
      * @var list<int>
@@ -23,7 +28,12 @@ class SyncActivityWeatherJob implements ShouldQueue
         public readonly int $activityId,
         public readonly bool $force = false,
     ) {
-        $this->onQueue('weather');
+        $this->onQueue(self::QUEUE);
+    }
+
+    public function uniqueId(): string
+    {
+        return "{$this->activityId}:".($this->force ? '1' : '0');
     }
 
     /**
