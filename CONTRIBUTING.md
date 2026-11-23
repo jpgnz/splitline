@@ -2,10 +2,13 @@
 
 ## Prerequisites
 
-- **PHP 8.5+** with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, `intl`, `bcmath`, and `pcntl`
+- **PHP 8.5+** with `pdo_sqlite`, `zip`, `curl`, `openssl`, `mbstring`, and `pcntl`
 - **Composer 2**
 - **Node.js 26+** and **npm**
 - **SQLite 3**
+
+> [!NOTE]
+> The production Docker image deliberately ships without the `intl` and `bcmath` extensions, and CI disables them to match. Laravel features that depend on them, such as the `Number` helpers (`Number::format()`, `Number::currency()`, `Number::percentage()`, etc.), will fail in production. If you need them, add the extensions back in `deploy/docker/Dockerfile` and in the `extensions:` lists in `.github/workflows/tests.yml` and `.github/workflows/docker-publish.yml`.
 
 ## Local Setup
 
@@ -17,6 +20,16 @@ composer dev
 ```
 
 `composer dev` starts the Laravel HTTP server, queue worker, Vite+ dev server, and Pail logs. To sync live data locally, set `GARMIN_KEY` and `TIMEZONE` in `.env` and use the Artisan commands in [README.md](README.md#artisan-commands).
+
+### AI Tooling (Optional)
+
+Splitline includes [Laravel Boost](https://laravel.com/docs/boost) as a dev dependency. If you use an AI coding agent (Claude Code, Cursor, OpenCode, Codex, etc.), run the interactive installer after `composer setup` to generate local MCP config, guidelines, and skills for your agent:
+
+```bash
+php artisan boost:install
+```
+
+Generated agent files (`boost.json`, `AGENTS.md`, `CLAUDE.md`, `.mcp.json`, and agent folders) are gitignored so each contributor can configure their preferred tooling locally.
 
 ## Code Quality & Testing
 

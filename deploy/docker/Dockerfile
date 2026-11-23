@@ -64,7 +64,7 @@ RUN SKIP_WAYFINDER=true npm run build
 # ------------------------------------------------------------------------------
 # Stage 3: Final production runtime (Nginx + PHP-FPM + s6 queue & scheduler)
 # ------------------------------------------------------------------------------
-FROM serversideup/php:8.5-fpm-nginx AS runtime
+FROM serversideup/php:8.5-fpm-nginx-alpine AS runtime
 
 LABEL org.opencontainers.image.title="Splitline" \
       org.opencontainers.image.description="Local-first, self-hosted personal endurance and health telemetry platform." \
@@ -73,10 +73,11 @@ LABEL org.opencontainers.image.title="Splitline" \
 
 USER root
 
-RUN install-php-extensions zip intl bcmath pcntl pdo_sqlite \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends sqlite3 \
-    && rm -rf /var/lib/apt/lists/*
+# intl and bcmath are intentionally omitted to keep the image small. Laravel's
+# Number helpers (Number::format, currency, percentage, spell, ordinal, ...) need
+# intl. Re-add them here, in both CI workflows and in CONTRIBUTING.md if needed.
+RUN install-php-extensions zip pcntl pdo_sqlite \
+    && apk add --no-cache sqlite
 
 WORKDIR /var/www/html
 

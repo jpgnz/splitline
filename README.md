@@ -71,6 +71,21 @@ docker compose up -d
 
 Migrations run automatically on startup. Persistent data is stored in `splitline_data` (`/data`) and `splitline_fits` (`/var/www/html/storage/app/private`).
 
+### Upgrading from v0.1.x (breaking)
+
+> [!WARNING]
+> Starting with v0.2.0 the image is built on Alpine instead of Debian. The container user's ID changed from `33` to `82`, so volumes created by v0.1.x **cannot be reused**. A plain `docker compose pull && docker compose up -d` will fail on startup with a "not writable" error.
+
+To upgrade, recreate your Docker setup from scratch and re-import your data:
+
+```bash
+docker compose down -v
+docker compose pull
+docker compose up -d
+```
+
+`down -v` permanently deletes the `splitline_data` and `splitline_fits` volumes, including your auto-generated `APP_KEY`. After starting the new container, run the initial Garmin backfill again (see [Artisan Commands](#artisan-commands)). Anything entered manually in Splitline (goals, weight goals, gear and gear assignments, and settings) is not stored in Garmin and must be re-entered.
+
 ### Live SQLite backup
 
 SQLite runs in WAL mode, so use `.backup` instead of copying the database file directly while running:
