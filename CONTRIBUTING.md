@@ -18,6 +18,16 @@ composer dev
 
 `composer dev` starts the Laravel HTTP server, queue worker, Vite+ dev server, and Pail logs. To sync live data locally, set `GARMIN_KEY` and `TIMEZONE` in `.env` and use the Artisan commands in [README.md](README.md#artisan-commands).
 
+### AI Tooling (Optional)
+
+Splitline includes [Laravel Boost](https://laravel.com/docs/boost) as a dev dependency. If you use an AI coding agent (Claude Code, Cursor, OpenCode, Codex, etc.), run the interactive installer after `composer setup` to generate local MCP config, guidelines, and skills for your agent:
+
+```bash
+php artisan boost:install
+```
+
+Generated agent files (`boost.json`, `AGENTS.md`, `CLAUDE.md`, `.mcp.json`, and agent folders) are gitignored so each contributor can configure their preferred tooling locally.
+
 ## Code Quality & Testing
 
 Run the full CI suite before opening a pull request:

@@ -62,7 +62,7 @@
             "Composer\\Config::disableProcessTimeout",
             "composer upgrade",
             "npm upgrade",
-            "@php artisan boost:update --discover --ansi",
+            "@php -r \"if (file_exists('boost.json')) { passthru(escapeshellarg(PHP_BINARY).' artisan boost:update --discover --ansi', \\$code); exit(\\$code); }\"",
             "composer outdated --direct",
             "npm outdated || true"
         ],
@@ -93,7 +93,7 @@
         ],
         "post-update-cmd": [
             "@php artisan vendor:publish --tag=laravel-assets --ansi --force",
-            "@php artisan boost:update --ansi"
+            "@php -r \"if (file_exists('boost.json')) { passthru(escapeshellarg(PHP_BINARY).' artisan boost:update --ansi', \\$code); exit(\\$code); }\""
         ],
         "post-root-package-install": [
             "@php -r \"file_exists('.env') || copy('.env.example', '.env');\""
