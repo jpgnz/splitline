@@ -16,15 +16,13 @@ use Illuminate\Http\Request;
 
 class SyncController extends Controller
 {
-    private const int CONCURRENT_SYNC_WINDOW_MINUTES = 10;
-
     public function store(Request $request): RedirectResponse|JsonResponse
     {
         if (! $this->isProviderConfigured()) {
             return $this->unconfiguredResponse($request);
         }
 
-        $runningRun = $this->findActiveSyncRun();
+        $runningRun = SyncRun::findActive();
 
         if ($runningRun !== null) {
             return $this->alreadyRunningResponse($request, $runningRun);
@@ -58,7 +56,7 @@ class SyncController extends Controller
             return $this->unconfiguredResponse($request);
         }
 
-        $runningRun = $this->findActiveSyncRun();
+        $runningRun = SyncRun::findActive();
 
         if ($runningRun !== null) {
             return $this->alreadyRunningResponse($request, $runningRun);
@@ -75,6 +73,7 @@ class SyncController extends Controller
             '3y' => $today->subYears(3)->format('Y-m-d'),
             default => null,
         };
+        $initialSetupCompleted = false;
 
         if ($range === 'resume') {
             $latestBackfill = SyncRun::query()
@@ -82,13 +81,10 @@ class SyncController extends Controller
                 ->orderByDesc('id')
                 ->first();
 
-            if (
-                $latestBackfill !== null
-                && in_array($latestBackfill->status, ['failed', 'running'], true)
-                && is_string($latestBackfill->cursor_date)
-                && $latestBackfill->cursor_date !== ''
-            ) {
-                $cursorDate = $latestBackfill->cursor_date;
+            if ($latestBackfill !== null && $latestBackfill->isResumableBackfill()) {
+                $cursorDate = (string) $latestBackfill->cursor_date;
+                $untilDate = $latestBackfill->until_date;
+                $initialSetupCompleted = $latestBackfill->initial_setup_completed;
             }
         }
 
@@ -97,12 +93,15 @@ class SyncController extends Controller
             'status' => 'running',
             'started_at' => CarbonImmutable::now(),
             'cursor_date' => $cursorDate,
+            'until_date' => $untilDate,
+            'initial_setup_completed' => $initialSetupCompleted,
             'items_synced' => 0,
         ]);
 
         SyncGarminBackfillJob::dispatch(
             syncRunId: $syncRun->id,
             untilDate: $untilDate,
+            includeInitialSetup: ! $initialSetupCompleted,
         );
 
         $syncRun->refresh();
@@ -120,30 +119,18 @@ class SyncController extends Controller
         return back()->with('syncStatus', $message);
     }
 
-    public function status(): JsonResponse
+    public function status(Request $request): JsonResponse
     {
-        $latestRun = SyncRun::query()
-            ->latest('started_at')
-            ->latest('id')
-            ->first();
+        $runId = $request->query('run_id');
+        $targetRun = null;
 
-        return response()->json($this->buildStatusPayload($latestRun));
-    }
+        if (is_numeric($runId) && (int) $runId > 0) {
+            $targetRun = SyncRun::query()->find((int) $runId);
+        }
 
-    private function findActiveSyncRun(): ?SyncRun
-    {
-        $cutoff = CarbonImmutable::now()->subMinutes(self::CONCURRENT_SYNC_WINDOW_MINUTES);
+        $targetRun ??= SyncRun::findLatestForStatus();
 
-        return SyncRun::query()
-            ->whereIn('status', ['running', 'queued'])
-            ->where(function ($query) use ($cutoff): void {
-                $query
-                    ->where('updated_at', '>=', $cutoff)
-                    ->orWhere('started_at', '>=', $cutoff);
-            })
-            ->latest('started_at')
-            ->latest('id')
-            ->first();
+        return response()->json($this->buildStatusPayload($targetRun));
     }
 
     private function unconfiguredResponse(Request $request): RedirectResponse|JsonResponse
@@ -151,14 +138,9 @@ class SyncController extends Controller
         $message = 'Garmin API key is not configured. Set GARMIN_KEY in your environment.';
 
         if ($request->expectsJson()) {
-            $latestRun = SyncRun::query()
-                ->latest('started_at')
-                ->latest('id')
-                ->first();
-
             return response()->json([
                 'message' => $message,
-                ...$this->buildStatusPayload($latestRun),
+                ...$this->buildStatusPayload(SyncRun::findLatestForStatus()),
             ], 422);
         }
 
@@ -187,11 +169,13 @@ class SyncController extends Controller
 
     /**
      * @return array{
+     *     id: ?int,
      *     status: string,
      *     type: ?string,
      *     started_at: ?string,
      *     finished_at: ?string,
      *     cursor_date: ?string,
+     *     until_date: ?string,
      *     items_synced: int,
      *     error_message: ?string,
      *     last_synced_at: ?string,
@@ -210,11 +194,13 @@ class SyncController extends Controller
                 ->value('finished_at');
 
         return [
-            'status' => $latestRun !== null ? (string) $latestRun->status : 'idle',
+            'id' => $latestRun?->id,
+            'status' => $latestRun !== null ? $latestRun->effectiveStatus() : 'idle',
             'type' => $latestRun?->type !== null ? (string) $latestRun->type : null,
             'started_at' => $this->formatTimestamp($latestRun?->started_at),
             'finished_at' => $this->formatTimestamp($latestRun?->finished_at),
             'cursor_date' => $latestRun?->cursor_date !== null ? (string) $latestRun->cursor_date : null,
+            'until_date' => $latestRun?->until_date !== null ? (string) $latestRun->until_date : null,
             'items_synced' => $latestRun !== null ? (int) $latestRun->items_synced : 0,
             'error_message' => $latestRun?->error_message !== null ? (string) $latestRun->error_message : null,
             'last_synced_at' => $this->formatTimestamp($lastCompletedAt),

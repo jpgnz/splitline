@@ -66,6 +66,7 @@ it('exposes resumable backfill metadata on settings when the latest backfill fai
         'started_at' => CarbonImmutable::now()->subHour(),
         'finished_at' => CarbonImmutable::now()->subMinutes(50),
         'cursor_date' => '2025-03-10',
+        'until_date' => '2025-01-01',
         'error_message' => 'Temporary Garmin API outage',
     ]);
 
@@ -75,8 +76,34 @@ it('exposes resumable backfill metadata on settings when the latest backfill fai
             ->component('settings/Index')
             ->where('backfill.can_resume', true)
             ->where('backfill.resume_cursor_date', '2025-03-10')
+            ->where('backfill.resume_until_date', '2025-01-01')
             ->where('backfill.last_error', 'Temporary Garmin API outage')
             ->where('backfill.last_completed_at', fn ($value): bool => is_string($value) && $value !== ''),
+        );
+});
+
+it('reports a stale running backfill as interrupted in shared sync state so Resume is immediately visible', function () {
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00'));
+
+    $staleRun = SyncRun::factory()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::now()->subMinutes(30),
+        'finished_at' => null,
+        'cursor_date' => '2025-08-01',
+        'until_date' => '2025-01-01',
+    ]);
+    $staleRun->forceFill(['updated_at' => CarbonImmutable::now()->subMinutes(15)])->save();
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('settings/Index')
+            ->where('sync.id', $staleRun->id)
+            ->where('sync.status', 'interrupted')
+            ->where('backfill.can_resume', true)
+            ->where('backfill.resume_cursor_date', '2025-08-01')
+            ->where('backfill.resume_until_date', '2025-01-01'),
         );
 });
 

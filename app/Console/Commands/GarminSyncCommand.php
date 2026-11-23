@@ -2,6 +2,7 @@
 
 namespace App\Console\Commands;
 
+use App\Models\SyncRun;
 use App\Services\Garmin\GarminSyncService;
 use Illuminate\Console\Command;
 use Throwable;
@@ -57,6 +58,14 @@ class GarminSyncCommand extends Command
             $this->components->error('The --days option must be a positive integer.');
 
             return self::FAILURE;
+        }
+
+        $activeRun = SyncRun::findActive();
+
+        if ($activeRun !== null) {
+            $this->components->warn("Skipping sync: a Garmin {$activeRun->type} sync (run #{$activeRun->id}) is already in progress.");
+
+            return self::SUCCESS;
         }
 
         $startedAt = microtime(true);

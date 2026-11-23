@@ -23,7 +23,7 @@ class SyncGarminBackfillJob implements ShouldQueue
         public readonly bool $includeInitialSetup = true,
         public readonly int $consecutiveEmptyWindows = 0,
         public readonly int $consecutiveEmptyFitnessAgeWindows = 0,
-        public readonly int $windowsPerChunk = 10,
+        public readonly int $windowsPerChunk = 6,
     ) {}
 
     /**
@@ -37,11 +37,14 @@ class SyncGarminBackfillJob implements ShouldQueue
             return;
         }
 
+        $effectiveUntilDate = $this->untilDate ?? $syncRun->until_date;
+        $shouldRunInitialSetup = $this->includeInitialSetup && ! $syncRun->initial_setup_completed;
+
         $result = $syncService->syncBackfillChunk(
             syncRun: $syncRun,
             maxWindows: $this->windowsPerChunk,
-            untilDate: $this->untilDate,
-            includeInitialSetup: $this->includeInitialSetup,
+            untilDate: $effectiveUntilDate,
+            includeInitialSetup: $shouldRunInitialSetup,
             consecutiveEmptyWindows: $this->consecutiveEmptyWindows,
             consecutiveEmptyFitnessAgeWindows: $this->consecutiveEmptyFitnessAgeWindows,
         );
@@ -49,7 +52,7 @@ class SyncGarminBackfillJob implements ShouldQueue
         if (! $result['completed']) {
             self::dispatch(
                 syncRunId: $syncRun->id,
-                untilDate: $this->untilDate,
+                untilDate: $effectiveUntilDate,
                 includeInitialSetup: false,
                 consecutiveEmptyWindows: $result['consecutiveEmptyWindows'],
                 consecutiveEmptyFitnessAgeWindows: $result['consecutiveEmptyFitnessAgeWindows'],
