@@ -1614,7 +1614,8 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
                             <p class="text-xs text-zinc-500 dark:text-zinc-400">
                                 Re-fetch historical health metrics (including
                                 weekly Fitness Age, VO2 Max, sleep, HRV, and
-                                weight) in resumable background chunks.
+                                weight) in resumable background chunks, and
+                                queue any missing FIT streams and weather.
                             </p>
                         </div>
 
