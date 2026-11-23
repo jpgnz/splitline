@@ -194,7 +194,7 @@ class GarminSyncService
 
         $initialSetupCompleted = $resumable !== null && $resumable->initial_setup_completed;
 
-        SyncRun::supersedeStaleBackfills();
+        SyncRun::supersedePendingBackfills();
 
         $syncRun = SyncRun::query()->create([
             'type' => 'backfill',
@@ -212,6 +212,7 @@ class GarminSyncService
             untilDate: $effectiveUntilDate,
             includeInitialSetup: ! $initialSetupCompleted,
             onProgress: $onProgress,
+            queueEnrichment: true,
         );
 
         return $syncRun->refresh();
@@ -235,6 +236,7 @@ class GarminSyncService
         int $consecutiveEmptyWindows = 0,
         int $consecutiveEmptyFitnessAgeWindows = 0,
         ?callable $onProgress = null,
+        bool $queueEnrichment = true,
     ): array {
         $itemsSynced = (int) $syncRun->items_synced;
         $windowLimit = max(1, $maxWindows);
@@ -267,16 +269,6 @@ class GarminSyncService
                 $this->report($onProgress, 'Backfilling all activities');
                 $itemsSynced += $this->syncAllActivities($onProgress, $syncRun, $itemsSynced);
 
-                if (! $this->isRunStillActive($syncRun)) {
-                    return [
-                        'completed' => true,
-                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
-                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
-                    ];
-                }
-
-                $this->queueMissingActivityEnrichments($effectiveUntilDate);
-
                 if (! $this->updateActiveRun($syncRun, [
                     'initial_setup_completed' => true,
                     'items_synced' => $itemsSynced,
@@ -287,6 +279,18 @@ class GarminSyncService
                         'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
                     ];
                 }
+            }
+
+            if ($queueEnrichment) {
+                if (! $this->isRunStillActive($syncRun)) {
+                    return [
+                        'completed' => true,
+                        'consecutiveEmptyWindows' => $consecutiveEmptyWindows,
+                        'consecutiveEmptyFitnessAgeWindows' => $consecutiveEmptyFitnessAgeWindows,
+                    ];
+                }
+
+                $this->queueMissingActivityEnrichments($effectiveUntilDate);
             }
 
             $todayStr = $this->today()->format('Y-m-d');
@@ -1095,7 +1099,7 @@ class GarminSyncService
      *
      * @param  array<string, mixed>  $raw
      */
-    public function upsertActivity(array $raw): ?Activity
+    public function upsertActivity(array $raw, bool $dispatchEnrichments = true): ?Activity
     {
         $garminActivityId = $this->asInt($raw['activityId'] ?? null);
 
@@ -1261,7 +1265,8 @@ class GarminSyncService
         $this->gearService->autoAssignDefaultGear($activity);
 
         if (
-            $existing === null
+            $dispatchEnrichments
+            && $existing === null
             && ! $activity->is_manual
             && (bool) config('services.garmin.auto_sync_streams', true)
         ) {
@@ -1269,7 +1274,8 @@ class GarminSyncService
         }
 
         if (
-            $existing === null
+            $dispatchEnrichments
+            && $existing === null
             && ! $activity->is_indoor
             && $activity->start_lat !== null
             && $activity->start_lng !== null
@@ -1383,7 +1389,7 @@ class GarminSyncService
                     continue;
                 }
 
-                if ($this->upsertActivity($raw) !== null) {
+                if ($this->upsertActivity($raw, dispatchEnrichments: false) !== null) {
                     $synced++;
                 }
             }
@@ -1456,8 +1462,7 @@ class GarminSyncService
         if ((bool) config('services.garmin.auto_sync_streams', true)) {
             $streamQuery = Activity::query()
                 ->where('is_manual', false)
-                ->whereNull('streams_synced_at')
-                ->whereNull('streams_unavailable_at')
+                ->awaitingStreams()
                 ->orderByDesc('started_at_local')
                 ->orderByDesc('id');
 

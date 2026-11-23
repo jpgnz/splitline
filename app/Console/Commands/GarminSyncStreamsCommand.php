@@ -134,7 +134,11 @@ class GarminSyncStreamsCommand extends Command
                         $usedCache ? 'synced (local)' : 'synced',
                     );
                 } catch (Throwable $exception) {
-                    if ($exception instanceof GarminApiException && $exception->isArchiveUnavailable()) {
+                    if (
+                        $exception instanceof GarminApiException
+                        && $exception->isArchiveUnavailable()
+                        && $activity->started_at_utc->lessThanOrEqualTo(CarbonImmutable::now('UTC')->subDay())
+                    ) {
                         $activity->update([
                             'streams_unavailable_at' => CarbonImmutable::now(),
                         ]);
@@ -207,9 +211,7 @@ class GarminSyncStreamsCommand extends Command
             ->where('is_manual', false);
 
         if (! $force) {
-            $query
-                ->whereNull('streams_synced_at')
-                ->whereNull('streams_unavailable_at');
+            $query->awaitingStreams();
         }
 
         $query

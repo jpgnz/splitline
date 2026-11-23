@@ -423,4 +423,17 @@ class Activity extends Model
             ->where('sport_category', 'biking')
             ->whereRaw('COALESCE(discipline_override, sport_discipline) = ?', ['other']);
     }
+
+    /**
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingStreams(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->whereNull("{$table}.streams_synced_at")
+            ->whereNull("{$table}.streams_unavailable_at");
+    }
 }

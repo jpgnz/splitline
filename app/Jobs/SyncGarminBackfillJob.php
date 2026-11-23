@@ -24,6 +24,7 @@ class SyncGarminBackfillJob implements ShouldQueue
         public readonly int $consecutiveEmptyWindows = 0,
         public readonly int $consecutiveEmptyFitnessAgeWindows = 0,
         public readonly int $windowsPerChunk = 6,
+        public readonly bool $queueEnrichment = true,
     ) {}
 
     /**
@@ -47,6 +48,7 @@ class SyncGarminBackfillJob implements ShouldQueue
             includeInitialSetup: $shouldRunInitialSetup,
             consecutiveEmptyWindows: $this->consecutiveEmptyWindows,
             consecutiveEmptyFitnessAgeWindows: $this->consecutiveEmptyFitnessAgeWindows,
+            queueEnrichment: $this->queueEnrichment,
         );
 
         if (! $result['completed']) {
@@ -57,6 +59,7 @@ class SyncGarminBackfillJob implements ShouldQueue
                 consecutiveEmptyWindows: $result['consecutiveEmptyWindows'],
                 consecutiveEmptyFitnessAgeWindows: $result['consecutiveEmptyFitnessAgeWindows'],
                 windowsPerChunk: $this->windowsPerChunk,
+                queueEnrichment: false,
             );
         }
     }
@@ -66,16 +69,16 @@ class SyncGarminBackfillJob implements ShouldQueue
      */
     public function failed(?Throwable $exception): void
     {
-        $syncRun = SyncRun::query()->find($this->syncRunId);
+        $now = CarbonImmutable::now();
 
-        if ($syncRun === null || in_array($syncRun->status, ['completed', 'failed', 'interrupted'], true)) {
-            return;
-        }
-
-        $syncRun->update([
-            'status' => 'failed',
-            'finished_at' => CarbonImmutable::now(),
-            'error_message' => $exception?->getMessage() ?? 'Garmin backfill job failed.',
-        ]);
+        SyncRun::query()
+            ->whereKey($this->syncRunId)
+            ->whereIn('status', ['running', 'queued'])
+            ->update([
+                'status' => 'failed',
+                'finished_at' => $now,
+                'error_message' => $exception?->getMessage() ?? 'Garmin backfill job failed.',
+                'updated_at' => $now,
+            ]);
     }
 }

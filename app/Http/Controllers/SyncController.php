@@ -88,7 +88,7 @@ class SyncController extends Controller
             }
         }
 
-        SyncRun::supersedeStaleBackfills();
+        SyncRun::supersedePendingBackfills();
 
         $syncRun = SyncRun::query()->create([
             'type' => 'backfill',

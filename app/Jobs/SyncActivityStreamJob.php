@@ -58,9 +58,11 @@ class SyncActivityStreamJob implements ShouldBeUnique, ShouldQueue
             }
 
             if ($exception->isArchiveUnavailable()) {
-                $activity->update([
-                    'streams_unavailable_at' => CarbonImmutable::now(),
-                ]);
+                if ($activity->started_at_utc->lessThanOrEqualTo(CarbonImmutable::now('UTC')->subDay())) {
+                    $activity->update([
+                        'streams_unavailable_at' => CarbonImmutable::now(),
+                    ]);
+                }
 
                 return;
             }

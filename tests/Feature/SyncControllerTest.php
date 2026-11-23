@@ -542,6 +542,17 @@ it('dispatches auto-synced stream and weather jobs onto dedicated lower-priority
                     'duration' => 1800.0,
                     'manualActivity' => true,
                 ],
+                [
+                    'activityId' => 991003,
+                    'activityName' => 'Older Out-of-Range Run',
+                    'startTimeLocal' => '2026-08-01 07:00:00',
+                    'startTimeGMT' => '2026-07-31 19:00:00',
+                    'activityType' => ['typeKey' => 'running'],
+                    'distance' => 10000.0,
+                    'duration' => 2700.0,
+                    'startLatitude' => -36.8485,
+                    'startLongitude' => 174.7633,
+                ],
             ], 200);
         }
 
@@ -579,6 +590,7 @@ it('dispatches auto-synced stream and weather jobs onto dedicated lower-priority
         SyncGarminBackfillJob::class,
         fn (SyncGarminBackfillJob $next, ?string $queue): bool => $next->syncRunId === $syncRun->id
             && $next->includeInitialSetup === false
+            && $next->queueEnrichment === false
             && $queue === null,
     );
 });
@@ -688,7 +700,77 @@ it('stops an in-flight backfill chunk cleanly without overwriting interrupted st
     expect($syncRun->status)->toBe('interrupted')
         ->and($syncRun->finished_at)->not->toBeNull();
 
+    // Terminal failure callback on an already-interrupted run must not overwrite interrupted status
+    (new SyncGarminBackfillJob($syncRun->id))->failed(new RuntimeException('Late worker error'));
+    expect($syncRun->refresh()->status)->toBe('interrupted');
+
     Queue::assertNothingPushed();
+});
+
+it('queues missing enrichment on the first resumed chunk even when initial_setup_completed is already true', function () {
+    Queue::fake([SyncGarminBackfillJob::class, SyncActivityStreamJob::class, SyncActivityWeatherJob::class]);
+    Http::preventStrayRequests();
+    $this->travelTo(CarbonImmutable::parse('2026-11-21 15:00:00', 'Pacific/Auckland'));
+
+    config([
+        'services.garmin.key' => 'test-garmin-key',
+        'services.garmin.base_url' => 'https://personal.connectapi.garmin.com',
+        'services.garmin.auto_sync_streams' => true,
+        'services.open_meteo.enabled' => true,
+        'services.open_meteo.auto_sync' => true,
+        'app.display_timezone' => 'Pacific/Auckland',
+    ]);
+
+    $missing = Activity::factory()->create([
+        'garmin_activity_id' => 993001,
+        'is_indoor' => false,
+        'is_manual' => false,
+        'started_at_local' => CarbonImmutable::parse('2026-11-10 07:00:00'),
+        'start_lat' => -36.8485,
+        'start_lng' => 174.7633,
+        'streams_synced_at' => null,
+        'streams_unavailable_at' => null,
+    ]);
+
+    $header = rtrim(strtr(base64_encode('{"alg":"RS256","typ":"JWT"}'), '+/', '-_'), '=');
+    $payload = rtrim(strtr(base64_encode(json_encode(['exp' => CarbonImmutable::now()->addHours(24)->getTimestamp()], JSON_THROW_ON_ERROR)), '+/', '-_'), '=');
+    $jwt = "{$header}.{$payload}.sig";
+
+    Http::fake(function (Request $request) use ($jwt) {
+        if (str_contains($request->url(), '/personalapitoken-service/')) {
+            return Http::response($jwt, 200);
+        }
+
+        return Http::response([], 200);
+    });
+
+    $resumedRun = SyncRun::query()->create([
+        'type' => 'backfill',
+        'status' => 'running',
+        'started_at' => CarbonImmutable::now(),
+        'cursor_date' => '2026-11-01',
+        'until_date' => '2026-10-01',
+        'initial_setup_completed' => true,
+        'items_synced' => 0,
+    ]);
+
+    (new SyncGarminBackfillJob(
+        syncRunId: $resumedRun->id,
+        untilDate: '2026-10-01',
+        includeInitialSetup: false,
+        windowsPerChunk: 2,
+    ))->handle(app(GarminSyncService::class));
+
+    Queue::assertPushedOn(
+        'streams',
+        SyncActivityStreamJob::class,
+        fn (SyncActivityStreamJob $job): bool => $job->activityId === $missing->id,
+    );
+    Queue::assertPushedOn(
+        'weather',
+        SyncActivityWeatherJob::class,
+        fn (SyncActivityWeatherJob $job): bool => $job->activityId === $missing->id,
+    );
 });
 
 it('queues missing FIT streams and weather upgrades for existing activities in the backfill range', function () {
