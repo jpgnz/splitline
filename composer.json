@@ -19,12 +19,12 @@
         "inertiajs/inertia-laravel": "^3.0",
         "laravel/framework": "^13.17",
         "laravel/wayfinder": "^0.1.14",
-        "splitline/core": "@dev",
-        "splitline/laravel": "@dev",
-        "splitline/parsers": "@dev",
-        "splitline/provider-file-import": "@dev",
-        "splitline/provider-garmin-personal": "@dev",
-        "splitline/weather": "@dev"
+        "splitline/core": "^0.1",
+        "splitline/laravel": "^0.1",
+        "splitline/parsers": "^0.1",
+        "splitline/provider-file-import": "^0.1",
+        "splitline/provider-garmin-personal": "^0.1",
+        "splitline/weather": "^0.1"
     },
     "require-dev": {
         "fakerphp/faker": "^1.24",
@@ -123,14 +123,5 @@
         }
     },
     "minimum-stability": "stable",
-    "prefer-stable": true,
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../splitline-ingest/packages/*",
-            "options": {
-                "symlink": true
-            }
-        }
-    ]
+    "prefer-stable": true
 }

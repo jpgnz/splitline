@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "444e56da0d839ccb1df1473b0e4fda77",
+    "content-hash": "c220ee845dfeb3fbd1f703da15ba9fe8",
     "packages": [
         {
             "name": "brick/math",
@@ -3257,11 +3257,17 @@
         },
         {
             "name": "splitline/core",
-            "version": "dev-main",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/core.git",
+                "reference": "a82b47159fe29cd6f3a9c0e47397f8d04f1b0359"
+            },
             "dist": {
-                "type": "path",
-                "url": "../splitline-ingest/packages/core",
-                "reference": "81165eda92bca88d8d0ea1f7c9bc67357af52f20"
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/core/zipball/a82b47159fe29cd6f3a9c0e47397f8d04f1b0359",
+                "reference": "a82b47159fe29cd6f3a9c0e47397f8d04f1b0359",
+                "shasum": ""
             },
             "require": {
                 "nesbot/carbon": "^3.0",
@@ -3278,6 +3284,7 @@
                     "Splitline\\Core\\": "src/"
                 }
             },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -3287,18 +3294,21 @@
                 "issues": "https://github.com/splitline-php/ingest/issues",
                 "source": "https://github.com/splitline-php/ingest"
             },
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-25T07:57:09+00:00"
         },
         {
             "name": "splitline/laravel",
-            "version": "dev-main",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/laravel.git",
+                "reference": "3d004e7818214981b2f654347bc93627db8b111f"
+            },
             "dist": {
-                "type": "path",
-                "url": "../splitline-ingest/packages/laravel",
-                "reference": "c33c84efb217cb3687dbaf38f6597b38855d3f19"
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/laravel/zipball/3d004e7818214981b2f654347bc93627db8b111f",
+                "reference": "3d004e7818214981b2f654347bc93627db8b111f",
+                "shasum": ""
             },
             "require": {
                 "illuminate/contracts": "^13.0",
@@ -3309,13 +3319,13 @@
             },
             "type": "library",
             "extra": {
-                "branch-alias": {
-                    "dev-main": "0.1-dev"
-                },
                 "laravel": {
                     "providers": [
                         "Splitline\\Laravel\\SplitlineServiceProvider"
                     ]
+                },
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
                 }
             },
             "autoload": {
@@ -3323,6 +3333,7 @@
                     "Splitline\\Laravel\\": "src/"
                 }
             },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -3332,18 +3343,21 @@
                 "issues": "https://github.com/splitline-php/ingest/issues",
                 "source": "https://github.com/splitline-php/ingest"
             },
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-25T07:57:09+00:00"
         },
         {
             "name": "splitline/parsers",
-            "version": "dev-main",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/parsers.git",
+                "reference": "98eae4197c9faaa26053f0df8f4f883234728cda"
+            },
             "dist": {
-                "type": "path",
-                "url": "../splitline-ingest/packages/parsers",
-                "reference": "97dd926c6305d870579395aece6a0b6de5f9e066"
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/parsers/zipball/98eae4197c9faaa26053f0df8f4f883234728cda",
+                "reference": "98eae4197c9faaa26053f0df8f4f883234728cda",
+                "shasum": ""
             },
             "require": {
                 "ext-zip": "*",
@@ -3361,6 +3375,7 @@
                     "Splitline\\Parsers\\": "src/"
                 }
             },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -3370,18 +3385,21 @@
                 "issues": "https://github.com/splitline-php/ingest/issues",
                 "source": "https://github.com/splitline-php/ingest"
             },
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-25T07:57:09+00:00"
         },
         {
             "name": "splitline/provider-file-import",
-            "version": "dev-main",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/provider-file-import.git",
+                "reference": "e6bb23947f11b966227d38719e8d53eb78c183ab"
+            },
             "dist": {
-                "type": "path",
-                "url": "../splitline-ingest/packages/provider-file-import",
-                "reference": "4d3a23fb1a0eb64720eb8c44ba0901ed53af8961"
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/provider-file-import/zipball/e6bb23947f11b966227d38719e8d53eb78c183ab",
+                "reference": "e6bb23947f11b966227d38719e8d53eb78c183ab",
+                "shasum": ""
             },
             "require": {
                 "nesbot/carbon": "^3.0",
@@ -3400,6 +3418,7 @@
                     "Splitline\\ProviderFileImport\\": "src/"
                 }
             },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -3409,18 +3428,21 @@
                 "issues": "https://github.com/splitline-php/ingest/issues",
                 "source": "https://github.com/splitline-php/ingest"
             },
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-25T08:09:29+00:00"
         },
         {
             "name": "splitline/provider-garmin-personal",
-            "version": "dev-main",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/provider-garmin-personal.git",
+                "reference": "f7543eb02ca8d25c9f7f41b36ab4b432ef32ae35"
+            },
             "dist": {
-                "type": "path",
-                "url": "../splitline-ingest/packages/provider-garmin-personal",
-                "reference": "149ff67a00640a54f64f59b64851e8b9368a2977"
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/provider-garmin-personal/zipball/f7543eb02ca8d25c9f7f41b36ab4b432ef32ae35",
+                "reference": "f7543eb02ca8d25c9f7f41b36ab4b432ef32ae35",
+                "shasum": ""
             },
             "require": {
                 "nesbot/carbon": "^3.0",
@@ -3438,6 +3460,7 @@
                     "Splitline\\ProviderGarminPersonal\\": "src/"
                 }
             },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -3447,18 +3470,21 @@
                 "issues": "https://github.com/splitline-php/ingest/issues",
                 "source": "https://github.com/splitline-php/ingest"
             },
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-25T08:09:29+00:00"
         },
         {
             "name": "splitline/weather",
-            "version": "dev-main",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/weather.git",
+                "reference": "462ef3cc26dd6988f50398836bab253a332d5362"
+            },
             "dist": {
-                "type": "path",
-                "url": "../splitline-ingest/packages/weather",
-                "reference": "4ba70820275acfef12db8100048fe4436b2dc1bd"
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/weather/zipball/462ef3cc26dd6988f50398836bab253a332d5362",
+                "reference": "462ef3cc26dd6988f50398836bab253a332d5362",
+                "shasum": ""
             },
             "require": {
                 "nesbot/carbon": "^3.0",
@@ -3476,6 +3502,7 @@
                     "Splitline\\Weather\\": "src/"
                 }
             },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -3485,10 +3512,7 @@
                 "issues": "https://github.com/splitline-php/ingest/issues",
                 "source": "https://github.com/splitline-php/ingest"
             },
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "time": "2026-11-25T07:57:09+00:00"
         },
         {
             "name": "symfony/clock",
@@ -10630,14 +10654,7 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {
-        "splitline/core": 20,
-        "splitline/laravel": 20,
-        "splitline/parsers": 20,
-        "splitline/provider-file-import": 20,
-        "splitline/provider-garmin-personal": 20,
-        "splitline/weather": 20
-    },
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
