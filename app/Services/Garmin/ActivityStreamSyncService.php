@@ -2,33 +2,59 @@
 
 namespace App\Services\Garmin;
 
-use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\ActivityStream;
-use App\Models\ActivityWeather;
-use Carbon\CarbonImmutable;
+use App\Services\Ingestion\TelemetryPersistenceService;
+use Closure;
 use Illuminate\Support\Facades\Storage;
+use Splitline\Core\Data\ActivityStreamData;
+use Splitline\Core\Data\ProviderContext;
+use Splitline\Core\Exceptions\ArchiveUnavailableException;
+use Splitline\Parsers\Fit\FitParser;
+use Splitline\ProviderGarminPersonal\GarminPersonalProvider;
 
 class ActivityStreamSyncService
 {
     public const string ARCHIVE_DIRECTORY = 'garmin/fits';
 
     public function __construct(
-        private readonly GarminClient $client,
+        private readonly GarminPersonalProvider $provider,
         private readonly FitParser $parser,
+        private readonly TelemetryPersistenceService $persistence,
         private readonly BestEffortCalculator $bestEffortCalculator,
     ) {}
 
     /**
-     * Relative path on the local disk where an activity's raw Garmin FIT ZIP archive is cached.
+     * Relative path on the local disk where an activity's raw FIT or ZIP archive is cached.
      */
     public function archivePath(Activity $activity): string
     {
-        return self::ARCHIVE_DIRECTORY."/{$activity->garmin_activity_id}.zip";
+        $provider = $this->resolveProvider($activity);
+
+        if ($provider === GarminPersonalProvider::ID) {
+            $identifier = $activity->garmin_activity_id ?? $activity->external_id;
+
+            return self::ARCHIVE_DIRECTORY."/{$identifier}.zip";
+        }
+
+        $identifier = $activity->external_id ?? (string) $activity->id;
+        $zipPath = "{$provider}/fits/{$identifier}.zip";
+
+        if (Storage::disk('local')->exists($zipPath)) {
+            return $zipPath;
+        }
+
+        $fitPath = "{$provider}/fits/{$identifier}.fit";
+
+        if (Storage::disk('local')->exists($fitPath)) {
+            return $fitPath;
+        }
+
+        return $fitPath;
     }
 
     /**
-     * Determine whether a local FIT ZIP archive is already cached for the activity.
+     * Determine whether a local FIT archive is already cached for the activity.
      */
     public function hasLocalArchive(Activity $activity): bool
     {
@@ -37,130 +63,19 @@ class ActivityStreamSyncService
 
     /**
      * Download (or load cached), parse, and persist an activity's FIT telemetry stream and Best Efforts.
-     */
-    public function sync(Activity $activity, bool $forceDownload = false): ActivityStream
-    {
-        $zipBytes = $this->resolveArchiveBytes($activity, $forceDownload);
-        $parsed = $this->parser->parseZip($zipBytes);
-
-        $stream = ActivityStream::query()->updateOrCreate(
-            ['activity_id' => $activity->id],
-            [
-                'series' => $parsed['series'],
-                'polyline' => $parsed['polyline'],
-                'laps' => $parsed['laps'],
-                'km_splits' => $parsed['km_splits'],
-                'run_walk_segments' => $parsed['run_walk_segments'] !== [] ? $parsed['run_walk_segments'] : null,
-                'jumps' => $parsed['jumps'] !== [] ? $parsed['jumps'] : null,
-            ],
-        );
-
-        $this->bestEffortCalculator->syncForActivity($activity, $parsed['records']);
-
-        $activityUpdates = [
-            'streams_synced_at' => CarbonImmutable::now(),
-            'streams_unavailable_at' => null,
-        ];
-
-        $rawSummaryUpdates = $this->extractExtendedSummaryFromRaw($activity->raw_summary);
-
-        foreach ($rawSummaryUpdates as $column => $value) {
-            if ($value !== null) {
-                $activityUpdates[$column] = $value;
-            }
-        }
-
-        foreach ($parsed['session_summary'] as $column => $value) {
-            if ($value === null) {
-                continue;
-            }
-
-            if ($column === 'total_work' && $activity->total_work !== null) {
-                continue;
-            }
-
-            $activityUpdates[$column] = $value;
-        }
-
-        if ($parsed['polyline'] !== []) {
-            if ($activity->start_lat === null) {
-                $activityUpdates['start_lat'] = $parsed['polyline'][0][0];
-            }
-
-            if ($activity->start_lng === null) {
-                $activityUpdates['start_lng'] = $parsed['polyline'][0][1];
-            }
-        }
-
-        $activity->update($activityUpdates);
-
-        if (
-            ! $activity->is_indoor
-            && ($activity->start_lat !== null && $activity->start_lng !== null || $parsed['polyline'] !== [])
-            && (bool) config('services.open_meteo.enabled', true)
-            && (bool) config('services.open_meteo.auto_sync', true)
-        ) {
-            $existingSamplingMode = ActivityWeather::query()
-                ->where('activity_id', $activity->id)
-                ->value('sampling_mode');
-
-            if ($existingSamplingMode === null || $existingSamplingMode === 'start_point') {
-                SyncActivityWeatherJob::dispatch($activity->id, force: $existingSamplingMode === 'start_point');
-            }
-        }
-
-        return $stream;
-    }
-
-    /**
-     * Backfill extended summary columns already present in stored Garmin raw_summary JSON.
      *
-     * @param  array<int|string, mixed>|null  $raw
-     * @return array<string, mixed>
+     * @param  (callable(float, string): void)|null  $onRateLimitWait
      */
-    private function extractExtendedSummaryFromRaw(?array $raw): array
-    {
-        if (! is_array($raw) || $raw === []) {
-            return [];
-        }
+    public function sync(
+        Activity $activity,
+        bool $forceDownload = false,
+        ?callable $onRateLimitWait = null,
+    ): ActivityStream {
+        $bytes = $this->resolveArchiveBytes($activity, $forceDownload, $onRateLimitWait);
+        $stream = $this->parseArchiveBytes($bytes);
+        $extendedRawSummary = $this->provider->mapper()->extractExtendedSummaryFromRaw($activity->raw_summary);
 
-        $updates = [
-            'avg_grade_adjusted_speed' => is_numeric($raw['avgGradeAdjustedSpeed'] ?? null) ? (float) $raw['avgGradeAdjustedSpeed'] : null,
-            'bmr_calories' => is_numeric($raw['bmrCalories'] ?? null) ? (int) round((float) $raw['bmrCalories']) : null,
-            'sweat_loss_ml' => is_numeric($raw['waterEstimated'] ?? null) ? (int) round((float) $raw['waterEstimated']) : null,
-            'avg_vertical_oscillation' => is_numeric($raw['avgVerticalOscillation'] ?? null) ? (float) $raw['avgVerticalOscillation'] : null,
-            'avg_vertical_ratio' => is_numeric($raw['avgVerticalRatio'] ?? null) ? (float) $raw['avgVerticalRatio'] : null,
-            'avg_ground_contact_time' => is_numeric($raw['avgGroundContactTime'] ?? null) ? (float) $raw['avgGroundContactTime'] : null,
-            'aerobic_te_message' => is_string($raw['aerobicTrainingEffectMessage'] ?? null) ? $raw['aerobicTrainingEffectMessage'] : null,
-            'anaerobic_te_message' => is_string($raw['anaerobicTrainingEffectMessage'] ?? null) ? $raw['anaerobicTrainingEffectMessage'] : null,
-            'avg_respiration_rate' => is_numeric($raw['avgRespirationRate'] ?? null) ? (float) $raw['avgRespirationRate'] : null,
-            'min_respiration_rate' => is_numeric($raw['minRespirationRate'] ?? null) ? (float) $raw['minRespirationRate'] : null,
-            'max_respiration_rate' => is_numeric($raw['maxRespirationRate'] ?? null) ? (float) $raw['maxRespirationRate'] : null,
-            'min_temperature' => is_numeric($raw['minTemperature'] ?? null) ? (float) $raw['minTemperature'] : null,
-            'max_temperature' => is_numeric($raw['maxTemperature'] ?? null) ? (float) $raw['maxTemperature'] : null,
-            'moderate_intensity_minutes' => is_numeric($raw['moderateIntensityMinutes'] ?? null) ? (int) round((float) $raw['moderateIntensityMinutes']) : null,
-            'vigorous_intensity_minutes' => is_numeric($raw['vigorousIntensityMinutes'] ?? null) ? (int) round((float) $raw['vigorousIntensityMinutes']) : null,
-        ];
-
-        if (isset($raw['splitSummaries']) && is_array($raw['splitSummaries'])) {
-            foreach ($raw['splitSummaries'] as $split) {
-                if (! is_array($split) || ! is_string($split['splitType'] ?? null) || ! is_numeric($split['duration'] ?? null)) {
-                    continue;
-                }
-
-                $duration = round((float) $split['duration'], 2);
-
-                if ($split['splitType'] === 'RWD_RUN') {
-                    $updates['run_duration_seconds'] = $duration;
-                } elseif ($split['splitType'] === 'RWD_WALK') {
-                    $updates['walk_duration_seconds'] = $duration;
-                } elseif ($split['splitType'] === 'RWD_STAND') {
-                    $updates['idle_duration_seconds'] = $duration;
-                }
-            }
-        }
-
-        return $updates;
+        return $this->persistence->upsertStream($activity, $stream, $extendedRawSummary);
     }
 
     /**
@@ -172,12 +87,12 @@ class ActivityStreamSyncService
         $archivePath = $this->archivePath($activity);
 
         if ($disk->exists($archivePath)) {
-            $zipBytes = $disk->get($archivePath);
+            $bytes = $disk->get($archivePath);
 
-            if (is_string($zipBytes) && $zipBytes !== '') {
-                $parsed = $this->parser->parseZip($zipBytes);
+            if (is_string($bytes) && $bytes !== '') {
+                $stream = $this->parseArchiveBytes($bytes);
 
-                return $this->bestEffortCalculator->syncForActivity($activity, $parsed['records']);
+                return $this->bestEffortCalculator->syncForActivity($activity, $stream->records);
             }
         }
 
@@ -216,8 +131,14 @@ class ActivityStreamSyncService
         return $this->bestEffortCalculator->syncForActivity($activity, $records);
     }
 
-    private function resolveArchiveBytes(Activity $activity, bool $forceDownload): string
-    {
+    /**
+     * @param  (callable(float, string): void)|null  $onRateLimitWait
+     */
+    private function resolveArchiveBytes(
+        Activity $activity,
+        bool $forceDownload,
+        ?callable $onRateLimitWait = null,
+    ): string {
         $disk = Storage::disk('local');
         $archivePath = $this->archivePath($activity);
 
@@ -229,9 +150,65 @@ class ActivityStreamSyncService
             }
         }
 
-        $zipBytes = $this->client->downloadActivity($activity->garmin_activity_id);
-        $disk->put($archivePath, $zipBytes);
+        $provider = $this->resolveProvider($activity);
+        $externalId = $this->resolveExternalId($activity);
 
-        return $zipBytes;
+        if ($provider === GarminPersonalProvider::ID && $externalId !== null) {
+            $context = new ProviderContext(
+                scopeKey: 'default',
+                timezone: $this->timezone(),
+                credentials: [
+                    'api_key' => (string) config('services.garmin.key', ''),
+                ],
+                onRateLimitWait: $onRateLimitWait !== null ? Closure::fromCallable($onRateLimitWait) : null,
+            );
+
+            $archive = $this->provider->downloadActivityArchive($context, $externalId);
+            $bytes = $archive['bytes'];
+            $disk->put($archivePath, $bytes);
+
+            return $bytes;
+        }
+
+        throw new ArchiveUnavailableException(
+            message: "No local FIT archive is available for {$provider} activity #{$activity->id}.",
+            statusCode: 404,
+        );
+    }
+
+    private function parseArchiveBytes(string $bytes): ActivityStreamData
+    {
+        if (str_starts_with($bytes, "PK\x03\x04")) {
+            return $this->parser->parseZip($bytes);
+        }
+
+        return $this->parser->parseBinary($bytes);
+    }
+
+    private function resolveProvider(Activity $activity): string
+    {
+        return $activity->provider !== ''
+            ? $activity->provider
+            : GarminPersonalProvider::ID;
+    }
+
+    private function resolveExternalId(Activity $activity): ?string
+    {
+        if ($activity->external_id !== null && $activity->external_id !== '') {
+            return $activity->external_id;
+        }
+
+        if ($activity->garmin_activity_id !== null) {
+            return (string) $activity->garmin_activity_id;
+        }
+
+        return null;
+    }
+
+    private function timezone(): string
+    {
+        $timezone = config('app.display_timezone', 'UTC');
+
+        return is_string($timezone) && $timezone !== '' ? $timezone : 'UTC';
     }
 }

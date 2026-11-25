@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "49df1d97d1ffe401f43033b9145b2216",
+    "content-hash": "444e56da0d839ccb1df1473b0e4fda77",
     "packages": [
         {
             "name": "brick/math",
@@ -3254,6 +3254,241 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.10.0"
             },
             "time": "2026-11-14T23:23:20+00:00"
+        },
+        {
+            "name": "splitline/core",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../splitline-ingest/packages/core",
+                "reference": "81165eda92bca88d8d0ea1f7c9bc67357af52f20"
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Core\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Core telemetry contracts, immutable DTOs, rate limiting, and analytics math for Splitline.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "splitline/laravel",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../splitline-ingest/packages/laravel",
+                "reference": "c33c84efb217cb3687dbaf38f6597b38855d3f19"
+            },
+            "require": {
+                "illuminate/contracts": "^13.0",
+                "illuminate/http": "^13.0",
+                "illuminate/support": "^13.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                },
+                "laravel": {
+                    "providers": [
+                        "Splitline\\Laravel\\SplitlineServiceProvider"
+                    ]
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Laravel\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Laravel HTTP, Cache, Sleep, and ServiceProvider bridge for Splitline telemetry packages.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "splitline/parsers",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../splitline-ingest/packages/parsers",
+                "reference": "97dd926c6305d870579395aece6a0b6de5f9e066"
+            },
+            "require": {
+                "ext-zip": "*",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Parsers\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Pure PHP binary FIT file parser returning Splitline ActivityStreamData DTOs.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "splitline/provider-file-import",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../splitline-ingest/packages/provider-file-import",
+                "reference": "4d3a23fb1a0eb64720eb8c44ba0901ed53af8961"
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1",
+                "splitline/parsers": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\ProviderFileImport\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Standalone .fit and .zip file import provider for Splitline.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "splitline/provider-garmin-personal",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../splitline-ingest/packages/provider-garmin-personal",
+                "reference": "149ff67a00640a54f64f59b64851e8b9368a2977"
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\ProviderGarminPersonal\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Garmin Connect Personal API telemetry provider for Splitline (personal, non-commercial use only).",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        },
+        {
+            "name": "splitline/weather",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../splitline-ingest/packages/weather",
+                "reference": "4ba70820275acfef12db8100048fe4436b2dc1bd"
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Weather\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "description": "Route waypoint sampling, wind-vector math, and Open-Meteo weather enrichment for endurance activities.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
         },
         {
             "name": "symfony/clock",
@@ -10395,7 +10630,14 @@
     ],
     "aliases": [],
     "minimum-stability": "stable",
-    "stability-flags": {},
+    "stability-flags": {
+        "splitline/core": 20,
+        "splitline/laravel": 20,
+        "splitline/parsers": 20,
+        "splitline/provider-file-import": 20,
+        "splitline/provider-garmin-personal": 20,
+        "splitline/weather": 20
+    },
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {

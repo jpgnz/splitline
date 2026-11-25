@@ -305,6 +305,8 @@ class ActivityQueryService
         return [
             'activity' => [
                 'id' => $activity->id,
+                'provider' => $activity->provider,
+                'external_id' => $activity->external_id,
                 'garmin_activity_id' => $activity->garmin_activity_id,
                 'name' => $activity->name,
                 'activity_type_key' => $activity->activity_type_key,
@@ -670,7 +672,9 @@ class ActivityQueryService
     /**
      * @return array{
      *     id: int,
-     *     garmin_activity_id: int,
+     *     provider: string,
+     *     external_id: ?string,
+     *     garmin_activity_id: ?int,
      *     name: string,
      *     activity_type_key: string,
      *     sport_category: string,
@@ -704,6 +708,8 @@ class ActivityQueryService
     {
         return [
             'id' => $activity->id,
+            'provider' => $activity->provider,
+            'external_id' => $activity->external_id,
             'garmin_activity_id' => $activity->garmin_activity_id,
             'name' => $activity->name,
             'activity_type_key' => $activity->activity_type_key,

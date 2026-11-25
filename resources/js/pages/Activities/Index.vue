@@ -62,6 +62,9 @@ interface ActivitySummary {
 
 interface ActivityListItem {
     id: number;
+    provider: string;
+    external_id: string | null;
+    garmin_activity_id: number | null;
     name: string;
     activity_type_key: string;
     sport_category: string;

@@ -54,6 +54,7 @@ return [
         'historical_forecast_url' => env('OPEN_METEO_HISTORICAL_FORECAST_URL', 'https://historical-forecast-api.open-meteo.com/v1/forecast'),
         'archive_url' => env('OPEN_METEO_ARCHIVE_URL', 'https://archive-api.open-meteo.com/v1/archive'),
         'timeout' => (int) env('OPEN_METEO_TIMEOUT', 15),
+        'max_retries' => (int) env('OPEN_METEO_MAX_RETRIES', 2),
         'max_requests_per_minute' => (int) env('OPEN_METEO_RATE_LIMIT_PER_MINUTE', 50),
     ],
 

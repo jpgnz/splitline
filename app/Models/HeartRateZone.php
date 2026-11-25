@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $sport
  * @property string|null $training_method
  * @property int|null $max_hr
@@ -31,6 +32,7 @@ class HeartRateZone extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'sport',
         'training_method',
         'max_hr',

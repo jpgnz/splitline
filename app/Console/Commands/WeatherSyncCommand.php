@@ -6,11 +6,11 @@ use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\SyncRun;
 use App\Services\Weather\ActivityWeatherSyncService;
-use App\Services\Weather\OpenMeteoClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
+use Splitline\Weather\OpenMeteoClient;
 use Throwable;
 
 class WeatherSyncCommand extends Command
@@ -22,7 +22,7 @@ class WeatherSyncCommand extends Command
      */
     protected $signature = 'weather:sync
         {--limit= : Maximum number of outdoor activities to sync}
-        {--activity= : Sync a single activity by local ID or Garmin activity ID}
+        {--activity= : Sync a single activity by local ID, Garmin activity ID, or external ID}
         {--force : Re-fetch weather even when already cached}
         {--upgrade-only : Only upgrade activities currently stored in start_point mode that now have streams}
         {--queue : Dispatch SyncActivityWeatherJob to the queue instead of running synchronously}';
@@ -53,12 +53,18 @@ class WeatherSyncCommand extends Command
         }
 
         $rawActivity = $this->option('activity');
-        $activityOption = is_string($rawActivity) && trim($rawActivity) !== '' ? trim($rawActivity) : null;
+        $activityOption = null;
 
-        if ($activityOption !== null && (! ctype_digit($activityOption) || (int) $activityOption <= 0)) {
-            $this->components->error('The --activity option must be a positive integer ID.');
+        if ($rawActivity !== null) {
+            $trimmedActivity = trim($rawActivity);
 
-            return self::FAILURE;
+            if ($trimmedActivity === '') {
+                $this->components->error('The --activity option must be a non-empty activity ID or external ID.');
+
+                return self::FAILURE;
+            }
+
+            $activityOption = $trimmedActivity;
         }
 
         $force = (bool) $this->option('force');
@@ -137,7 +143,8 @@ class WeatherSyncCommand extends Command
                         );
                     }
                 } catch (Throwable $exception) {
-                    $message = "Activity #{$activity->id} ({$activity->garmin_activity_id}): {$exception->getMessage()}";
+                    $identifier = $this->formatActivityIdentifier($activity);
+                    $message = "Activity #{$activity->id} ({$identifier}): {$exception->getMessage()}";
                     $errors[] = $message;
                     $this->components->twoColumnDetail(
                         "[{$position}/{$total}] #{$activity->id} {$activity->name}",
@@ -191,16 +198,21 @@ class WeatherSyncCommand extends Command
         bool $upgradeOnly,
     ): array {
         if ($activityOption !== null) {
-            $targetId = (int) $activityOption;
+            $query = Activity::query();
+
+            if (ctype_digit($activityOption) && (int) $activityOption > 0) {
+                $targetId = (int) $activityOption;
+                $query
+                    ->where('id', $targetId)
+                    ->orWhere('garmin_activity_id', $targetId)
+                    ->orWhere('external_id', $activityOption);
+            } else {
+                $query->where('external_id', $activityOption);
+            }
 
             return array_values(array_map(
                 'intval',
-                Activity::query()
-                    ->where('id', $targetId)
-                    ->orWhere('garmin_activity_id', $targetId)
-                    ->limit(1)
-                    ->pluck('id')
-                    ->all(),
+                $query->limit(1)->pluck('id')->all(),
             ));
         }
 
@@ -254,5 +266,25 @@ class WeatherSyncCommand extends Command
         }
 
         return array_values(array_map('intval', $query->pluck('id')->all()));
+    }
+
+    private function formatActivityIdentifier(Activity $activity): string
+    {
+        $externalId = $activity->getAttribute('external_id');
+        $provider = $activity->getAttribute('provider');
+
+        if (is_string($externalId) && $externalId !== '') {
+            $providerPrefix = is_string($provider) && $provider !== '' ? $provider : 'garmin_personal';
+
+            return "{$providerPrefix}:{$externalId}";
+        }
+
+        $garminActivityId = $activity->getAttribute('garmin_activity_id');
+
+        if (is_int($garminActivityId) || (is_string($garminActivityId) && $garminActivityId !== '')) {
+            return (string) $garminActivityId;
+        }
+
+        return (string) $activity->id;
     }
 }

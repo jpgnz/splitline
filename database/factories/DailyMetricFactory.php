@@ -22,6 +22,7 @@ class DailyMetricFactory extends Factory
         $bmrCalories = fake()->numberBetween(1600, 2000);
 
         return [
+            'provider' => 'garmin_personal',
             'calendar_date' => fake()->unique()->date('Y-m-d', '2026-11-21'),
             'day_duration_seconds' => 86400,
             'steps' => fake()->numberBetween(4000, 18000),

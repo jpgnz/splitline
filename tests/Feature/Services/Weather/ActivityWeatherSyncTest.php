@@ -6,13 +6,13 @@ use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
 use App\Models\SyncRun;
 use App\Services\Weather\ActivityWeatherSyncService;
-use App\Services\Weather\OpenMeteoClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\Job as QueueJob;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Sleep;
+use Splitline\Weather\OpenMeteoClient;
 
 /**
  * Build a synthetic Open-Meteo hourly weather payload for a single location across the given UTC timestamps.

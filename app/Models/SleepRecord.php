@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $calendar_date
  * @property int|null $sleep_seconds
  * @property int|null $deep_seconds
@@ -34,6 +35,7 @@ class SleepRecord extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'calendar_date',
         'sleep_seconds',
         'deep_seconds',
