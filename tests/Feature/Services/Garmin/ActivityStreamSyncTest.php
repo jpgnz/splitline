@@ -6,7 +6,6 @@ use App\Models\ActivityStream;
 use App\Models\BestEffort;
 use App\Models\SyncRun;
 use App\Services\Garmin\ActivityStreamSyncService;
-use App\Services\Garmin\GarminApiException;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Queue\Job as QueueJob;
 use Illuminate\Http\Client\Request;
@@ -14,6 +13,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Sleep;
+use Splitline\Core\Exceptions\ProviderException;
 
 beforeEach(function () {
     Storage::fake('local');
@@ -549,7 +549,7 @@ it('does not swallow HTTP 404 responses from the Garmin token endpoint in SyncAc
     ]);
 
     expect(fn () => (new SyncActivityStreamJob($activity->id))->handle(app(ActivityStreamSyncService::class)))
-        ->toThrow(GarminApiException::class);
+        ->toThrow(ProviderException::class);
 
     expect($activity->refresh()->streams_unavailable_at)->toBeNull();
 });

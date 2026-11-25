@@ -21,6 +21,7 @@ class SyncRunFactory extends Factory
         $startedAt = CarbonImmutable::now()->subMinutes(2);
 
         return [
+            'provider' => 'garmin_personal',
             'type' => 'incremental',
             'status' => 'completed',
             'started_at' => $startedAt,

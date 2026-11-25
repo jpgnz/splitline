@@ -21,6 +21,7 @@ class FitnessAgeRecordFactory extends Factory
         $fitnessAge = round(max(18.0, $chronologicalAge - fake()->randomFloat(1, 1.0, 8.0)), 1);
 
         return [
+            'provider' => 'garmin_personal',
             'calendar_date' => fake()->unique()->date('Y-m-d', '2026-11-21'),
             'chronological_age' => $chronologicalAge,
             'fitness_age' => $fitnessAge,

@@ -18,6 +18,7 @@ class HeartRateZoneFactory extends Factory
     public function definition(): array
     {
         return [
+            'provider' => 'garmin_personal',
             'sport' => fake()->unique()->randomElement(['DEFAULT', 'RUNNING', 'CYCLING']),
             'training_method' => 'HR_RESERVE',
             'max_hr' => 190,

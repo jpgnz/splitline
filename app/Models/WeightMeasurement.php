@@ -9,7 +9,9 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
- * @property int $garmin_sample_pk
+ * @property string $provider
+ * @property ?string $external_id
+ * @property ?int $garmin_sample_pk
  * @property string $calendar_date
  * @property CarbonImmutable|null $measured_at
  * @property int $weight_grams
@@ -31,6 +33,8 @@ class WeightMeasurement extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
+        'external_id',
         'garmin_sample_pk',
         'calendar_date',
         'measured_at',

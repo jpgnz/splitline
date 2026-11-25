@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $calendar_date
  * @property string $sport
  * @property float|null $vo2_max_precise
@@ -26,6 +27,7 @@ class Vo2MaxRecord extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'calendar_date',
         'sport',
         'vo2_max_precise',

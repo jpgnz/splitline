@@ -14,7 +14,9 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 /**
  * @property int $id
- * @property int $garmin_activity_id
+ * @property string $provider
+ * @property ?string $external_id
+ * @property ?int $garmin_activity_id
  * @property string $name
  * @property string $activity_type_key
  * @property string $sport_category
@@ -130,6 +132,8 @@ class Activity extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
+        'external_id',
         'garmin_activity_id',
         'name',
         'activity_type_key',

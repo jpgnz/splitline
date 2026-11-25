@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $calendar_date
  * @property float|null $chronological_age
  * @property float|null $fitness_age
@@ -26,6 +27,7 @@ class FitnessAgeRecord extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'calendar_date',
         'chronological_age',
         'fitness_age',
