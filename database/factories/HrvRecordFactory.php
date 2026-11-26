@@ -21,6 +21,7 @@ class HrvRecordFactory extends Factory
         $balancedUpper = 74;
 
         return [
+            'provider' => 'garmin_personal',
             'calendar_date' => fake()->unique()->date('Y-m-d', '2026-11-21'),
             'weekly_avg' => fake()->numberBetween($balancedLow, $balancedUpper),
             'last_night_avg' => fake()->numberBetween(45, 82),

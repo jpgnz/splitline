@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $calendar_date
  * @property int|null $day_duration_seconds
  * @property int|null $steps
@@ -70,6 +71,7 @@ class DailyMetric extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'calendar_date',
         'day_duration_seconds',
         'steps',

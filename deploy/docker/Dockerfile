@@ -68,7 +68,7 @@ FROM serversideup/php:8.5-fpm-nginx-alpine AS runtime
 
 LABEL org.opencontainers.image.title="Splitline" \
       org.opencontainers.image.description="Local-first, self-hosted personal endurance and health telemetry platform." \
-      org.opencontainers.image.source="https://github.com/jpgnz/splitline" \
+      org.opencontainers.image.source="https://github.com/splitline-php/splitline" \
       org.opencontainers.image.licenses="MIT"
 
 USER root

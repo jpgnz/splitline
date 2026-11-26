@@ -96,7 +96,7 @@ const releaseNotesUrl = computed<string | null>(() => {
         return null;
     }
 
-    return `https://github.com/jpgnz/splitline/releases/tag/${encodeURIComponent(tag)}`;
+    return `https://github.com/splitline-php/splitline/releases/tag/${encodeURIComponent(tag)}`;
 });
 
 type BackfillRange = '90d' | '1y' | '3y' | 'all';

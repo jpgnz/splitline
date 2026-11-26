@@ -4,10 +4,10 @@ namespace App\Jobs;
 
 use App\Models\Activity;
 use App\Services\Weather\ActivityWeatherSyncService;
-use App\Services\Weather\OpenMeteoException;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
+use Splitline\Weather\Exceptions\OpenMeteoException;
 
 class SyncActivityWeatherJob implements ShouldBeUnique, ShouldQueue
 {

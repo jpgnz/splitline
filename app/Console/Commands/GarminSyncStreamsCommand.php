@@ -6,10 +6,9 @@ use App\Jobs\SyncActivityStreamJob;
 use App\Models\Activity;
 use App\Models\SyncRun;
 use App\Services\Garmin\ActivityStreamSyncService;
-use App\Services\Garmin\GarminApiException;
-use App\Services\Garmin\GarminClient;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
+use Splitline\Core\Exceptions\ArchiveUnavailableException;
 use Throwable;
 
 class GarminSyncStreamsCommand extends Command
@@ -21,7 +20,7 @@ class GarminSyncStreamsCommand extends Command
      */
     protected $signature = 'garmin:sync-streams
         {--limit= : Maximum number of activities to sync (defaults to all matching)}
-        {--activity= : Sync a single activity by local ID or Garmin activity ID}
+        {--activity= : Sync a single activity by local ID, Garmin activity ID, or external ID}
         {--force : Re-sync activities that already have streams (reuses local FIT archives unless --redownload is set)}
         {--redownload : Re-download FIT archives from Garmin even when a local archive already exists}
         {--queue : Dispatch jobs to the queue instead of running synchronously}';
@@ -36,7 +35,7 @@ class GarminSyncStreamsCommand extends Command
     /**
      * Execute the console command.
      */
-    public function handle(ActivityStreamSyncService $streamSyncService, GarminClient $client): int
+    public function handle(ActivityStreamSyncService $streamSyncService): int
     {
         $rawLimit = $this->option('limit');
         $limit = null;
@@ -52,12 +51,18 @@ class GarminSyncStreamsCommand extends Command
         }
 
         $rawActivity = $this->option('activity');
-        $activityOption = is_string($rawActivity) && trim($rawActivity) !== '' ? trim($rawActivity) : null;
+        $activityOption = null;
 
-        if ($activityOption !== null && (! ctype_digit($activityOption) || (int) $activityOption <= 0)) {
-            $this->components->error('The --activity option must be a positive integer ID.');
+        if ($rawActivity !== null) {
+            $trimmedActivity = trim($rawActivity);
 
-            return self::FAILURE;
+            if ($trimmedActivity === '') {
+                $this->components->error('The --activity option must be a non-empty activity ID or external ID.');
+
+                return self::FAILURE;
+            }
+
+            $activityOption = $trimmedActivity;
         }
 
         $force = (bool) $this->option('force');
@@ -105,61 +110,57 @@ class GarminSyncStreamsCommand extends Command
 
         $this->components->info("Syncing FIT streams for {$total} activity(ies)...");
 
-        $client->onRateLimitWait(function (float $waitSeconds, string $reason): void {
+        $onRateLimitWait = function (float $waitSeconds, string $reason): void {
             $seconds = (int) ceil($waitSeconds);
             $this->components->twoColumnDetail("Rate limited ({$reason})", "waiting {$seconds}s");
-        });
+        };
 
-        try {
-            foreach ($activityIds as $index => $activityId) {
-                $position = $index + 1;
-                $activity = Activity::query()->find($activityId);
+        foreach ($activityIds as $index => $activityId) {
+            $position = $index + 1;
+            $activity = Activity::query()->find($activityId);
 
-                if ($activity === null) {
-                    continue;
-                }
-
-                $usedCache = ! $redownload && $streamSyncService->hasLocalArchive($activity);
-
-                try {
-                    $streamSyncService->sync($activity, forceDownload: $redownload);
-                    $itemsSynced++;
-
-                    if ($usedCache) {
-                        $cachedHits++;
-                    }
-
-                    $this->components->twoColumnDetail(
-                        "[{$position}/{$total}] #{$activity->id} {$activity->name}",
-                        $usedCache ? 'synced (local)' : 'synced',
-                    );
-                } catch (Throwable $exception) {
-                    if (
-                        $exception instanceof GarminApiException
-                        && $exception->isArchiveUnavailable()
-                        && $activity->started_at_utc->lessThanOrEqualTo(CarbonImmutable::now('UTC')->subDay())
-                    ) {
-                        $activity->update([
-                            'streams_unavailable_at' => CarbonImmutable::now(),
-                        ]);
-                    }
-
-                    $message = "Activity #{$activity->id} ({$activity->garmin_activity_id}): {$exception->getMessage()}";
-                    $errors[] = $message;
-                    $this->components->twoColumnDetail(
-                        "[{$position}/{$total}] #{$activity->id} {$activity->name}",
-                        '<fg=red>failed</>',
-                    );
-                }
-
-                unset($activity);
-
-                if ($position % 25 === 0) {
-                    gc_collect_cycles();
-                }
+            if ($activity === null) {
+                continue;
             }
-        } finally {
-            $client->onRateLimitWait(null);
+
+            $usedCache = ! $redownload && $streamSyncService->hasLocalArchive($activity);
+
+            try {
+                $streamSyncService->sync($activity, $redownload, $onRateLimitWait);
+                $itemsSynced++;
+
+                if ($usedCache) {
+                    $cachedHits++;
+                }
+
+                $this->components->twoColumnDetail(
+                    "[{$position}/{$total}] #{$activity->id} {$activity->name}",
+                    $usedCache ? 'synced (local)' : 'synced',
+                );
+            } catch (Throwable $exception) {
+                if (
+                    $exception instanceof ArchiveUnavailableException
+                    && $activity->started_at_utc->lessThanOrEqualTo(CarbonImmutable::now('UTC')->subDay())
+                ) {
+                    $activity->update([
+                        'streams_unavailable_at' => CarbonImmutable::now(),
+                    ]);
+                }
+
+                $identifier = $this->formatActivityIdentifier($activity);
+                $message = "Activity #{$activity->id} ({$identifier}): {$exception->getMessage()}";
+                $errors[] = $message;
+                $this->components->twoColumnDetail(
+                    "[{$position}/{$total}] #{$activity->id} {$activity->name}",
+                    '<fg=red>failed</>',
+                );
+            }
+
+            unset($activity);
+
+            if ($position % 25 === 0) {
+                gc_collect_cycles();
+            }
         }
 
         $status = $errors !== [] && $itemsSynced === 0 ? 'failed' : 'completed';
@@ -194,16 +195,21 @@ class GarminSyncStreamsCommand extends Command
     private function resolveTargetActivityIds(?string $activityOption, ?int $limit, bool $force): array
     {
         if ($activityOption !== null) {
-            $targetId = (int) $activityOption;
+            $query = Activity::query();
+
+            if (ctype_digit($activityOption) && (int) $activityOption > 0) {
+                $targetId = (int) $activityOption;
+                $query
+                    ->where('id', $targetId)
+                    ->orWhere('garmin_activity_id', $targetId)
+                    ->orWhere('external_id', $activityOption);
+            } else {
+                $query->where('external_id', $activityOption);
+            }
 
             return array_values(array_map(
                 'intval',
-                Activity::query()
-                    ->where('id', $targetId)
-                    ->orWhere('garmin_activity_id', $targetId)
-                    ->limit(1)
-                    ->pluck('id')
-                    ->all(),
+                $query->limit(1)->pluck('id')->all(),
             ));
         }
 
@@ -223,5 +229,25 @@ class GarminSyncStreamsCommand extends Command
         }
 
         return array_values(array_map('intval', $query->pluck('id')->all()));
+    }
+
+    private function formatActivityIdentifier(Activity $activity): string
+    {
+        $externalId = $activity->getAttribute('external_id');
+        $provider = $activity->getAttribute('provider');
+
+        if (is_string($externalId) && $externalId !== '') {
+            $providerPrefix = is_string($provider) && $provider !== '' ? $provider : 'garmin_personal';
+
+            return "{$providerPrefix}:{$externalId}";
+        }
+
+        $garminActivityId = $activity->getAttribute('garmin_activity_id');
+
+        if (is_int($garminActivityId) || (is_string($garminActivityId) && $garminActivityId !== '')) {
+            return (string) $garminActivityId;
+        }
+
+        return (string) $activity->id;
     }
 }

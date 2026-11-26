@@ -12,7 +12,7 @@
 
 services:
     splitline:
-        image: ghcr.io/jpgnz/splitline:latest
+        image: ghcr.io/splitline-php/splitline:latest
         container_name: splitline
         restart: unless-stopped
         ports:

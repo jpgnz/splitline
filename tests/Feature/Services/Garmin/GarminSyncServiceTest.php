@@ -11,12 +11,12 @@ use App\Models\SyncRun;
 use App\Models\Vo2MaxRecord;
 use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
-use App\Services\Garmin\ActivityClassifier;
 use App\Services\Garmin\GarminSyncService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Sleep;
+use Splitline\Core\Analytics\ActivityClassifier;
 
 function syncFakeJwt(): string
 {

@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "49df1d97d1ffe401f43033b9145b2216",
+    "content-hash": "c3aca951766f3e290a4a1b6f1fe828b9",
     "packages": [
         {
             "name": "brick/math",
@@ -3254,6 +3254,265 @@
                 "source": "https://github.com/ramsey/uuid/tree/4.10.0"
             },
             "time": "2026-11-14T23:23:20+00:00"
+        },
+        {
+            "name": "splitline/core",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/core.git",
+                "reference": "a82b47159fe29cd6f3a9c0e47397f8d04f1b0359"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/core/zipball/a82b47159fe29cd6f3a9c0e47397f8d04f1b0359",
+                "reference": "a82b47159fe29cd6f3a9c0e47397f8d04f1b0359",
+                "shasum": ""
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Core\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Core telemetry contracts, immutable DTOs, rate limiting, and analytics math for Splitline.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "time": "2026-11-25T07:57:09+00:00"
+        },
+        {
+            "name": "splitline/laravel",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/laravel.git",
+                "reference": "3d004e7818214981b2f654347bc93627db8b111f"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/laravel/zipball/3d004e7818214981b2f654347bc93627db8b111f",
+                "reference": "3d004e7818214981b2f654347bc93627db8b111f",
+                "shasum": ""
+            },
+            "require": {
+                "illuminate/contracts": "^13.0",
+                "illuminate/http": "^13.0",
+                "illuminate/support": "^13.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "laravel": {
+                    "providers": [
+                        "Splitline\\Laravel\\SplitlineServiceProvider"
+                    ]
+                },
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Laravel\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Laravel HTTP, Cache, Sleep, and ServiceProvider bridge for Splitline telemetry packages.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "time": "2026-11-25T07:57:09+00:00"
+        },
+        {
+            "name": "splitline/parsers",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/parsers.git",
+                "reference": "98eae4197c9faaa26053f0df8f4f883234728cda"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/parsers/zipball/98eae4197c9faaa26053f0df8f4f883234728cda",
+                "reference": "98eae4197c9faaa26053f0df8f4f883234728cda",
+                "shasum": ""
+            },
+            "require": {
+                "ext-zip": "*",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Parsers\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Pure PHP binary FIT file parser returning Splitline ActivityStreamData DTOs.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "time": "2026-11-25T07:57:09+00:00"
+        },
+        {
+            "name": "splitline/provider-file-import",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/provider-file-import.git",
+                "reference": "e6bb23947f11b966227d38719e8d53eb78c183ab"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/provider-file-import/zipball/e6bb23947f11b966227d38719e8d53eb78c183ab",
+                "reference": "e6bb23947f11b966227d38719e8d53eb78c183ab",
+                "shasum": ""
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1",
+                "splitline/parsers": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\ProviderFileImport\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Standalone .fit and .zip file import provider for Splitline.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "time": "2026-11-25T08:09:29+00:00"
+        },
+        {
+            "name": "splitline/provider-garmin-personal",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/provider-garmin-personal.git",
+                "reference": "f7543eb02ca8d25c9f7f41b36ab4b432ef32ae35"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/provider-garmin-personal/zipball/f7543eb02ca8d25c9f7f41b36ab4b432ef32ae35",
+                "reference": "f7543eb02ca8d25c9f7f41b36ab4b432ef32ae35",
+                "shasum": ""
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\ProviderGarminPersonal\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Garmin Connect Personal API telemetry provider for Splitline (personal, non-commercial use only).",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "time": "2026-11-25T08:09:29+00:00"
+        },
+        {
+            "name": "splitline/weather",
+            "version": "v0.1.0",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/splitline-php/weather.git",
+                "reference": "462ef3cc26dd6988f50398836bab253a332d5362"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/splitline-php/weather/zipball/462ef3cc26dd6988f50398836bab253a332d5362",
+                "reference": "462ef3cc26dd6988f50398836bab253a332d5362",
+                "shasum": ""
+            },
+            "require": {
+                "nesbot/carbon": "^3.0",
+                "php": "^8.5",
+                "splitline/core": "^0.1"
+            },
+            "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.1-dev"
+                }
+            },
+            "autoload": {
+                "psr-4": {
+                    "Splitline\\Weather\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "description": "Route waypoint sampling, wind-vector math, and Open-Meteo weather enrichment for endurance activities.",
+            "homepage": "https://github.com/splitline-php/ingest",
+            "support": {
+                "issues": "https://github.com/splitline-php/ingest/issues",
+                "source": "https://github.com/splitline-php/ingest"
+            },
+            "time": "2026-11-25T07:57:09+00:00"
         },
         {
             "name": "symfony/clock",

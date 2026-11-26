@@ -22,7 +22,9 @@ class WeightMeasurementFactory extends Factory
         $weightGrams = fake()->numberBetween(65000, 85000);
 
         return [
+            'provider' => 'garmin_personal',
             'garmin_sample_pk' => fake()->unique()->numberBetween(1000000000, 9999999999),
+            'external_id' => fn (array $attributes): ?string => isset($attributes['garmin_sample_pk']) ? (string) $attributes['garmin_sample_pk'] : null,
             'calendar_date' => $calendarDate,
             'measured_at' => CarbonImmutable::parse($calendarDate.' 07:15:00'),
             'weight_grams' => $weightGrams,

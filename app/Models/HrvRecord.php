@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $calendar_date
  * @property int|null $weekly_avg
  * @property int|null $last_night_avg
@@ -30,6 +31,7 @@ class HrvRecord extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'calendar_date',
         'weekly_avg',
         'last_night_avg',

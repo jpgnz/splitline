@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-Report security vulnerabilities privately via [GitHub Security Advisories](https://github.com/jpgnz/splitline/security/advisories/new) rather than opening a public issue. Include steps to reproduce, affected versions or commits, and potential impact.
+Report security vulnerabilities privately via [GitHub Security Advisories](https://github.com/splitline-php/splitline/security/advisories/new) rather than opening a public issue. Include steps to reproduce, affected versions or commits, and potential impact.
 
 ## Deployment Security
 
