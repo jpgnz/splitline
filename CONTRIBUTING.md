@@ -13,7 +13,7 @@
 ## Local Setup
 
 ```bash
-git clone https://github.com/jpgnz/splitline.git
+git clone https://github.com/splitline-php/splitline.git
 cd splitline
 composer setup
 composer dev
