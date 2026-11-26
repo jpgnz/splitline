@@ -412,6 +412,13 @@ const pmcChartOption = computed<EChartsOption>(() => {
           ]
         : [];
 
+    const allTsbValues = [
+        ...history.map((d) => d.tsb),
+        ...projected.map((p) => p.tsb),
+    ].filter((v): v is number => Number.isFinite(v));
+    const minTsb = allTsbValues.length > 0 ? Math.min(...allTsbValues) : 0;
+    const highRiskFloor = Math.min(-38, Math.floor(minTsb) - 5);
+
     const yAxes: YAXisComponentOption[] = [
         {
             type: 'value',
@@ -436,7 +443,7 @@ const pmcChartOption = computed<EChartsOption>(() => {
         yAxes.push({
             type: 'value',
             position: 'right',
-            offset: 54,
+            offset: 60,
             scale: true,
             name: `${activeOverlayMeta.value.label} (${activeOverlayMeta.value.unit})`,
             nameGap: 14,
@@ -509,6 +516,17 @@ const pmcChartOption = computed<EChartsOption>(() => {
                             },
                         },
                         { yAxis: -10 },
+                    ],
+                    [
+                        {
+                            yAxis: highRiskFloor,
+                            itemStyle: {
+                                color: theme.isDark.value
+                                    ? 'rgba(244, 63, 94, 0.08)'
+                                    : 'rgba(244, 63, 94, 0.06)',
+                            },
+                        },
+                        { yAxis: -30 },
                     ],
                 ],
             },
@@ -632,8 +650,8 @@ const pmcChartOption = computed<EChartsOption>(() => {
         animation: false,
         grid: {
             left: 12,
-            right: hasOverlay ? 72 : 16,
-            top: 46,
+            right: hasOverlay ? 88 : 16,
+            top: 62,
             bottom: 12,
             containLabel: true,
         },
@@ -984,7 +1002,7 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 12,
             containLabel: true,
         },
@@ -1093,7 +1111,7 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     </span>
                 </div>
                 <h1
-                    class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50"
+                    class="text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl dark:text-zinc-50"
                 >
                     Training Load &amp; Form
                 </h1>
@@ -1396,7 +1414,8 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                             </span>
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                            {{ summary.form_zone.description }}
+                            42-day fitness (CTL), 7-day fatigue (ATL), and form
+                            (TSB) balance.
                             <span v-if="projectionMode === 'maintenance'">
                                 Taper assumes
                                 {{
@@ -1501,8 +1520,26 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     </div>
                 </div>
 
+                <!-- Live Current Form Status Callout -->
+                <div
+                    class="mt-4 flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-xs"
+                    :class="toneBadgeClasses(summary.form_zone.tone)"
+                >
+                    <span
+                        class="font-mono text-[10px] font-semibold tracking-wider uppercase"
+                    >
+                        Current Form · {{ summary.form_zone.label }}
+                    </span>
+                    <span class="opacity-40">—</span>
+                    <span>{{ summary.form_zone.description }}</span>
+                </div>
+
                 <div class="mt-4">
-                    <BaseChart :option="pmcChartOption" :height="360" />
+                    <BaseChart
+                        :option="pmcChartOption"
+                        :height="360"
+                        aria-label="Performance Management Chart"
+                    />
                 </div>
 
                 <!-- Reference Band Legend -->
