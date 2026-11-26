@@ -290,7 +290,7 @@ class CorrelationService
     /** @var array<string, string> */
     private const array RECOVERY_TIME_BUCKETS = [
         'morning' => 'Morning (<12:00)',
-        'afternoon' => 'Afternoon (12–17:00)',
+        'afternoon' => 'Afternoon (12:00–17:00)',
         'evening' => 'Evening (17:00+)',
     ];
 
@@ -314,11 +314,11 @@ class CorrelationService
 
     /** @var array<string, string> */
     private const array SCHEDULE_TIME_BUCKETS = [
-        'early' => 'Early (<7am)',
-        'morning' => 'Morning (7–11am)',
-        'midday' => 'Midday (11am–3pm)',
-        'afternoon' => 'Afternoon (3–6pm)',
-        'evening' => 'Evening (6pm+)',
+        'early' => 'Early (<07:00)',
+        'morning' => 'Morning (07:00–11:00)',
+        'midday' => 'Midday (11:00–15:00)',
+        'afternoon' => 'Afternoon (15:00–18:00)',
+        'evening' => 'Evening (18:00+)',
     ];
 
     public function __construct(
