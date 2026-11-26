@@ -651,10 +651,11 @@ const ghostPacerOption = computed<EChartsOption>(() => {
     return {
         animation: false,
         grid: {
-            left: 58,
+            left: 16,
             right: 20,
-            top: 24,
+            top: 38,
             bottom: 34,
+            containLabel: true,
         },
         ...(isSingleChallenger
             ? {
@@ -755,16 +756,29 @@ const ghostPacerOption = computed<EChartsOption>(() => {
                 color: theme.mutedColor.value,
                 fontFamily: theme.fontFamilyMono,
                 fontSize: 10,
+                align: 'left',
             },
             splitLine: { lineStyle: { color: theme.gridLineColor.value } },
             axisLabel: {
                 color: theme.mutedColor.value,
                 fontFamily: theme.fontFamilyMono,
                 fontSize: 10,
-                formatter: (val: number) =>
-                    mode === 'distance'
-                        ? formatSignedSecondsCompact(val)
-                        : `${val > 0 ? '+' : ''}${Math.round(val)}m`,
+                formatter: (val: number) => {
+                    if (mode === 'distance') {
+                        return formatSignedSecondsCompact(val);
+                    }
+
+                    if (units.value === 'imperial') {
+                        const miles = distanceFromMeters(val);
+                        const sign = miles > 0 ? '+' : '';
+
+                        return Math.abs(miles) < 0.1
+                            ? `${sign}${Math.round(elevationFromMeters(val))} ft`
+                            : `${sign}${miles.toFixed(2)} mi`;
+                    }
+
+                    return `${val > 0 ? '+' : ''}${Math.round(val)} m`;
+                },
             },
         },
         series: chartSeries as EChartsOption['series'],
@@ -790,10 +804,11 @@ function buildOverlayOption(params: {
     return {
         animation: false,
         grid: {
-            left: 56,
+            left: 14,
             right: 20,
-            top: 24,
-            bottom: 30,
+            top: 36,
+            bottom: 18,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -847,10 +862,12 @@ function buildOverlayOption(params: {
             inverse: params.inverse ?? false,
             scale: true,
             name: params.yAxisName,
+            nameGap: 12,
             nameTextStyle: {
                 color: theme.mutedColor.value,
                 fontFamily: theme.fontFamilyMono,
                 fontSize: 10,
+                align: 'left',
             },
             splitLine: { lineStyle: { color: theme.gridLineColor.value } },
             axisLabel: {
@@ -1255,7 +1272,7 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                             {{ candidates.length }} recent
                             {{
                                 baselineActivity
-                                    ? sportMetaFor(baselineActivity).label
+                                    ? `${sportMetaFor(baselineActivity).label} activities`
                                     : 'activities'
                             }}
                             available
@@ -1422,7 +1439,12 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                         Headline Comparison &amp; Weather Diff
                     </h2>
                     <span
-                        class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        class="max-w-xs truncate font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        :title="
+                            baselineActivity
+                                ? `Deltas vs Baseline (${baselineActivity.name})`
+                                : undefined
+                        "
                     >
                         Deltas vs Baseline ({{ baselineActivity?.name }})
                     </span>
@@ -2302,7 +2324,7 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                     <h2
                         class="font-mono text-xs font-medium tracking-wider text-zinc-700 uppercase dark:text-zinc-200"
                     >
-                        Kilometer Splits Diff ({{ splits.length }} splits)
+                        Splits Diff ({{ splits.length }} × 1 km)
                     </h2>
                     <span
                         class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
