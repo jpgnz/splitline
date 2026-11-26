@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "jpgnz/splitline",
+    "name": "splitline/splitline",
     "type": "project",
     "description": "Local-first, self-hosted personal endurance and health telemetry platform.",
     "keywords": [

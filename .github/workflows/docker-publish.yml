@@ -20,7 +20,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  # Resolves to ghcr.io/jpgnz/splitline on the upstream repository
+  # Resolves to ghcr.io/splitline-php/splitline on the upstream repository
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
