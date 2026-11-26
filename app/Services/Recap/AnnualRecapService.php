@@ -156,7 +156,7 @@ use Illuminate\Support\Facades\DB;
  *     has_data: bool,
  *     totals: RecapTotals,
  *     yoy: RecapYoy,
- *     sports: list<RecapSportBreakdownItem>,
+ *     sport_breakdown: list<RecapSportBreakdownItem>,
  *     peaks: array{
  *         biggest_week: ?RecapBiggestWeek,
  *         biggest_month: ?RecapBiggestMonth,
@@ -535,7 +535,7 @@ class AnnualRecapService
             'has_data' => $totalActivities > 0,
             'totals' => $totals,
             'yoy' => $yoy,
-            'sports' => $sports,
+            'sport_breakdown' => $sports,
             'peaks' => $peaks,
             'consistency' => $consistency,
             'milestones' => $this->buildMilestones($yearStart, $yearEnd),
@@ -783,7 +783,7 @@ class AnnualRecapService
         return [
             'week_start' => $best['week_start'],
             'week_end' => $best['week_end'],
-            'label' => $startCarbon->format('M j').' – '.$endCarbon->format('M j'),
+            'label' => $startCarbon->format('j M').' – '.$endCarbon->format('j M'),
             'distance_meters' => round($best['distance_meters'], 1),
             'duration_seconds' => round($best['duration_seconds'], 1),
             'elevation_gain' => round($best['elevation_gain'], 1),
@@ -981,11 +981,11 @@ class AnnualRecapService
     private function classifyTimeOfDay(int $hour): array
     {
         return match (true) {
-            $hour >= 5 && $hour <= 7 => ['early_morning', 'Early Morning (5–8 AM)'],
-            $hour >= 8 && $hour <= 11 => ['morning', 'Morning (8 AM–12 PM)'],
-            $hour >= 12 && $hour <= 16 => ['afternoon', 'Afternoon (12–5 PM)'],
-            $hour >= 17 && $hour <= 20 => ['evening', 'Evening (5–9 PM)'],
-            default => ['night', 'Night (9 PM–5 AM)'],
+            $hour >= 5 && $hour <= 7 => ['early_morning', 'Early Morning (05:00–08:00)'],
+            $hour >= 8 && $hour <= 11 => ['morning', 'Morning (08:00–12:00)'],
+            $hour >= 12 && $hour <= 16 => ['afternoon', 'Afternoon (12:00–17:00)'],
+            $hour >= 17 && $hour <= 20 => ['evening', 'Evening (17:00–21:00)'],
+            default => ['night', 'Night (21:00–05:00)'],
         };
     }
 

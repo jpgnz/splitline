@@ -169,8 +169,9 @@ const monthlyChartOption = computed<EChartsOption>(() => {
         grid: {
             top: 20,
             right: 16,
-            bottom: 28,
-            left: 56,
+            bottom: 14,
+            left: 12,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -539,12 +540,12 @@ async function downloadYearCardPng(): Promise<void> {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
         ctx.fill();
 
-        if (props.sports.length > 0) {
+        if (props.sport_breakdown.length > 0) {
             ctx.save();
             drawRoundedRect(ctx, stackX, stackY, stackW, stackH, 6);
             ctx.clip();
             let cursorX = stackX;
-            for (const sport of props.sports) {
+            for (const sport of props.sport_breakdown) {
                 const segW = (sport.share_pct / 100) * stackW;
                 ctx.fillStyle = sport.accent_hex;
                 ctx.fillRect(cursorX, stackY, Math.max(2, segW), stackH);
@@ -554,21 +555,28 @@ async function downloadYearCardPng(): Promise<void> {
         }
 
         // Top 3 sports legend
-        const topSports = props.sports.slice(0, 3);
+        const topSports = props.sport_breakdown.slice(0, 3);
         let legendX = stackX;
         const legendY = stackY + 34;
+        const legendMaxX = rightX + rightW - 20;
 
         for (const sport of topSports) {
+            ctx.font = `500 12px ${sansFont}`;
+            const text = `${sport.label} ${sport.share_pct.toFixed(0)}%`;
+            const itemW = 14 + ctx.measureText(text).width + 20;
+
+            if (legendX + itemW - 20 > legendMaxX) {
+                break;
+            }
+
             ctx.fillStyle = sport.accent_hex;
             ctx.beginPath();
             ctx.arc(legendX + 4, legendY - 4, 4, 0, Math.PI * 2);
             ctx.fill();
 
             ctx.fillStyle = '#e4e4e7';
-            ctx.font = `500 12px ${sansFont}`;
-            const text = `${sport.label} ${sport.share_pct.toFixed(0)}%`;
             ctx.fillText(text, legendX + 14, legendY);
-            legendX += ctx.measureText(text).width + 28;
+            legendX += itemW;
         }
 
         // Highlight pills at bottom of right card
@@ -626,7 +634,7 @@ async function downloadYearCardPng(): Promise<void> {
 
         <!-- Hero Banner -->
         <section
-            class="relative overflow-hidden rounded-2xl border border-zinc-200/90 bg-white p-6 sm:p-8 dark:border-zinc-800/80 dark:bg-[#141417]"
+            class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-6 sm:p-8 dark:border-zinc-800/80 dark:bg-[#141417]"
         >
             <div
                 class="pointer-events-none absolute -top-24 -right-24 size-72 rounded-full bg-emerald-500/10 blur-3xl dark:bg-emerald-500/15"
@@ -898,7 +906,7 @@ async function downloadYearCardPng(): Promise<void> {
         <!-- Empty State -->
         <section
             v-if="!has_data"
-            class="flex flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-300/90 bg-white px-6 py-16 text-center dark:border-zinc-800 dark:bg-[#141417]"
+            class="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300/90 bg-white px-6 py-16 text-center dark:border-zinc-800 dark:bg-[#141417]"
         >
             <Calendar class="size-8 text-zinc-400 dark:text-zinc-500" />
             <h2
@@ -917,7 +925,7 @@ async function downloadYearCardPng(): Promise<void> {
             <section class="grid gap-4 xl:grid-cols-12">
                 <!-- Monthly Momentum -->
                 <div
-                    class="rounded-2xl border border-zinc-200/90 bg-white p-5 xl:col-span-8 dark:border-zinc-800/80 dark:bg-[#141417]"
+                    class="rounded-xl border border-zinc-200/90 bg-white p-5 xl:col-span-8 dark:border-zinc-800/80 dark:bg-[#141417]"
                 >
                     <div
                         class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
@@ -962,7 +970,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                 <!-- Sport Mix -->
                 <div
-                    class="flex flex-col rounded-2xl border border-zinc-200/90 bg-white p-5 xl:col-span-4 dark:border-zinc-800/80 dark:bg-[#141417]"
+                    class="flex flex-col rounded-xl border border-zinc-200/90 bg-white p-5 xl:col-span-4 dark:border-zinc-800/80 dark:bg-[#141417]"
                 >
                     <div class="flex items-center justify-between">
                         <div>
@@ -980,8 +988,12 @@ async function downloadYearCardPng(): Promise<void> {
                         <span
                             class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
                         >
-                            {{ sports.length }}
-                            {{ sports.length === 1 ? 'sport' : 'sports' }}
+                            {{ sport_breakdown.length }}
+                            {{
+                                sport_breakdown.length === 1
+                                    ? 'sport'
+                                    : 'sports'
+                            }}
                         </span>
                     </div>
 
@@ -990,11 +1002,12 @@ async function downloadYearCardPng(): Promise<void> {
                         class="mt-4 flex h-2.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800/90"
                     >
                         <div
-                            v-for="sport in sports"
+                            v-for="sport in sport_breakdown"
                             :key="sport.key"
                             class="h-full transition-all"
                             :style="{
-                                width: `${Math.max(2, sport.share_pct)}%`,
+                                width: `${sport.share_pct}%`,
+                                minWidth: sport.share_pct > 0 ? '4px' : '0px',
                                 backgroundColor: sport.accent_hex,
                             }"
                             :title="`${sport.label}: ${sport.share_pct}%`"
@@ -1004,7 +1017,7 @@ async function downloadYearCardPng(): Promise<void> {
                     <!-- Breakdown Rows -->
                     <div class="mt-4 flex-1 space-y-3">
                         <div
-                            v-for="sport in sports"
+                            v-for="sport in sport_breakdown"
                             :key="sport.key"
                             class="space-y-1"
                         >
@@ -1101,7 +1114,7 @@ async function downloadYearCardPng(): Promise<void> {
                 <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <!-- Longest Streak -->
                     <div
-                        class="rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                        class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                     >
                         <div class="flex items-center justify-between">
                             <span
@@ -1160,7 +1173,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                     <!-- Biggest Week -->
                     <div
-                        class="rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                        class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                     >
                         <div class="flex items-center justify-between">
                             <span
@@ -1192,8 +1205,8 @@ async function downloadYearCardPng(): Promise<void> {
                                 {{ peaks.biggest_week.count }}
                                 {{
                                     peaks.biggest_week.count === 1
-                                        ? 'session'
-                                        : 'sessions'
+                                        ? 'activity'
+                                        : 'activities'
                                 }}
                                 ·
                                 {{
@@ -1213,7 +1226,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                     <!-- Biggest Month -->
                     <div
-                        class="rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                        class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                     >
                         <div class="flex items-center justify-between">
                             <span
@@ -1272,7 +1285,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                     <!-- Longest Activity -->
                     <div
-                        class="rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                        class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                     >
                         <div class="flex items-center justify-between">
                             <span
@@ -1328,7 +1341,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                     <!-- Biggest Climb -->
                     <div
-                        class="rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                        class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                     >
                         <div class="flex items-center justify-between">
                             <span
@@ -1390,7 +1403,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                     <!-- Favorite Day & Time -->
                     <div
-                        class="rounded-2xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                        class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                     >
                         <div class="flex items-center justify-between">
                             <span
@@ -1446,7 +1459,7 @@ async function downloadYearCardPng(): Promise<void> {
             <section class="grid gap-4 xl:grid-cols-12">
                 <!-- Best Efforts -->
                 <div
-                    class="rounded-2xl border border-zinc-200/90 bg-white p-5 xl:col-span-7 dark:border-zinc-800/80 dark:bg-[#141417]"
+                    class="rounded-xl border border-zinc-200/90 bg-white p-5 xl:col-span-7 dark:border-zinc-800/80 dark:bg-[#141417]"
                 >
                     <div class="mb-4 flex items-center justify-between">
                         <div>
@@ -1544,7 +1557,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                 <!-- Routes & Segments -->
                 <div
-                    class="flex flex-col gap-4 rounded-2xl border border-zinc-200/90 bg-white p-5 xl:col-span-5 dark:border-zinc-800/80 dark:bg-[#141417]"
+                    class="flex flex-col gap-4 rounded-xl border border-zinc-200/90 bg-white p-5 xl:col-span-5 dark:border-zinc-800/80 dark:bg-[#141417]"
                 >
                     <div class="flex items-center justify-between">
                         <div>
@@ -1733,7 +1746,7 @@ async function downloadYearCardPng(): Promise<void> {
             <section class="grid gap-4 xl:grid-cols-12">
                 <!-- Weather Extremes -->
                 <div
-                    class="rounded-2xl border border-zinc-200/90 bg-white p-5 xl:col-span-6 dark:border-zinc-800/80 dark:bg-[#141417]"
+                    class="rounded-xl border border-zinc-200/90 bg-white p-5 xl:col-span-6 dark:border-zinc-800/80 dark:bg-[#141417]"
                 >
                     <div class="mb-4 flex items-center justify-between">
                         <div>
@@ -1992,7 +2005,7 @@ async function downloadYearCardPng(): Promise<void> {
 
                 <!-- Health Snapshot -->
                 <div
-                    class="rounded-2xl border border-zinc-200/90 bg-white p-5 xl:col-span-6 dark:border-zinc-800/80 dark:bg-[#141417]"
+                    class="rounded-xl border border-zinc-200/90 bg-white p-5 xl:col-span-6 dark:border-zinc-800/80 dark:bg-[#141417]"
                 >
                     <div class="mb-4 flex items-center justify-between">
                         <div>
