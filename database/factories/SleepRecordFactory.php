@@ -27,6 +27,7 @@ class SleepRecordFactory extends Factory
         $sleepStart = $sleepEnd->subSeconds($sleepSeconds);
 
         return [
+            'provider' => 'garmin_personal',
             'calendar_date' => $calendarDate,
             'sleep_seconds' => $sleepSeconds,
             'deep_seconds' => $deepSeconds,

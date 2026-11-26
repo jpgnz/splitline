@@ -1,6 +1,6 @@
 {
     "$schema": "https://getcomposer.org/schema.json",
-    "name": "jpgnz/splitline",
+    "name": "splitline/splitline",
     "type": "project",
     "description": "Local-first, self-hosted personal endurance and health telemetry platform.",
     "keywords": [
@@ -18,7 +18,13 @@
         "php": "^8.5",
         "inertiajs/inertia-laravel": "^3.0",
         "laravel/framework": "^13.17",
-        "laravel/wayfinder": "^0.1.14"
+        "laravel/wayfinder": "^0.1.14",
+        "splitline/core": "^0.1",
+        "splitline/laravel": "^0.1",
+        "splitline/parsers": "^0.1",
+        "splitline/provider-file-import": "^0.1",
+        "splitline/provider-garmin-personal": "^0.1",
+        "splitline/weather": "^0.1"
     },
     "require-dev": {
         "fakerphp/faker": "^1.24",

@@ -20,14 +20,14 @@ Currently supports the **Garmin Connect Personal API** (`GARMIN_KEY`).
 
 ## Quick Start
 
-Pre-built `linux/amd64` and `linux/arm64` images are published to `ghcr.io/jpgnz/splitline` (`:latest`, semver tags such as `:1`, `:1.2`, `:1.2.3`, and `:edge` from `main`).
+Pre-built `linux/amd64` and `linux/arm64` images are published to `ghcr.io/splitline-php/splitline` (`:latest`, semver tags such as `:1`, `:1.2`, `:1.2.3`, and `:edge` from `main`).
 
 ### 1. Download Compose files
 
 ```bash
 mkdir splitline && cd splitline
-curl -fsSLO https://raw.githubusercontent.com/jpgnz/splitline/main/deploy/docker/compose.yaml
-curl -fsSLO https://raw.githubusercontent.com/jpgnz/splitline/main/deploy/docker/.env.example
+curl -fsSLO https://raw.githubusercontent.com/splitline-php/splitline/main/deploy/docker/compose.yaml
+curl -fsSLO https://raw.githubusercontent.com/splitline-php/splitline/main/deploy/docker/.env.example
 cp .env.example .env
 ```
 

@@ -157,7 +157,9 @@ export interface WorkoutMeta {
 
 export interface ActivityDetail {
     id: number;
-    garmin_activity_id: number;
+    provider: string;
+    external_id: string | null;
+    garmin_activity_id: number | null;
     name: string;
     activity_type_key: string;
     sport_category: string;

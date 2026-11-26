@@ -20,6 +20,7 @@ class Vo2MaxRecordFactory extends Factory
         $vo2MaxPrecise = fake()->randomFloat(1, 45.0, 65.0);
 
         return [
+            'provider' => 'garmin_personal',
             'calendar_date' => fake()->unique()->date('Y-m-d', '2026-11-21'),
             'sport' => fake()->randomElement(['running', 'cycling']),
             'vo2_max_precise' => $vo2MaxPrecise,

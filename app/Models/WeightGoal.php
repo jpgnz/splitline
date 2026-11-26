@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $start_date
  * @property string|null $end_date
  * @property int $goal_grams
@@ -26,6 +27,7 @@ class WeightGoal extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'start_date',
         'end_date',
         'goal_grams',

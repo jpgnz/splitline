@@ -23,7 +23,9 @@ class ActivityFactory extends Factory
         $distanceMeters = fake()->randomFloat(1, 5000, 18000);
 
         return [
+            'provider' => 'garmin_personal',
             'garmin_activity_id' => fake()->unique()->numberBetween(10000000000, 99999999999),
+            'external_id' => fn (array $attributes): ?string => isset($attributes['garmin_activity_id']) ? (string) $attributes['garmin_activity_id'] : null,
             'name' => fake()->randomElement(['Morning Run', 'Tempo Run', 'Easy Aerobic Run', 'Long Run']),
             'activity_type_key' => 'running',
             'sport_category' => 'running',

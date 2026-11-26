@@ -9,6 +9,7 @@ use Illuminate\Database\Eloquent\Model;
 
 /**
  * @property int $id
+ * @property string $provider
  * @property string $type
  * @property string $status
  * @property CarbonImmutable $started_at
@@ -32,6 +33,7 @@ class SyncRun extends Model
      * @var list<string>
      */
     protected $fillable = [
+        'provider',
         'type',
         'status',
         'started_at',

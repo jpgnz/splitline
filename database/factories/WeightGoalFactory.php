@@ -21,6 +21,7 @@ class WeightGoalFactory extends Factory
         $startDate = fake()->unique()->date('Y-m-d', '2026-11-21');
 
         return [
+            'provider' => 'garmin_personal',
             'start_date' => $startDate,
             'end_date' => null,
             'goal_grams' => fake()->numberBetween(70000, 90000),
