@@ -10,6 +10,7 @@ use App\Models\Vo2MaxRecord;
 use App\Models\WeightMeasurement;
 use App\Support\AppSettings;
 use App\Support\DateWindowResolver;
+use App\Support\HealthSourceRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use InvalidArgumentException;
@@ -25,11 +26,17 @@ class HealthMetricService
     public function __construct(
         private readonly ?AppSettings $settings = null,
         private readonly ?DateWindowResolver $dateWindows = null,
+        private readonly ?HealthSourceRegistry $healthSources = null,
     ) {}
 
     private function dateWindowResolver(): DateWindowResolver
     {
         return $this->dateWindows ?? app(DateWindowResolver::class);
+    }
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
     }
 
     private function isImperial(): bool
@@ -298,7 +305,7 @@ class HealthMetricService
      */
     private function buildBodyBattery(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -406,7 +413,7 @@ class HealthMetricService
      */
     private function buildSleep(?string $startDate, string $endDate): array
     {
-        $query = SleepRecord::query()
+        $query = $this->healthSources()->applyScope(SleepRecord::query(), 'sleep')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -494,7 +501,7 @@ class HealthMetricService
      */
     private function buildHrv(?string $startDate, string $endDate): array
     {
-        $query = HrvRecord::query()
+        $query = $this->healthSources()->applyScope(HrvRecord::query(), 'hrv')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -586,7 +593,7 @@ class HealthMetricService
      */
     private function buildSteps(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->whereNotNull('steps')
             ->orderBy('calendar_date');
@@ -690,7 +697,7 @@ class HealthMetricService
      */
     private function buildHeartRate(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -772,7 +779,7 @@ class HealthMetricService
      */
     private function buildStress(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->whereNotNull('avg_stress')
             ->orderBy('calendar_date');
@@ -907,7 +914,7 @@ class HealthMetricService
             ->startOfWeek(CarbonInterface::MONDAY)
             ->format('Y-m-d');
 
-        $records = DailyMetric::query()
+        $records = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '>=', $queryStart)
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
@@ -1066,7 +1073,7 @@ class HealthMetricService
      */
     private function buildWeeklyIntensityMinutes(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -1205,7 +1212,7 @@ class HealthMetricService
      */
     private function buildWeight(?string $startDate, string $endDate): array
     {
-        $query = WeightMeasurement::query()
+        $query = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
             ->where('calendar_date', '<=', $endDate)
             ->orderBy('calendar_date')
             ->orderBy('measured_at')
@@ -1263,7 +1270,7 @@ class HealthMetricService
         $priorPoint = null;
 
         if ($startDate !== null) {
-            $priorRecord = WeightMeasurement::query()
+            $priorRecord = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
                 ->where('calendar_date', '<', $startDate)
                 ->orderByDesc('calendar_date')
                 ->orderByDesc('measured_at')
@@ -1315,7 +1322,7 @@ class HealthMetricService
      */
     private function buildVo2Max(?string $startDate, string $endDate): array
     {
-        $vo2Query = Vo2MaxRecord::query()
+        $vo2Query = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
             ->where('calendar_date', '<=', $endDate)
             ->whereIn('sport', ['running', 'cycling'])
             ->orderBy('calendar_date');
@@ -1397,7 +1404,7 @@ class HealthMetricService
         $priorPoint = null;
 
         if ($startDate !== null) {
-            $priorRunning = Vo2MaxRecord::query()
+            $priorRunning = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
                 ->where('sport', 'running')
                 ->where('calendar_date', '<', $startDate)
                 ->where(function ($subQuery): void {
@@ -1408,7 +1415,7 @@ class HealthMetricService
                 ->orderByDesc('calendar_date')
                 ->first();
 
-            $priorCycling = Vo2MaxRecord::query()
+            $priorCycling = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
                 ->where('sport', 'cycling')
                 ->where('calendar_date', '<', $startDate)
                 ->where(function ($subQuery): void {
@@ -1469,7 +1476,7 @@ class HealthMetricService
      */
     private function buildFitnessAge(?string $startDate, string $endDate): array
     {
-        $query = FitnessAgeRecord::query()
+        $query = $this->healthSources()->applyScope(FitnessAgeRecord::query(), 'fitness_age')
             ->where('calendar_date', '<=', $endDate)
             ->whereNotNull('fitness_age')
             ->orderBy('calendar_date');
@@ -1561,7 +1568,7 @@ class HealthMetricService
         $priorPoint = null;
 
         if ($startDate !== null) {
-            $priorRecord = FitnessAgeRecord::query()
+            $priorRecord = $this->healthSources()->applyScope(FitnessAgeRecord::query(), 'fitness_age')
                 ->where('calendar_date', '<', $startDate)
                 ->whereNotNull('fitness_age')
                 ->orderByDesc('calendar_date')
@@ -1641,7 +1648,7 @@ class HealthMetricService
      */
     private function buildCalories(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -1733,7 +1740,7 @@ class HealthMetricService
      */
     private function buildFloors(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->whereNotNull('floors_ascended')
             ->orderBy('calendar_date');
@@ -1815,7 +1822,7 @@ class HealthMetricService
      */
     private function buildRespirationSpo2(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->where(function ($subQuery): void {
                 $subQuery
@@ -1902,7 +1909,7 @@ class HealthMetricService
      */
     private function buildHydration(?string $startDate, string $endDate): array
     {
-        $query = DailyMetric::query()
+        $query = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', '<=', $endDate)
             ->whereNotNull('hydration_ml')
             ->orderBy('calendar_date');

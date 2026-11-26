@@ -563,3 +563,105 @@ it('keeps the power module null for cycling rides with only ftp and tss and no p
 
     expect($hub['modules']['power'])->toBeNull();
 });
+
+it('ranks PR overrides, promotes around excluded efforts, and falls back Riegel predictions to all-time efforts', function () {
+    $run2024 = Activity::factory()->create([
+        'name' => '2024 Fast 10K',
+        'sport_category' => 'running',
+        'sport_discipline' => 'road',
+        'started_at_local' => CarbonImmutable::parse('2024-05-01 07:00:00'),
+    ]);
+    $run2026Race = Activity::factory()->create([
+        'name' => '2026 Chip 5K',
+        'sport_category' => 'running',
+        'sport_discipline' => 'road',
+        'started_at_local' => CarbonImmutable::parse('2026-08-01 07:00:00'),
+    ]);
+    $run2026Glitch = Activity::factory()->create([
+        'name' => '2026 Glitch 5K',
+        'sport_category' => 'running',
+        'sport_discipline' => 'road',
+        'started_at_local' => CarbonImmutable::parse('2026-09-01 07:00:00'),
+    ]);
+
+    BestEffort::factory()->create([
+        'activity_id' => $run2024->id,
+        'sport' => 'running',
+        'distance_key' => '10k',
+        'distance_meters' => 10000.0,
+        'elapsed_seconds' => 2300.0,
+        'achieved_at' => $run2024->started_at_local,
+    ]);
+
+    $overrideEffort = BestEffort::factory()->create([
+        'activity_id' => $run2026Race->id,
+        'sport' => 'running',
+        'distance_key' => '5k',
+        'distance_meters' => 5000.0,
+        'elapsed_seconds' => 1210.0,
+        'override_seconds' => 1175.0,
+        'achieved_at' => $run2026Race->started_at_local,
+    ]);
+
+    $excludedEffort = BestEffort::factory()->excluded()->create([
+        'activity_id' => $run2026Glitch->id,
+        'sport' => 'running',
+        'distance_key' => '5k',
+        'distance_meters' => 5000.0,
+        'elapsed_seconds' => 900.0,
+        'achieved_at' => $run2026Glitch->started_at_local,
+    ]);
+
+    app(SportRegistry::class)->flushMemo();
+    $service = app(EnduranceHubService::class);
+
+    $hub = $service->hub('road_running', year: 2026);
+    $fiveK = collect($hub['modules']['pace']['bestEfforts']['distances'])->firstWhere('key', '5k');
+
+    expect($fiveK['allTimeTop3'])->toHaveCount(1)
+        ->and($fiveK['allTimeTop3'][0]['id'])->toBe($overrideEffort->id)
+        ->and($fiveK['allTimeTop3'][0]['effective_seconds'])->toBe(1175.0)
+        ->and($fiveK['excluded'])->toHaveCount(1)
+        ->and($fiveK['excluded'][0]['id'])->toBe($excludedEffort->id)
+        ->and($hub['modules']['pace']['racePredictor']['source_label'])->toBe('5K')
+        ->and($hub['modules']['pace']['racePredictor']['source_time_seconds'])->toBe(1175.0);
+
+    $overrideEffort->update(['is_excluded' => true]);
+
+    $fallbackHub = $service->hub('road_running', year: 2026);
+
+    expect($fallbackHub['modules']['pace']['racePredictor']['source_label'])->toBe('10K')
+        ->and($fallbackHub['modules']['pace']['racePredictor']['source_time_seconds'])->toBe(2300.0);
+});
+
+it('computes cycling power CTL/ATL/TSB with training_load fallback and 0.95 max 20min FTP fallback', function () {
+    WeightMeasurement::factory()->create([
+        'calendar_date' => '2026-11-20',
+        'weight_grams' => 70000,
+    ]);
+
+    Activity::factory()->roadBiking()->create([
+        'name' => 'Yesterday Threshold Ride',
+        'started_at_local' => CarbonImmutable::parse('2026-11-21 07:00:00'),
+        'avg_power' => 255.0,
+        'normalized_power' => 270.0,
+        'ftp' => null,
+        'max_20min_power' => 300.0,
+        'tss' => null,
+        'training_load' => 100.0,
+    ]);
+
+    app(SportRegistry::class)->flushMemo();
+
+    $hub = app(EnduranceHubService::class)->hub('road_cycling');
+    $power = $hub['modules']['power'];
+    $series = $power['fitnessSeries'];
+    $today = $series[count($series) - 1];
+
+    expect($power['ftp'])->toBe(285.0)
+        ->and($power['w_per_kg'])->toBe(4.07)
+        ->and($today['date'])->toBe('2026-11-22')
+        ->and($today['ctl'])->toBe(2.3)
+        ->and($today['atl'])->toBe(12.2)
+        ->and($today['tsb'])->toBe(-11.9);
+});

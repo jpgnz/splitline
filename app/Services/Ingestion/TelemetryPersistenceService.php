@@ -141,13 +141,27 @@ class TelemetryPersistenceService
 
         $isNew = $existing === null;
 
+        $canonicalName = ($existing !== null && $existing->name_override !== null && trim($existing->name_override) !== '')
+            ? $existing->name_override
+            : $dto->name;
+
+        $canonicalSportCategory = ($existing !== null && $existing->sport_category_override !== null && trim($existing->sport_category_override) !== '')
+            ? $existing->sport_category_override
+            : $dto->sportCategory;
+
+        $canonicalIsFavorite = ($existing !== null && $existing->favorite_override !== null)
+            ? $existing->favorite_override
+            : $dto->isFavorite;
+
         $attributes = [
             'provider' => $dto->provider,
             'external_id' => $dto->externalId,
             'garmin_activity_id' => $garminActivityId ?? $existing?->garmin_activity_id,
-            'name' => $dto->name,
+            'name' => $canonicalName,
+            'garmin_name' => $dto->name,
             'activity_type_key' => $dto->activityTypeKey,
-            'sport_category' => $dto->sportCategory,
+            'sport_category' => $canonicalSportCategory,
+            'garmin_sport_category' => $dto->sportCategory,
             'sport_discipline' => $dto->sportDiscipline,
             'is_indoor' => $dto->isIndoor,
             'started_at_local' => $dto->startedAtLocal,
@@ -238,7 +252,8 @@ class TelemetryPersistenceService
             'run_duration_seconds' => $dto->runDurationSeconds ?? $existing?->run_duration_seconds,
             'walk_duration_seconds' => $dto->walkDurationSeconds ?? $existing?->walk_duration_seconds,
             'idle_duration_seconds' => $dto->idleDurationSeconds ?? $existing?->idle_duration_seconds,
-            'is_favorite' => $dto->isFavorite,
+            'is_favorite' => $canonicalIsFavorite,
+            'garmin_is_favorite' => $dto->isFavorite,
             'is_pr' => $dto->isPr,
             'is_manual' => $dto->isManual,
             'raw_summary' => $dto->rawSummary ?? $existing?->raw_summary,

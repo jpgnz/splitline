@@ -42,6 +42,7 @@ import { index as heatmapIndex } from '@/routes/heatmap';
 import { index as routesIndex } from '@/routes/routes';
 import { index as settingsIndex } from '@/routes/settings';
 import { status as syncStatus, store as syncStore } from '@/routes/sync';
+import type { EnrichmentQueueSummary } from '@/types/global';
 
 type StudioNavChild = {
     key: string;
@@ -199,6 +200,18 @@ const currentPath = computed<string>(() => page.url.split('?')[0] || '/');
 
 const sync = computed(() => page.props.sync);
 
+const liveEnrichments = ref<EnrichmentQueueSummary | null>(
+    page.props.sync?.enrichments ?? null,
+);
+
+watch(
+    () => page.props.sync?.enrichments,
+    (next) => {
+        liveEnrichments.value = next ?? null;
+    },
+    { deep: true },
+);
+
 const isProviderConfigured = computed<boolean>(
     () => sync.value?.provider_configured !== false,
 );
@@ -210,6 +223,40 @@ const isSyncRunning = computed<boolean>(
 const isSyncing = computed<boolean>(
     () => isSyncPosting.value || isSyncRunning.value,
 );
+
+const activeEnrichmentJobs = computed<number>(
+    () => liveEnrichments.value?.jobs.total ?? 0,
+);
+
+const hasActiveEnrichments = computed<boolean>(
+    () => activeEnrichmentJobs.value > 0,
+);
+
+const enrichmentTooltip = computed<string | undefined>(() => {
+    const jobs = liveEnrichments.value?.jobs;
+
+    if (!jobs || jobs.total <= 0) {
+        return undefined;
+    }
+
+    const parts: string[] = [];
+
+    if (jobs.streams > 0) {
+        parts.push(`${jobs.streams} streams`);
+    }
+
+    if (jobs.weather > 0) {
+        parts.push(`${jobs.weather} weather`);
+    }
+
+    if (jobs.default > 0) {
+        parts.push(`${jobs.default} default`);
+    }
+
+    return parts.length > 0
+        ? `Background enrichment queue: ${parts.join(', ')}`
+        : `Background enrichment queue: ${jobs.total} queued`;
+});
 
 const isSyncFailed = computed<boolean>(
     () => !isSyncing.value && sync.value?.status === 'failed',
@@ -334,10 +381,29 @@ async function pollSyncStatus(): Promise<void> {
             return;
         }
 
-        const data = (await response.json()) as { status?: string };
+        const data = (await response.json()) as {
+            status?: string;
+            enrichments?: EnrichmentQueueSummary;
+        };
 
-        if (data.status !== 'running' && data.status !== 'queued') {
+        const wasSyncRunning = isSyncRunning.value;
+        const wasEnriching = hasActiveEnrichments.value;
+
+        if (data.enrichments) {
+            liveEnrichments.value = data.enrichments;
+        }
+
+        const nextSyncRunning =
+            data.status === 'running' || data.status === 'queued';
+        const nextEnriching = (data.enrichments?.jobs.total ?? 0) > 0;
+
+        if (!nextSyncRunning && !nextEnriching) {
             stopSyncPolling();
+
+            if (wasSyncRunning || wasEnriching) {
+                router.reload();
+            }
+        } else if (wasSyncRunning && !nextSyncRunning) {
             router.reload();
         }
     } catch {
@@ -348,9 +414,9 @@ async function pollSyncStatus(): Promise<void> {
 }
 
 watch(
-    isSyncRunning,
-    (running) => {
-        if (running) {
+    () => isSyncRunning.value || hasActiveEnrichments.value,
+    (active) => {
+        if (active) {
             if (pollTimer === null) {
                 pollTimer = setInterval(() => {
                     void pollSyncStatus();
@@ -613,6 +679,21 @@ watch(
                                 {{ lastSyncedLabel }}
                             </span>
                         </div>
+                        <div
+                            v-if="hasActiveEnrichments && !isSyncing"
+                            class="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-sky-600 dark:text-sky-400"
+                            :title="enrichmentTooltip"
+                        >
+                            <span
+                                class="size-1.5 animate-pulse rounded-full bg-sky-500"
+                            />
+                            <span class="truncate tabular-nums">
+                                Enriching · {{ activeEnrichmentJobs }}
+                                {{
+                                    activeEnrichmentJobs === 1 ? 'job' : 'jobs'
+                                }}
+                            </span>
+                        </div>
                         <button
                             type="button"
                             :disabled="isSyncing || !isProviderConfigured"
@@ -814,6 +895,19 @@ watch(
                         </span>
                         <span class="text-zinc-400 dark:text-zinc-500">
                             {{ lastSyncedLabel }}
+                        </span>
+                    </div>
+                    <div
+                        v-if="hasActiveEnrichments && !isSyncing"
+                        class="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-sky-600 dark:text-sky-400"
+                        :title="enrichmentTooltip"
+                    >
+                        <span
+                            class="size-1.5 animate-pulse rounded-full bg-sky-500"
+                        />
+                        <span class="truncate tabular-nums">
+                            Enriching · {{ activeEnrichmentJobs }}
+                            {{ activeEnrichmentJobs === 1 ? 'job' : 'jobs' }}
                         </span>
                     </div>
                     <button

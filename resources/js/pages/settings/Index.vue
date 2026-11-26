@@ -9,7 +9,9 @@ import {
     Clock,
     Database,
     ExternalLink,
+    HeartPulse,
     History,
+    Layers,
     RefreshCw,
     Sparkles,
     Tag,
@@ -17,13 +19,14 @@ import {
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import {
+    updateHealthSources,
     updateSports,
     updateUnits,
 } from '@/actions/App/Http/Controllers/SettingsController';
 import AppearanceTabs from '@/components/AppearanceTabs.vue';
 import { formatNumber, formatRelativeTime } from '@/lib/format';
 import { backfill as syncBackfill, status as syncStatus } from '@/routes/sync';
-import type { UnitSystem } from '@/types/global';
+import type { EnrichmentQueueSummary, UnitSystem } from '@/types/global';
 
 type FamilyMode = 'off' | 'unified' | 'split';
 
@@ -69,6 +72,28 @@ interface BackfillSummary {
     last_error: string | null;
 }
 
+interface HealthSourceProvider {
+    id: string;
+    label: string;
+    count: number;
+}
+
+interface HealthSourceDomain {
+    key: string;
+    label: string;
+    description: string;
+    configured: string;
+    resolved: string | null;
+    resolved_label: string | null;
+    has_multiple_providers: boolean;
+    providers: HealthSourceProvider[];
+}
+
+interface HealthSourcesPayload {
+    domains: HealthSourceDomain[];
+    has_multiple_providers: boolean;
+}
+
 interface SettingsProps {
     unit_system: UnitSystem;
     timezone: string;
@@ -77,11 +102,13 @@ interface SettingsProps {
         configured: boolean;
     };
     backfill: BackfillSummary;
+    enrichment_queue: EnrichmentQueueSummary;
     sports_settings: {
         config: SportsConfig;
         counts: Record<string, number>;
         hints: DiscoveryHint[];
     };
+    health_sources: HealthSourcesPayload;
 }
 
 const props = defineProps<SettingsProps>();
@@ -154,11 +181,25 @@ watch(
     { deep: true },
 );
 
+const liveEnrichmentQueue = ref<EnrichmentQueueSummary>(props.enrichment_queue);
+
+watch(
+    () => props.enrichment_queue,
+    (nextQueue) => {
+        liveEnrichmentQueue.value = nextQueue;
+    },
+    { deep: true },
+);
+
 const isAnySyncRunning = computed<boolean>(
     () =>
         isBackfillPosting.value ||
         liveSync.value.status === 'running' ||
         liveSync.value.status === 'queued',
+);
+
+const isEnrichmentQueueActive = computed<boolean>(
+    () => liveEnrichmentQueue.value.jobs.total > 0,
 );
 
 const isBackfillActive = computed<boolean>(
@@ -211,8 +252,14 @@ async function pollBackfillStatus(): Promise<void> {
             return;
         }
 
-        const data = (await response.json()) as Partial<LiveSyncSnapshot>;
+        const data = (await response.json()) as Partial<LiveSyncSnapshot> & {
+            enrichments?: EnrichmentQueueSummary;
+        };
         const nextStatus = data.status ?? 'idle';
+        const wasSyncActive =
+            liveSync.value.status === 'running' ||
+            liveSync.value.status === 'queued';
+        const wasQueueActive = liveEnrichmentQueue.value.jobs.total > 0;
 
         liveSync.value = {
             id: data.id ?? null,
@@ -224,9 +271,15 @@ async function pollBackfillStatus(): Promise<void> {
             error_message: data.error_message ?? null,
         };
 
-        if (nextStatus !== 'running' && nextStatus !== 'queued') {
-            stopBackfillPolling();
+        if (data.enrichments) {
+            liveEnrichmentQueue.value = data.enrichments;
+        }
 
+        const nextSyncActive =
+            nextStatus === 'running' || nextStatus === 'queued';
+        const nextQueueActive = (data.enrichments?.jobs.total ?? 0) > 0;
+
+        if (!nextSyncActive && wasSyncActive) {
             if (data.type === 'backfill') {
                 if (nextStatus === 'completed') {
                     toast.success('Historical backfill completed.');
@@ -241,7 +294,15 @@ async function pollBackfillStatus(): Promise<void> {
                 }
             }
 
-            router.reload({ only: ['backfill', 'sync'] });
+            router.reload({ only: ['backfill', 'sync', 'enrichment_queue'] });
+        }
+
+        if (!nextSyncActive && !nextQueueActive) {
+            stopBackfillPolling();
+
+            if (!wasSyncActive && wasQueueActive) {
+                router.reload({ only: ['enrichment_queue', 'sync'] });
+            }
         }
     } catch {
         // Transient network error while polling; retry on next tick.
@@ -253,9 +314,10 @@ async function pollBackfillStatus(): Promise<void> {
 watch(
     () =>
         liveSync.value.status === 'running' ||
-        liveSync.value.status === 'queued',
-    (running) => {
-        if (running) {
+        liveSync.value.status === 'queued' ||
+        isEnrichmentQueueActive.value,
+    (active) => {
+        if (active) {
             if (backfillPollTimer === null) {
                 backfillPollTimer = setInterval(() => {
                     void pollBackfillStatus();
@@ -654,6 +716,44 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
         },
         onError: () => {
             toast.error('Please review your sports configuration.');
+        },
+    });
+}
+
+function buildHealthSourcesMap(
+    payload: HealthSourcesPayload,
+): Record<string, string> {
+    const map: Record<string, string> = {};
+
+    for (const domain of payload.domains) {
+        map[domain.key] = domain.configured;
+    }
+
+    return map;
+}
+
+const healthSourcesForm = useForm<{ sources: Record<string, string> }>({
+    sources: buildHealthSourcesMap(props.health_sources),
+});
+
+watch(
+    () => props.health_sources,
+    (nextPayload) => {
+        const nextSources = buildHealthSourcesMap(nextPayload);
+        healthSourcesForm.sources = nextSources;
+        healthSourcesForm.defaults({ sources: { ...nextSources } });
+    },
+    { deep: true },
+);
+
+function submitHealthSources(): void {
+    healthSourcesForm.patch(updateHealthSources.url(), {
+        preserveScroll: true,
+        onSuccess: () => {
+            toast.success('Health data source preferences updated.');
+        },
+        onError: () => {
+            toast.error('Please review your health data source selections.');
         },
     });
 }
@@ -1536,7 +1636,168 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
                 </form>
             </section>
 
-            <!-- 4. Data Provider & Environment -->
+            <!-- 4. Health Data Sources -->
+            <section
+                class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
+            >
+                <form class="space-y-5" @submit.prevent="submitHealthSources">
+                    <div
+                        class="flex flex-wrap items-start justify-between gap-3"
+                    >
+                        <div class="space-y-1">
+                            <div class="flex items-center gap-2">
+                                <HeartPulse
+                                    class="size-4 text-emerald-600 dark:text-emerald-400"
+                                />
+                                <h2
+                                    class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                >
+                                    Health Data Sources
+                                </h2>
+                            </div>
+                            <p class="text-sm text-zinc-500 dark:text-zinc-400">
+                                Choose the primary telemetry source per health
+                                domain when data arrives from multiple
+                                providers. Auto selects the most recently
+                                updated provider.
+                            </p>
+                        </div>
+
+                        <span
+                            class="inline-flex items-center rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium"
+                            :class="
+                                health_sources.has_multiple_providers
+                                    ? 'bg-sky-500/12 text-sky-700 dark:text-sky-300'
+                                    : 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
+                            "
+                        >
+                            {{
+                                health_sources.has_multiple_providers
+                                    ? 'Multi-provider detected'
+                                    : 'Single-provider mode'
+                            }}
+                        </span>
+                    </div>
+
+                    <div
+                        class="divide-y divide-zinc-200/80 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/50 dark:divide-zinc-800/80 dark:border-zinc-800 dark:bg-zinc-900/35"
+                    >
+                        <div
+                            v-for="domain in health_sources.domains"
+                            :key="domain.key"
+                            class="flex flex-col gap-3 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                            <div class="min-w-0 space-y-1">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <span
+                                        class="text-sm font-medium text-zinc-900 dark:text-zinc-100"
+                                    >
+                                        {{ domain.label }}
+                                    </span>
+                                    <span
+                                        v-if="domain.resolved_label"
+                                        class="inline-flex items-center rounded-full bg-emerald-500/12 px-2 py-0.5 font-mono text-[10px] font-medium text-emerald-700 dark:text-emerald-400"
+                                    >
+                                        Active: {{ domain.resolved_label }}
+                                    </span>
+                                    <span
+                                        v-else
+                                        class="inline-flex items-center rounded-full bg-zinc-200/70 px-2 py-0.5 font-mono text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
+                                    >
+                                        No data yet
+                                    </span>
+                                </div>
+                                <p
+                                    class="text-xs text-zinc-500 dark:text-zinc-400"
+                                >
+                                    {{ domain.description }}
+                                </p>
+                                <div
+                                    v-if="domain.providers.length > 0"
+                                    class="flex flex-wrap gap-1.5 pt-0.5"
+                                >
+                                    <span
+                                        v-for="source in domain.providers"
+                                        :key="source.id"
+                                        class="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-white px-2 py-0.5 font-mono text-[10px] text-zinc-600 tabular-nums dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-300"
+                                    >
+                                        <span>{{ source.label }}</span>
+                                        <span
+                                            class="text-zinc-400 dark:text-zinc-500"
+                                        >
+                                            ({{ formatNumber(source.count) }})
+                                        </span>
+                                    </span>
+                                </div>
+                            </div>
+
+                            <div class="shrink-0 sm:w-52">
+                                <select
+                                    v-model="
+                                        healthSourcesForm.sources[domain.key]
+                                    "
+                                    :aria-label="`${domain.label} primary source`"
+                                    class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                >
+                                    <option value="auto">
+                                        Auto{{
+                                            domain.resolved_label
+                                                ? ` (${domain.resolved_label})`
+                                                : ' (Most recent)'
+                                        }}
+                                    </option>
+                                    <option
+                                        v-for="source in domain.providers"
+                                        :key="source.id"
+                                        :value="source.id"
+                                    >
+                                        {{ source.label }}
+                                    </option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="Object.keys(healthSourcesForm.errors).length > 0"
+                        class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3.5 py-2.5 text-xs text-rose-700 dark:text-rose-300"
+                    >
+                        <p
+                            v-for="(message, field) in healthSourcesForm.errors"
+                            :key="field"
+                        >
+                            {{ message }}
+                        </p>
+                    </div>
+
+                    <div
+                        class="flex items-center justify-between gap-3 border-t border-zinc-100 pt-4 dark:border-zinc-800/80"
+                    >
+                        <span
+                            class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        >
+                            {{
+                                healthSourcesForm.isDirty
+                                    ? 'Unsaved changes'
+                                    : 'Up to date'
+                            }}
+                        </span>
+                        <button
+                            type="submit"
+                            :disabled="healthSourcesForm.processing"
+                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                        >
+                            {{
+                                healthSourcesForm.processing
+                                    ? 'Saving...'
+                                    : 'Save Health Sources'
+                            }}
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- 5. Data Provider & Environment -->
             <section
                 class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
@@ -1747,9 +2008,196 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
                         </div>
                     </div>
                 </div>
+
+                <!-- Background Enrichment Queue -->
+                <div
+                    class="mt-4 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/60 p-4 dark:border-zinc-800 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex flex-wrap items-center justify-between gap-2"
+                    >
+                        <div class="space-y-0.5">
+                            <div
+                                class="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            >
+                                <Layers class="size-3" />
+                                Background Enrichment Queue
+                            </div>
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                Queued worker jobs and remaining activities
+                                awaiting stream, weather, or route matching.
+                            </p>
+                        </div>
+
+                        <span
+                            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                            :class="
+                                isEnrichmentQueueActive
+                                    ? 'bg-sky-500/12 text-sky-700 dark:text-sky-300'
+                                    : 'bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
+                            "
+                        >
+                            <span
+                                v-if="isEnrichmentQueueActive"
+                                class="size-1.5 animate-pulse rounded-full bg-sky-500"
+                            />
+                            {{
+                                isEnrichmentQueueActive
+                                    ? `Active · ${formatNumber(liveEnrichmentQueue.jobs.total)} queued`
+                                    : 'Queue Idle'
+                            }}
+                        </span>
+                    </div>
+
+                    <div class="mt-3.5 grid gap-3 sm:grid-cols-2">
+                        <!-- Queued Jobs -->
+                        <div
+                            class="rounded-lg border border-zinc-200/80 bg-white p-3 dark:border-zinc-800 dark:bg-[#141417]"
+                        >
+                            <p
+                                class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            >
+                                Queued Jobs
+                            </p>
+                            <div
+                                class="mt-2.5 grid grid-cols-3 gap-2 text-center"
+                            >
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.jobs
+                                                    .streams,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Streams
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.jobs
+                                                    .weather,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Weather
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.jobs
+                                                    .default,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Default
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Pending Activity Enrichments -->
+                        <div
+                            class="rounded-lg border border-zinc-200/80 bg-white p-3 dark:border-zinc-800 dark:bg-[#141417]"
+                        >
+                            <p
+                                class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            >
+                                Pending Enrichments
+                            </p>
+                            <div
+                                class="mt-2.5 grid grid-cols-3 gap-2 text-center"
+                            >
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.pending
+                                                    .streams,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        FIT Streams
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.pending
+                                                    .weather,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Weather
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.pending
+                                                    .routes,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Routes
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </section>
 
-            <!-- 5. About -->
+            <!-- 6. About -->
             <section
                 class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
