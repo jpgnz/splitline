@@ -1482,7 +1482,9 @@ const tabs = computed<
                 :uses-pace="usesPace"
                 :is-running="isRunning"
                 :has-ambient-weather="weather !== null"
+                :weather="weather"
                 @hover-index="activeStreamIndex = $event"
+                @select-range="highlightedRange = $event"
             />
         </div>
 
