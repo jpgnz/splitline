@@ -10,6 +10,7 @@ use App\Http\Controllers\GearController;
 use App\Http\Controllers\GoalController;
 use App\Http\Controllers\HealthMetricController;
 use App\Http\Controllers\HeatmapController;
+use App\Http\Controllers\InsightsController;
 use App\Http\Controllers\RouteController;
 use App\Http\Controllers\SegmentController;
 use App\Http\Controllers\SportsController;
@@ -21,6 +22,7 @@ Route::redirect('/dashboard', '/');
 
 Route::get('/health/{metric}', [HealthMetricController::class, 'show'])->name('health.show');
 Route::get('/fitness', [FitnessController::class, 'index'])->name('fitness.index');
+Route::get('/insights', [InsightsController::class, 'index'])->name('insights.index');
 
 Route::get('/exports/backup', [ExportController::class, 'backup'])->middleware('throttle:6,1')->name('exports.backup');
 Route::get('/exports/activities', [ExportController::class, 'activities'])->name('exports.activities');
