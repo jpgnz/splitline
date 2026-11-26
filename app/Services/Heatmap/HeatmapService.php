@@ -3,6 +3,7 @@
 namespace App\Services\Heatmap;
 
 use App\Models\Activity;
+use App\Support\DateWindowResolver;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -31,7 +32,19 @@ use Illuminate\Database\Eloquent\Builder;
  * @phpstan-type HeatmapPayload array{
  *     filters: array{
  *         sport: string,
- *         timeframe: '30d'|'this_year'|'all'
+ *         timeframe: string
+ *     },
+ *     order: 'newest_on_top'|'oldest_on_top'|'activity_type',
+ *     dateWindow: array{
+ *         range: string,
+ *         start: ?string,
+ *         end: string,
+ *         from: ?string,
+ *         to: ?string,
+ *         prevEnd: ?string,
+ *         nextEnd: ?string,
+ *         isLatest: bool,
+ *         label: string
  *     },
  *     available_sports: list<array{key: string, label: string, short_label: string, accent_hex: string}>,
  *     summary: HeatmapSummary,
@@ -42,8 +55,15 @@ class HeatmapService
 {
     private const int MAX_TRACKS = 2500;
 
+    /** @var list<string> */
+    private const array VALID_TIMEFRAMES = ['30d', '12w', '6m', '1y', 'this_year', 'all', 'custom'];
+
+    /** @var list<'newest_on_top'|'oldest_on_top'|'activity_type'> */
+    private const array VALID_ORDERS = ['newest_on_top', 'oldest_on_top', 'activity_type'];
+
     public function __construct(
         private readonly ?SportRegistry $sports = null,
+        private readonly ?DateWindowResolver $dateWindows = null,
     ) {}
 
     private function sportRegistry(): SportRegistry
@@ -51,21 +71,43 @@ class HeatmapService
         return $this->sports ?? app(SportRegistry::class);
     }
 
+    private function dateWindowResolver(): DateWindowResolver
+    {
+        return $this->dateWindows ?? app(DateWindowResolver::class);
+    }
+
     /**
      * Build the GNSS track overlay payload for the personal route heatmap.
      *
      * @return HeatmapPayload
      */
-    public function tracks(string $sport = 'all', string $timeframe = 'all'): array
-    {
+    public function tracks(
+        string $sport = 'all',
+        string $timeframe = 'all',
+        ?string $end = null,
+        ?string $from = null,
+        ?string $to = null,
+        string $order = 'newest_on_top',
+    ): array {
         $normalizedSport = $this->normalizeSport($sport);
-        $normalizedTimeframe = $this->normalizeTimeframe($timeframe);
+        $normalizedOrder = $this->normalizeOrder($order);
         $timezone = (string) config('app.display_timezone', 'UTC');
         $today = CarbonImmutable::now($timezone)->startOfDay();
 
+        $dateWindow = $this->dateWindowResolver()->resolveDayWindow(
+            $timeframe,
+            $end,
+            $from,
+            $to,
+            $today,
+            self::VALID_TIMEFRAMES,
+            'all',
+        );
+        $normalizedTimeframe = $dateWindow['range'];
+
         $baseQuery = Activity::query();
         $this->applySportFilter($baseQuery, $normalizedSport);
-        $this->applyTimeframeFilter($baseQuery, $normalizedTimeframe, $today);
+        $this->applyDateWindowFilter($baseQuery, $dateWindow);
 
         $unsyncedGnssCount = (clone $baseQuery)
             ->where('activities.is_indoor', false)
@@ -162,6 +204,8 @@ class HeatmapService
                 'sport' => $normalizedSport,
                 'timeframe' => $normalizedTimeframe,
             ],
+            'order' => $normalizedOrder,
+            'dateWindow' => $dateWindow,
             'available_sports' => $registry->filterableSports(),
             'summary' => [
                 'track_count' => count($tracks),
@@ -272,14 +316,11 @@ class HeatmapService
     }
 
     /**
-     * @return '30d'|'this_year'|'all'
+     * @return 'newest_on_top'|'oldest_on_top'|'activity_type'
      */
-    private function normalizeTimeframe(string $timeframe): string
+    private function normalizeOrder(string $order): string
     {
-        return match ($timeframe) {
-            '30d', 'this_year' => $timeframe,
-            default => 'all',
-        };
+        return in_array($order, self::VALID_ORDERS, true) ? $order : 'newest_on_top';
     }
 
     /**
@@ -296,26 +337,38 @@ class HeatmapService
 
     /**
      * @param  Builder<Activity>  $query
-     * @param  '30d'|'this_year'|'all'  $timeframe
+     * @param  array{
+     *     range: string,
+     *     start: ?string,
+     *     end: string,
+     *     from: ?string,
+     *     to: ?string
+     * }  $dateWindow
      */
-    private function applyTimeframeFilter(
+    private function applyDateWindowFilter(
         Builder $query,
-        string $timeframe,
-        CarbonImmutable $today,
+        array $dateWindow,
     ): void {
-        if ($timeframe === '30d') {
-            $query->whereBetween('activities.started_at_local', [
-                $today->subDays(29)->format('Y-m-d').' 00:00:00',
-                $today->format('Y-m-d').' 23:59:59',
-            ]);
+        if ($dateWindow['range'] === 'all') {
+            return;
+        }
+
+        if ($dateWindow['range'] === 'custom') {
+            if ($dateWindow['from'] !== null) {
+                $query->where('activities.started_at_local', '>=', $dateWindow['from'].' 00:00:00');
+            }
+
+            if ($dateWindow['to'] !== null) {
+                $query->where('activities.started_at_local', '<=', $dateWindow['to'].' 23:59:59');
+            }
 
             return;
         }
 
-        if ($timeframe === 'this_year') {
+        if ($dateWindow['start'] !== null) {
             $query->whereBetween('activities.started_at_local', [
-                $today->startOfYear()->format('Y-m-d').' 00:00:00',
-                $today->endOfYear()->format('Y-m-d').' 23:59:59',
+                $dateWindow['start'].' 00:00:00',
+                $dateWindow['end'].' 23:59:59',
             ]);
         }
     }

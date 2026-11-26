@@ -6,8 +6,10 @@ use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\Vo2MaxRecord;
 use App\Models\WeightMeasurement;
+use App\Services\Activities\AnnualActivitySummaryService;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Goals\GoalProgressService;
+use App\Support\DateWindowResolver;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -100,10 +102,7 @@ class EnduranceHubService
     private const array VALID_TERRAINS = ['all', 'flat', 'rolling', 'steep'];
 
     /** @var list<string> */
-    private const array VALID_VOLUME_RANGES = ['12w', '6m', '1y', 'all'];
-
-    /** @var list<string> */
-    private const array VALID_ZONE_RANGES = ['30d', '90d', 'all'];
+    private const array VALID_ZONE_RANGES = ['30d', '90d', 'all', 'custom'];
 
     /** @var array<int, string> */
     private const array HR_ZONE_LABELS = [
@@ -192,7 +191,14 @@ class EnduranceHubService
     public function __construct(
         private readonly SportRegistry $sports,
         private readonly GoalProgressService $goalProgressService,
+        private readonly ?DateWindowResolver $dateWindows = null,
+        private readonly AnnualActivitySummaryService $annualActivitySummaryService = new AnnualActivitySummaryService,
     ) {}
+
+    private function dateWindowResolver(): DateWindowResolver
+    {
+        return $this->dateWindows ?? app(DateWindowResolver::class);
+    }
 
     /**
      * Build the composable Endurance Hub payload for any running, cycling, or hiking sport key.
@@ -206,6 +212,12 @@ class EnduranceHubService
         string $volumeRange = '12w',
         ?int $year = null,
         string $zoneRange = '30d',
+        ?string $volumeEnd = null,
+        ?string $volumeFrom = null,
+        ?string $volumeTo = null,
+        ?string $zoneEnd = null,
+        ?string $zoneFrom = null,
+        ?string $zoneTo = null,
     ): array {
         $normalizedKey = $this->sports->normalizeKey($sportKey);
         $entry = $this->sports->get($normalizedKey);
@@ -229,8 +241,27 @@ class EnduranceHubService
         $normalizedTerrain = $showTerrainFilter
             ? $this->normalizeChoice($terrain, self::VALID_TERRAINS, 'all')
             : 'all';
-        $normalizedVolumeRange = $this->normalizeChoice($volumeRange, self::VALID_VOLUME_RANGES, '12w');
-        $normalizedZoneRange = $this->normalizeChoice($zoneRange, self::VALID_ZONE_RANGES, '30d');
+
+        $resolver = $this->dateWindowResolver();
+        $volumeWindow = $resolver->resolveWeekWindow(
+            $volumeRange,
+            $volumeEnd,
+            $volumeFrom,
+            $volumeTo,
+            $today,
+            self::MAX_ALL_RANGE_WEEKS,
+        );
+        $zoneWindow = $resolver->resolveDayWindow(
+            $zoneRange,
+            $zoneEnd,
+            $zoneFrom,
+            $zoneTo,
+            $today,
+            self::VALID_ZONE_RANGES,
+            '30d',
+        );
+        $normalizedVolumeRange = $volumeWindow['range'];
+        $normalizedZoneRange = $zoneWindow['range'];
         $selectedYear = ($year !== null && $year >= 1970 && $year <= 2100) ? $year : $currentYear;
 
         $baseQuery = $this->sports->applyScope(
@@ -326,15 +357,20 @@ class EnduranceHubService
                 'environment' => $normalizedEnvironment,
                 'terrain' => $normalizedTerrain,
                 'volumeRange' => $normalizedVolumeRange,
+                'volumeWindow' => $resolver->toPublicWindow($volumeWindow),
                 'year' => $selectedYear,
                 'zoneRange' => $normalizedZoneRange,
+                'zoneWindow' => $zoneWindow,
                 'availableYears' => $availableYears,
                 'showEnvironmentFilter' => $showEnvironmentFilter,
                 'showTerrainFilter' => $showTerrainFilter,
             ],
             'summary' => $summary,
-            'weeklyVolume' => $this->buildWeeklyVolume($baseQuery, $normalizedVolumeRange, $today, $timezone),
-            'hrZones' => $this->buildHrZones($baseQuery, $normalizedZoneRange, $today),
+            'weeklyVolume' => $this->buildWeeklyVolume($baseQuery, $volumeWindow, $today, $timezone),
+            'annualSummary' => in_array($entry['sport_category'], ['running', 'biking'], true)
+                ? $this->annualActivitySummaryService->forQuery($baseQuery, $today)
+                : null,
+            'hrZones' => $this->buildHrZones($baseQuery, $zoneWindow),
             'goals' => $this->collectSportGoals($normalizedKey),
             'milestones' => $this->buildMilestones($baseQuery, $entry['sport_category']),
             'recentActivities' => $this->buildRecentActivities($baseQuery),
@@ -515,20 +551,36 @@ class EnduranceHubService
      *     sessions: int
      * }>
      */
+    /**
+     * @param  Builder<Activity>  $baseQuery
+     * @param  array{
+     *     range: string,
+     *     startWeek: ?CarbonImmutable,
+     *     endWeek: CarbonImmutable,
+     *     queryStart: ?string,
+     *     queryEnd: string
+     * }  $volumeWindow
+     * @return list<array{
+     *     week_start: string,
+     *     label: string,
+     *     distance_meters: float,
+     *     elevation_gain: float,
+     *     duration_seconds: float,
+     *     training_load: float,
+     *     tss: float,
+     *     sessions: int
+     * }>
+     */
     private function buildWeeklyVolume(
         Builder $baseQuery,
-        string $volumeRange,
+        array $volumeWindow,
         CarbonImmutable $today,
         string $timezone,
     ): array {
-        $currentWeekStart = $today->startOfWeek(CarbonInterface::MONDAY)->startOfDay();
+        $endWeekStart = $volumeWindow['endWeek'];
 
-        if ($volumeRange === '12w') {
-            $windowStart = $currentWeekStart->subWeeks(11);
-        } elseif ($volumeRange === '6m') {
-            $windowStart = $currentWeekStart->subWeeks(25);
-        } elseif ($volumeRange === '1y') {
-            $windowStart = $currentWeekStart->subWeeks(51);
+        if ($volumeWindow['startWeek'] !== null) {
+            $windowStart = $volumeWindow['startWeek'];
         } else {
             $earliest = (clone $baseQuery)->min('started_at_local');
 
@@ -536,22 +588,22 @@ class EnduranceHubService
                 $earliestWeek = CarbonImmutable::parse($earliest, $timezone)
                     ->startOfWeek(CarbonInterface::MONDAY)
                     ->startOfDay();
-                $minAllowedWeek = $currentWeekStart->subWeeks(self::MAX_ALL_RANGE_WEEKS - 1);
+                $minAllowedWeek = $endWeekStart->subWeeks(self::MAX_ALL_RANGE_WEEKS - 1);
 
                 if ($earliestWeek->lessThan($minAllowedWeek)) {
                     $windowStart = $minAllowedWeek;
-                } elseif ($earliestWeek->greaterThan($currentWeekStart)) {
-                    $windowStart = $currentWeekStart;
+                } elseif ($earliestWeek->greaterThan($endWeekStart)) {
+                    $windowStart = $endWeekStart;
                 } else {
                     $windowStart = $earliestWeek;
                 }
             } else {
-                $windowStart = $currentWeekStart->subWeeks(11);
+                $windowStart = $endWeekStart->subWeeks(11);
             }
         }
 
-        $queryStart = $windowStart->format('Y-m-d').' 00:00:00';
-        $queryEnd = $currentWeekStart->endOfWeek(CarbonInterface::SUNDAY)->format('Y-m-d').' 23:59:59';
+        $queryStart = $volumeWindow['queryStart'] ?? $windowStart->format('Y-m-d').' 00:00:00';
+        $queryEnd = $volumeWindow['queryEnd'];
 
         $activities = (clone $baseQuery)
             ->whereBetween('started_at_local', [$queryStart, $queryEnd])
@@ -591,10 +643,11 @@ class EnduranceHubService
             $byWeek[$weekKey]['sessions']++;
         }
 
+        $includeYear = $windowStart->year !== $endWeekStart->year || $endWeekStart->year !== $today->year;
         $result = [];
         $cursor = $windowStart;
 
-        while ($cursor->lessThanOrEqualTo($currentWeekStart)) {
+        while ($cursor->lessThanOrEqualTo($endWeekStart)) {
             $weekKey = $cursor->format('Y-m-d');
             $bucket = $byWeek[$weekKey] ?? [
                 'distance_meters' => 0.0,
@@ -607,7 +660,7 @@ class EnduranceHubService
 
             $result[] = [
                 'week_start' => $weekKey,
-                'label' => $cursor->format('j M'),
+                'label' => $includeYear ? $cursor->format("j M 'y") : $cursor->format('j M'),
                 'distance_meters' => round($bucket['distance_meters'], 1),
                 'elevation_gain' => round($bucket['elevation_gain'], 1),
                 'duration_seconds' => round($bucket['duration_seconds'], 1),
@@ -624,6 +677,13 @@ class EnduranceHubService
 
     /**
      * @param  Builder<Activity>  $baseQuery
+     * @param  array{
+     *     range: string,
+     *     start: ?string,
+     *     end: string,
+     *     from: ?string,
+     *     to: ?string
+     * }  $zoneWindow
      * @return array{
      *     range: string,
      *     total_seconds: float,
@@ -631,15 +691,23 @@ class EnduranceHubService
      *     polarization: array{easy_pct: float, moderate_pct: float, hard_pct: float}
      * }
      */
-    private function buildHrZones(Builder $baseQuery, string $zoneRange, CarbonImmutable $today): array
+    private function buildHrZones(Builder $baseQuery, array $zoneWindow): array
     {
         $query = clone $baseQuery;
+        $zoneRange = $zoneWindow['range'];
 
-        if ($zoneRange !== 'all') {
-            $days = $zoneRange === '90d' ? 90 : 30;
+        if ($zoneRange === 'custom') {
+            if ($zoneWindow['from'] !== null) {
+                $query->where('started_at_local', '>=', $zoneWindow['from'].' 00:00:00');
+            }
+
+            if ($zoneWindow['to'] !== null) {
+                $query->where('started_at_local', '<=', $zoneWindow['to'].' 23:59:59');
+            }
+        } elseif ($zoneRange !== 'all' && $zoneWindow['start'] !== null) {
             $query->whereBetween('started_at_local', [
-                $today->subDays($days - 1)->format('Y-m-d').' 00:00:00',
-                $today->format('Y-m-d').' 23:59:59',
+                $zoneWindow['start'].' 00:00:00',
+                $zoneWindow['end'].' 23:59:59',
             ]);
         }
 

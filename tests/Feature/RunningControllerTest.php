@@ -57,6 +57,74 @@ it('renders the running hub page with filtered Inertia props', function () {
         );
 });
 
+it('supports stepped and custom volume and HR zone windows on endurance and general sport hubs', function () {
+    Activity::factory()->create([
+        'name' => 'Spring 15K',
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-06-18 07:00:00'),
+        'distance_meters' => 15000.0,
+        'duration_seconds' => 4200.0,
+        'hr_zone_1_seconds' => 0.0,
+        'hr_zone_2_seconds' => 3000.0,
+        'hr_zone_3_seconds' => 0.0,
+        'hr_zone_4_seconds' => 1200.0,
+        'hr_zone_5_seconds' => 0.0,
+    ]);
+
+    Activity::factory()->create([
+        'name' => 'November 5K',
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-11-18 07:00:00'),
+        'distance_meters' => 5000.0,
+        'duration_seconds' => 1400.0,
+        'hr_zone_1_seconds' => 0.0,
+        'hr_zone_2_seconds' => 1000.0,
+        'hr_zone_3_seconds' => 0.0,
+        'hr_zone_4_seconds' => 0.0,
+        'hr_zone_5_seconds' => 0.0,
+    ]);
+
+    Activity::factory()->create([
+        'name' => 'June Pool Session',
+        'sport_category' => 'swimming',
+        'activity_type_key' => 'lap_swimming',
+        'started_at_local' => CarbonImmutable::parse('2026-06-16 07:00:00'),
+        'distance_meters' => 2000.0,
+        'duration_seconds' => 2400.0,
+        'hr_zone_1_seconds' => 0.0,
+        'hr_zone_2_seconds' => 0.0,
+        'hr_zone_3_seconds' => 1800.0,
+        'hr_zone_4_seconds' => 0.0,
+        'hr_zone_5_seconds' => 0.0,
+    ]);
+
+    $this->get('/running?volumeRange=12w&volumeEnd=2026-08-30&zoneRange=custom&zoneFrom=2026-06-01&zoneTo=2026-06-30')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Sports/Endurance')
+            ->where('filters.volumeRange', '12w')
+            ->where('filters.volumeWindow.isLatest', false)
+            ->where('filters.volumeWindow.end', '2026-08-30')
+            ->where('filters.zoneRange', 'custom')
+            ->where('filters.zoneWindow.from', '2026-06-01')
+            ->where('filters.zoneWindow.to', '2026-06-30')
+            ->has('weeklyVolume', 12)
+            ->where('hrZones.total_seconds', 4200),
+        );
+
+    $this->get('/sports/swimming?volumeRange=custom&volumeFrom=2026-06-01&volumeTo=2026-06-30&zoneRange=30d&zoneEnd=2026-06-30')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Sports/General')
+            ->where('filters.volumeRange', 'custom')
+            ->where('filters.volumeWindow.from', '2026-06-01')
+            ->where('filters.volumeWindow.to', '2026-06-30')
+            ->where('filters.zoneRange', '30d')
+            ->where('filters.zoneWindow.isLatest', false)
+            ->where('hrZones.total_seconds', 1800),
+        );
+});
+
 it('updates, clears, excludes, restores, and validates best efforts', function () {
     $effort = BestEffort::factory()->create([
         'sport' => 'running',

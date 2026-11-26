@@ -15,6 +15,10 @@ import {
     X,
 } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import DateRangeControl, {
+    type DateRangePreset,
+    type DateWindowMeta,
+} from '@/components/DateRangeControl.vue';
 import {
     formatDurationClock,
     formatDurationHuman,
@@ -154,6 +158,7 @@ interface ActivitiesIndexProps {
     summary: ActivitySummary;
     activities: ActivityPaginator;
     calendar: ActivityCalendar;
+    dateWindow: DateWindowMeta;
     available_sports?: AvailableSportOption[];
 }
 
@@ -220,20 +225,17 @@ const sportPills = computed<SportFilterPill[]>(() => {
     return items;
 });
 
-const DATE_RANGES: Array<{ value: string; label: string }> = [
+const DATE_RANGES: DateRangePreset[] = [
     { value: '30d', label: '30d' },
-    { value: 'this_year', label: 'This Year' },
-    { value: 'last_year', label: 'Last Year' },
-    { value: 'all', label: 'All Time' },
-    { value: 'custom', label: 'Custom' },
+    { value: '12w', label: '12w' },
+    { value: '6m', label: '6m' },
+    { value: '1y', label: '1y' },
+    { value: 'all', label: 'All' },
 ];
 
 const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const searchInput = ref<string>(props.filters.search ?? '');
-const customRangeOpen = ref<boolean>(props.filters.range === 'custom');
-const customFrom = ref<string>(props.filters.from ?? '');
-const customTo = ref<string>(props.filters.to ?? '');
 
 let searchTimer: number | null = null;
 
@@ -243,15 +245,6 @@ watch(
         if ((next ?? '') !== searchInput.value) {
             searchInput.value = next ?? '';
         }
-    },
-);
-
-watch(
-    () => [props.filters.range, props.filters.from, props.filters.to] as const,
-    ([range, from, to]) => {
-        customRangeOpen.value = range === 'custom';
-        customFrom.value = from ?? '';
-        customTo.value = to ?? '';
     },
 );
 
@@ -297,13 +290,23 @@ function emptyWeekLabel(week: CalendarWeek): string {
     return 'Rest week';
 }
 
+type ActivityFilterOverrides = Partial<ActivityFilters> & {
+    end?: string | null;
+};
+
 function buildQuery(
-    overrides: Partial<ActivityFilters> = {},
+    overrides: ActivityFilterOverrides = {},
 ): Record<string, string | number> {
     const merged: ActivityFilters = {
         ...props.filters,
         ...overrides,
     };
+    const nextEnd =
+        overrides.end !== undefined
+            ? overrides.end
+            : props.dateWindow.isLatest
+              ? null
+              : props.dateWindow.end;
 
     const query: Record<string, string | number> = {};
 
@@ -327,6 +330,8 @@ function buildQuery(
         if (merged.to) {
             query.to = merged.to;
         }
+    } else if (merged.range !== 'all' && nextEnd) {
+        query.end = nextEnd;
     }
 
     if (merged.pr) {
@@ -357,7 +362,7 @@ function buildQuery(
 }
 
 function applyFilters(
-    overrides: Partial<ActivityFilters>,
+    overrides: ActivityFilterOverrides,
     options: { replace?: boolean } = {},
 ): void {
     router.get(activitiesIndex.url(), buildQuery(overrides), {
@@ -393,26 +398,27 @@ function selectSport(sport: string): void {
 }
 
 function selectRange(range: string): void {
-    if (range === 'custom') {
-        customRangeOpen.value = true;
-        applyFilters({
-            range: 'custom',
-            from: customFrom.value || null,
-            to: customTo.value || null,
-        });
-
-        return;
-    }
-
-    customRangeOpen.value = false;
-    applyFilters({ range, from: null, to: null });
+    applyFilters({ range, end: null, from: null, to: null });
 }
 
-function onCustomDateChange(): void {
+function stepRange(end: string | null): void {
+    applyFilters({
+        range: props.filters.range,
+        end,
+        from: null,
+        to: null,
+    });
+}
+
+function applyCustomRange(payload: {
+    from: string | null;
+    to: string | null;
+}): void {
     applyFilters({
         range: 'custom',
-        from: customFrom.value || null,
-        to: customTo.value || null,
+        end: null,
+        from: payload.from,
+        to: payload.to,
     });
 }
 
@@ -452,14 +458,12 @@ function toggleSort(column: string): void {
 
 function resetFilters(): void {
     searchInput.value = '';
-    customRangeOpen.value = false;
-    customFrom.value = '';
-    customTo.value = '';
 
     applyFilters({
         search: '',
         sport: 'all',
         range: 'all',
+        end: null,
         from: null,
         to: null,
         pr: false,
@@ -749,57 +753,29 @@ const summaryKpis = computed<
             <div
                 class="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-100 pt-3 dark:border-zinc-800/80"
             >
-                <div class="flex flex-wrap items-center gap-2">
-                    <div
-                        class="inline-flex flex-wrap rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-                    >
-                        <button
-                            v-for="preset in DATE_RANGES"
-                            :key="preset.value"
-                            type="button"
-                            class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                            :class="
-                                (preset.value === 'custom' &&
-                                    customRangeOpen) ||
-                                filters.range === preset.value
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                    : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                            "
-                            @click="selectRange(preset.value)"
-                        >
-                            {{ preset.label }}
-                        </button>
-                    </div>
-
-                    <!-- Custom Date Range Inputs -->
-                    <div
-                        v-if="customRangeOpen || filters.range === 'custom'"
-                        class="flex flex-wrap items-center gap-1.5 font-mono text-xs"
-                    >
-                        <input
-                            v-model="customFrom"
-                            type="date"
-                            aria-label="From date"
-                            class="rounded-md border border-zinc-200/90 bg-white px-2.5 py-1 font-mono text-xs text-zinc-800 tabular-nums focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-200"
-                            @change="onCustomDateChange"
-                        />
-                        <span class="text-zinc-400 dark:text-zinc-500">→</span>
-                        <input
-                            v-model="customTo"
-                            type="date"
-                            aria-label="To date"
-                            class="rounded-md border border-zinc-200/90 bg-white px-2.5 py-1 font-mono text-xs text-zinc-800 tabular-nums focus:border-zinc-400 focus:outline-none dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-200"
-                            @change="onCustomDateChange"
-                        />
-                    </div>
-                </div>
+                <DateRangeControl
+                    :presets="DATE_RANGES"
+                    :window="dateWindow"
+                    popover-align="left"
+                    aria-label="Activities date range"
+                    @select-preset="selectRange"
+                    @step="stepRange"
+                    @apply-custom="applyCustomRange"
+                />
 
                 <!-- PRs & Favorites Chips -->
                 <div class="ml-auto flex flex-wrap items-center gap-1.5">
                     <button
-                        v-if="hasActiveFilters"
                         type="button"
-                        class="inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[11px] text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+                        :disabled="!hasActiveFilters"
+                        :tabindex="hasActiveFilters ? 0 : -1"
+                        :aria-hidden="!hasActiveFilters"
+                        :class="[
+                            'inline-flex items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[11px] transition-colors',
+                            hasActiveFilters
+                                ? 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                : 'pointer-events-none opacity-0',
+                        ]"
                         @click="resetFilters"
                     >
                         <RotateCcw class="size-3" />

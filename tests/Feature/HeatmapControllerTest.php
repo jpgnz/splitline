@@ -189,3 +189,50 @@ it('queues stream sync jobs on the streams queue for all unsynced outdoor non-ma
         fn (SyncActivityStreamJob $job): bool => $job->activityId === $secondOutdoor->id,
     );
 });
+
+it('supports stepped bounded windows, custom date ranges, and layer order options on the heatmap', function () {
+    $mayRun = Activity::factory()->create([
+        'name' => 'May Harbour Run',
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-05-10 07:00:00'),
+        'streams_synced_at' => CarbonImmutable::parse('2026-05-10 08:00:00'),
+    ]);
+    ActivityStream::factory()->create([
+        'activity_id' => $mayRun->id,
+        'polyline' => [[-36.84, 174.76], [-36.85, 174.77]],
+    ]);
+
+    $novRide = Activity::factory()->roadBiking()->create([
+        'name' => 'November Waterfront Ride',
+        'started_at_local' => CarbonImmutable::parse('2026-11-18 07:00:00'),
+        'streams_synced_at' => CarbonImmutable::parse('2026-11-18 08:00:00'),
+    ]);
+    ActivityStream::factory()->create([
+        'activity_id' => $novRide->id,
+        'polyline' => [[-36.86, 174.78], [-36.87, 174.79]],
+    ]);
+
+    $this->get('/heatmap?timeframe=12w&end=2026-06-30&order=activity_type')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Heatmap/Index')
+            ->where('filters.timeframe', '12w')
+            ->where('order', 'activity_type')
+            ->where('dateWindow.end', '2026-06-30')
+            ->where('dateWindow.isLatest', false)
+            ->has('tracks', 1)
+            ->where('tracks.0.activity_id', $mayRun->id),
+        );
+
+    $this->get('/heatmap?timeframe=custom&from=2026-11-01&to=2026-11-21&order=invalid_mode')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Heatmap/Index')
+            ->where('filters.timeframe', 'custom')
+            ->where('order', 'newest_on_top')
+            ->where('dateWindow.from', '2026-11-01')
+            ->where('dateWindow.to', '2026-11-21')
+            ->has('tracks', 1)
+            ->where('tracks.0.activity_id', $novRide->id),
+        );
+});

@@ -16,10 +16,19 @@ class HealthMetricController extends Controller
         }
 
         $range = $request->query('range');
+        $end = $request->query('end');
+        $from = $request->query('from');
+        $to = $request->query('to');
 
         return Inertia::render(
             'Health/Show',
-            $service->forMetric($metric, is_string($range) ? $range : null),
+            $service->forMetric(
+                $metric,
+                is_string($range) ? $range : null,
+                is_string($end) ? $end : null,
+                is_string($from) ? $from : null,
+                is_string($to) ? $to : null,
+            ),
         );
     }
 }
