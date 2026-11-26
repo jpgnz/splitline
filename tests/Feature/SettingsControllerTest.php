@@ -1,10 +1,13 @@
 <?php
 
+use App\Jobs\GeocodeSegmentJob;
 use App\Models\Activity;
+use App\Models\Segment;
 use App\Models\SyncRun;
 use App\Support\AppSettings;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
 
 it('renders the unified settings page with units, timezone, provider status, and sports settings', function () {
@@ -274,4 +277,66 @@ it('validates the sports settings update request', function () {
             'best_efforts.trail_in_running_prs',
             'best_efforts.cycling_disciplines.0',
         ]);
+});
+
+it('updates segments minimum efforts threshold, validates bounds, and queues geocoding for newly visible climbs', function () {
+    Queue::fake([GeocodeSegmentJob::class]);
+    config([
+        'services.nominatim.enabled' => true,
+        'services.nominatim.auto_sync' => true,
+    ]);
+
+    $threeEffortClimb = Segment::factory()->climb('cat4')->create([
+        'effort_count' => 3,
+        'detection_count' => 3,
+        'geocoded_at' => null,
+    ]);
+
+    Segment::factory()->climb('cat4')->create([
+        'effort_count' => 1,
+        'detection_count' => 1,
+        'geocoded_at' => null,
+    ]);
+
+    // Default min_efforts is 5 -> 0 visible of 2 tracked
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('segments_settings.min_efforts', 5)
+            ->where('segments_settings.default_min_efforts', 5)
+            ->where('segments_settings.visible_climbs_count', 0)
+            ->where('segments_settings.tracked_climbs_count', 2),
+        );
+
+    // Invalid bounds rejected
+    $this->from(route('settings.index'))
+        ->patch(route('settings.segments.update'), ['min_efforts' => 0])
+        ->assertRedirect(route('settings.index'))
+        ->assertSessionHasErrors('min_efforts');
+
+    $this->from(route('settings.index'))
+        ->patch(route('settings.segments.update'), ['min_efforts' => 51])
+        ->assertRedirect(route('settings.index'))
+        ->assertSessionHasErrors('min_efforts');
+
+    // Lower threshold to 3 -> immediately surfaces $threeEffortClimb and queues its geocoding
+    $this->from(route('settings.index'))
+        ->patch(route('settings.segments.update'), ['min_efforts' => 3])
+        ->assertRedirect(route('settings.index'))
+        ->assertSessionHas('status', 'Auto-detected climb threshold updated to 3 efforts.');
+
+    $settings = app(AppSettings::class);
+    $settings->flushMemo();
+    expect($settings->segmentsMinEfforts())->toBe(3);
+
+    Queue::assertPushed(GeocodeSegmentJob::class, 1);
+    Queue::assertPushed(GeocodeSegmentJob::class, fn (GeocodeSegmentJob $job): bool => $job->segmentId === $threeEffortClimb->id);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('segments_settings.min_efforts', 3)
+            ->where('segments_settings.visible_climbs_count', 1)
+            ->where('segments_settings.tracked_climbs_count', 2),
+        );
 });

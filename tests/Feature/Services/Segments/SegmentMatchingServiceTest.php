@@ -280,17 +280,11 @@ it('creates a custom segment, backfills historical activities synchronously, and
         ->and($rebuiltClimb->effort_count)->toBe(2);
 });
 
-it('auto-scans streams for climbs and segments during TelemetryPersistenceService::upsertStream', function () {
+it('auto-scans streams for climbs during TelemetryPersistenceService::upsertStream and defers geocoding until min_efforts is met', function () {
     Queue::fake([GeocodeSegmentJob::class]);
     config([
         'services.nominatim.enabled' => true,
         'services.nominatim.auto_sync' => true,
-    ]);
-
-    $activity = Activity::factory()->roadBiking()->create([
-        'name' => 'Synced Climb Ride',
-        'started_at_local' => CarbonImmutable::parse('2026-11-20 07:00:00'),
-        'distance_meters' => 2500.0,
     ]);
 
     $series = makeClimbRideSeries(climbSpeedMps: 4.6, avgPower: 265);
@@ -304,13 +298,212 @@ it('auto-scans streams for climbs and segments during TelemetryPersistenceServic
         records: [],
     );
 
-    app(TelemetryPersistenceService::class)->upsertStream($activity, $streamData);
+    // First 4 rides stay below the default min_efforts (5) threshold -> climb tracked, NOT yet geocoded
+    for ($n = 1; $n <= 4; $n++) {
+        $activity = Activity::factory()->roadBiking()->create([
+            'name' => "Synced Climb Ride #{$n}",
+            'started_at_local' => CarbonImmutable::parse('2026-11-10 07:00:00')->addDays($n),
+            'distance_meters' => 2500.0,
+        ]);
 
-    expect($activity->fresh()?->segments_scanned_at)->not->toBeNull()
-        ->and(Segment::query()->climbs()->count())->toBe(1)
-        ->and(SegmentEffort::query()->where('activity_id', $activity->id)->count())->toBe(1);
+        app(TelemetryPersistenceService::class)->upsertStream($activity, $streamData);
 
-    Queue::assertPushed(GeocodeSegmentJob::class);
+        expect($activity->fresh()?->segments_scanned_at)->not->toBeNull();
+    }
+
+    expect(Segment::query()->climbs()->count())->toBe(1)
+        ->and(Segment::query()->climbs()->firstOrFail()->effort_count)->toBe(4)
+        ->and(Segment::query()->visible()->count())->toBe(0);
+
+    Queue::assertNothingPushed();
+
+    // 5th ride crosses default min_efforts (5) -> climb becomes visible and GeocodeSegmentJob is dispatched
+    $fifthRide = Activity::factory()->roadBiking()->create([
+        'name' => 'Synced Climb Ride #5',
+        'started_at_local' => CarbonImmutable::parse('2026-11-20 07:00:00'),
+        'distance_meters' => 2500.0,
+    ]);
+
+    app(TelemetryPersistenceService::class)->upsertStream($fifthRide, $streamData);
+
+    expect(Segment::query()->climbs()->firstOrFail()->effort_count)->toBe(5)
+        ->and(Segment::query()->visible()->count())->toBe(1);
+
+    Queue::assertPushed(GeocodeSegmentJob::class, 1);
+});
+
+it('deduplicates shifted-endpoint climbs along the same road while keeping genuinely longer summit extensions separate', function () {
+    $buildRoadClimb = static function (float $startOffsetM, float $climbLengthM, float $grade = 0.08): array {
+        $series = [];
+        $baseLat = -43.5700;
+        $baseLng = 172.6200;
+        $dist = 0.0;
+        $time = 0.0;
+
+        // Flat approach from 0 to startOffsetM + 200m
+        $approachSteps = (int) round(($startOffsetM + 200.0) / 20.0);
+
+        for ($i = 0; $i < $approachSteps; $i++) {
+            $pos = $i * 20.0;
+            $series[] = [
+                'time' => $time,
+                'distance' => $dist,
+                'altitude' => 30.0,
+                'speed' => 8.0,
+                'lat' => round($baseLat + ($pos / 111320.0), 6),
+                'lng' => $baseLng,
+            ];
+            $dist += 20.0;
+            $time += 2.5;
+        }
+
+        // Climb for climbLengthM
+        $climbStartPos = $startOffsetM + 200.0;
+        $climbSteps = (int) round($climbLengthM / 20.0);
+
+        for ($i = 0; $i <= $climbSteps; $i++) {
+            $d = $i * 20.0;
+            $series[] = [
+                'time' => $time,
+                'distance' => $dist,
+                'altitude' => round(30.0 + ($d * $grade), 2),
+                'speed' => 4.5,
+                'lat' => round($baseLat + (($climbStartPos + $d) / 111320.0), 6),
+                'lng' => $baseLng,
+            ];
+            $dist += 20.0;
+            $time += 4.4;
+        }
+
+        // Flat plateau
+        $topAlt = 30.0 + ($climbLengthM * $grade);
+        $topPos = $climbStartPos + $climbLengthM;
+
+        for ($i = 1; $i <= 10; $i++) {
+            $series[] = [
+                'time' => $time,
+                'distance' => $dist,
+                'altitude' => round($topAlt, 2),
+                'speed' => 8.0,
+                'lat' => round($baseLat + (($topPos + ($i * 20.0)) / 111320.0), 6),
+                'lng' => $baseLng,
+            ];
+            $dist += 20.0;
+            $time += 2.5;
+        }
+
+        return $series;
+    };
+
+    // Ride 1: 1200m climb starting at offset 0m
+    $ride1 = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-10-01 07:00:00')]);
+    ActivityStream::factory()->create(['activity_id' => $ride1->id, 'series' => $buildRoadClimb(0.0, 1200.0)]);
+
+    // Ride 2: Same climb starting 180m earlier and extending 120m further (1500m total = 25% longer, >150m start shift!)
+    // Old dedup created a duplicate here; directional polyline overlap must merge them into ONE climb.
+    $ride2 = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-10-02 07:00:00')]);
+    ActivityStream::factory()->create(['activity_id' => $ride2->id, 'series' => $buildRoadClimb(-180.0, 1500.0)]);
+
+    // Ride 3: Longer continuation going 1500m PAST the first summit (2700m total, endpoint 1500m further!)
+    // Must stay a SEPARATE climb (like Dyers Pass vs Dyers Pass + Summit Rd).
+    $ride3 = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-10-03 07:00:00')]);
+    ActivityStream::factory()->create(['activity_id' => $ride3->id, 'series' => $buildRoadClimb(0.0, 2700.0, 0.06)]);
+
+    $matcher = app(SegmentMatchingService::class);
+    $matcher->scanUnscanned();
+
+    $climbs = Segment::query()->climbs()->orderBy('distance_meters')->get();
+
+    expect($climbs)->toHaveCount(2)
+        ->and($climbs[0]->detection_count)->toBe(2) // rides 1 & 2 merged cleanly!
+        ->and($climbs[1]->detection_count)->toBe(1) // ride 3 stayed separate!
+        ->and($climbs[1]->distance_meters)->toBeGreaterThan(2400.0);
+});
+
+it('suppresses one-off partial sub-climbs and rejects flat-road barometer glitch climbs via median verification', function () {
+    $buildTrack = static function (float $climbLenM, float $grade, int $totalLenM = 1600): array {
+        $series = [];
+        $baseLat = -43.5700;
+        $baseLng = 172.6200;
+        $dist = 0.0;
+        $time = 0.0;
+        $steps = (int) round($totalLenM / 20.0);
+        $climbSteps = (int) round($climbLenM / 20.0);
+
+        for ($i = 0; $i <= $steps; $i++) {
+            $alt = $i <= $climbSteps ? (30.0 + ($i * 20.0 * $grade)) : (30.0 + ($climbLenM * $grade));
+            $series[] = [
+                'time' => $time,
+                'distance' => $dist,
+                'altitude' => round($alt, 2),
+                'speed' => 5.0,
+                'lat' => round($baseLat + ($dist / 111320.0), 6),
+                'lng' => $baseLng,
+            ];
+            $dist += 20.0;
+            $time += 4.0;
+        }
+
+        return $series;
+    };
+
+    // Scenario A: 1 ride turns off at 700m (partial fragment), while 5 rides climb the full 1500m hill.
+    $partialRide = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-09-01 07:00:00')]);
+    ActivityStream::factory()->create(['activity_id' => $partialRide->id, 'series' => $buildTrack(700.0, 0.08, 700)]);
+
+    for ($n = 1; $n <= 5; $n++) {
+        $fullRide = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-09-02 07:00:00')->addDays($n)]);
+        ActivityStream::factory()->create(['activity_id' => $fullRide->id, 'series' => $buildTrack(1500.0, 0.08, 1600)]);
+    }
+
+    // Scenario B: On a different road, 1 ride has a barometer glitch (+100m over 600m), followed by 5 flat rides (+0m).
+    $buildFlatOrGlitch = static function (bool $glitch): array {
+        $series = [];
+        $baseLat = -43.5200;
+        $baseLng = 172.5500;
+        $dist = 0.0;
+        $time = 0.0;
+
+        for ($i = 0; $i <= 40; $i++) {
+            $alt = $glitch && $i >= 5 && $i <= 35 ? (20.0 + (($i - 5) * 20.0 * 0.16)) : 20.0;
+            $series[] = [
+                'time' => $time,
+                'distance' => $dist,
+                'altitude' => round($alt, 2),
+                'speed' => 7.0,
+                'lat' => round($baseLat + ($dist / 111320.0), 6),
+                'lng' => $baseLng,
+            ];
+            $dist += 20.0;
+            $time += 3.0;
+        }
+
+        return $series;
+    };
+
+    $glitchRide = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-09-20 07:00:00')]);
+    ActivityStream::factory()->create(['activity_id' => $glitchRide->id, 'series' => $buildFlatOrGlitch(true)]);
+
+    for ($n = 1; $n <= 5; $n++) {
+        $flatRide = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-09-21 07:00:00')->addDays($n)]);
+        ActivityStream::factory()->create(['activity_id' => $flatRide->id, 'series' => $buildFlatOrGlitch(false)]);
+    }
+
+    app(SegmentMatchingService::class)->scanUnscanned();
+
+    $visible = Segment::query()->visible()->get();
+    $unverified = Segment::query()->climbs()->where('is_climb_verified', false)->get();
+    $subClimbs = Segment::query()->climbs()->where('is_sub_climb', true)->get();
+
+    // Only the real 1500m full climb is visible! Partial 700m fragment is hidden as a 1-detection sub-climb,
+    // and the flat-road barometer glitch is rejected as is_climb_verified = false.
+    expect($visible)->toHaveCount(1)
+        ->and($visible[0]->distance_meters)->toBeGreaterThan(1300.0)
+        ->and($visible[0]->effort_count)->toBe(5)
+        ->and($subClimbs)->toHaveCount(1)
+        ->and($subClimbs[0]->detection_count)->toBe(1)
+        ->and($unverified)->toHaveCount(1)
+        ->and($unverified[0]->effort_count)->toBe(6);
 });
 
 it('enriches segments via Nominatim feature tier without overwriting name_override', function () {

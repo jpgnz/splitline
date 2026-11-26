@@ -239,6 +239,7 @@ class GeocodeSyncCommand extends Command
     private function resolveTargetSegmentIds(int $limit, bool $force): array
     {
         $query = Segment::query()
+            ->visible()
             ->orderByDesc('effort_count')
             ->orderByDesc('id');
 

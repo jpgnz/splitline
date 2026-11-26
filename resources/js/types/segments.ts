@@ -47,6 +47,7 @@ export interface SegmentsIndexSummary {
     starred_count: number;
     total_efforts: number;
     unscanned_count: number;
+    min_efforts: number;
 }
 
 export interface SegmentsIndexProps {

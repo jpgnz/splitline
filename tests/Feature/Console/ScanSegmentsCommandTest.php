@@ -94,11 +94,20 @@ it('dispatches ScanActivitySegmentsJob with --queue and no-ops when zero activit
     Queue::assertPushed(ScanActivitySegmentsJob::class, fn (ScanActivitySegmentsJob $job): bool => $job->rebuild);
 });
 
-it('includes un-geocoded segments in geocode:sync --queue', function () {
+it('includes only visible un-geocoded segments in geocode:sync --queue', function () {
     Queue::fake([GeocodeSegmentJob::class]);
     config(['services.nominatim.enabled' => true]);
 
-    $segment = Segment::factory()->climb('cat4')->create([
+    $visibleSegment = Segment::factory()->climb('cat4')->create([
+        'effort_count' => 5,
+        'detection_count' => 5,
+        'geocoded_at' => null,
+    ]);
+
+    // Below default min_efforts (5) threshold -> should NOT be queued for geocoding
+    Segment::factory()->climb('cat4')->create([
+        'effort_count' => 1,
+        'detection_count' => 1,
         'geocoded_at' => null,
     ]);
 
@@ -106,5 +115,6 @@ it('includes un-geocoded segments in geocode:sync --queue', function () {
         ->expectsOutputToContain('1 segment(s)')
         ->assertSuccessful();
 
-    Queue::assertPushed(GeocodeSegmentJob::class, fn (GeocodeSegmentJob $job): bool => $job->segmentId === $segment->id && $job->queue === 'geocode');
+    Queue::assertPushed(GeocodeSegmentJob::class, 1);
+    Queue::assertPushed(GeocodeSegmentJob::class, fn (GeocodeSegmentJob $job): bool => $job->segmentId === $visibleSegment->id && $job->queue === 'geocode');
 });

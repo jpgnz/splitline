@@ -5,6 +5,7 @@ use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
 use App\Models\Segment;
 use App\Models\SegmentEffort;
+use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 use Inertia\Testing\AssertableInertia as Assert;
 
@@ -293,4 +294,62 @@ it('scans unscanned activities synchronously via POST /segments/scan', function 
 
     expect($activity->fresh()?->segments_scanned_at)->not->toBeNull()
         ->and(Segment::query()->climbs()->count())->toBe(1);
+});
+
+it('hides auto-climbs below configured min_efforts while always showing custom and starred segments', function () {
+    $activity = Activity::factory()->roadBiking()->create();
+
+    $hiddenClimb = Segment::factory()->climb('cat4')->create([
+        'name' => 'Once-Ridden Hill',
+        'effort_count' => 2,
+        'detection_count' => 2,
+    ]);
+
+    $visibleClimb = Segment::factory()->climb('cat3')->create([
+        'name' => 'Local Staple Climb',
+        'effort_count' => 6,
+        'detection_count' => 6,
+    ]);
+
+    $starredClimb = Segment::factory()->climb('cat2')->starred()->create([
+        'name' => 'Holiday Epic Climb',
+        'effort_count' => 1,
+        'detection_count' => 1,
+    ]);
+
+    $customSegment = Segment::factory()->custom()->create([
+        'name' => 'My Sprint',
+        'effort_count' => 1,
+    ]);
+
+    SegmentEffort::factory()->create(['segment_id' => $hiddenClimb->id, 'activity_id' => $activity->id, 'start_index' => 1]);
+    SegmentEffort::factory()->create(['segment_id' => $visibleClimb->id, 'activity_id' => $activity->id, 'start_index' => 20]);
+
+    // Default threshold (5): hiddenClimb excluded from /segments and activity detail
+    $this->get('/segments')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('summary.min_efforts', 5)
+            ->where('summary.total_segments', 3)
+            ->where('summary.climbs_count', 2)
+            ->has('segments', 3),
+        );
+
+    $this->get("/activities/{$activity->id}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('segmentEfforts', 1)
+            ->where('segmentEfforts.0.segment_id', $visibleClimb->id),
+        );
+
+    // Lowering threshold to 2 immediately surfaces hiddenClimb without rescanning
+    app(AppSettings::class)->set('segments_min_efforts', 2);
+
+    $this->get('/segments')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('summary.min_efforts', 2)
+            ->where('summary.total_segments', 4)
+            ->has('segments', 4),
+        );
 });

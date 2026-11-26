@@ -11,6 +11,7 @@ use App\Models\SegmentEffort;
 use App\Models\WeightMeasurement;
 use App\Services\Heatmap\HeatmapService;
 use App\Services\Routes\RouteMatchingService;
+use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
@@ -58,11 +59,27 @@ class SegmentMatchingService
 
     public const float BBOX_PADDING_DEG = 0.002;
 
-    public const float CLIMB_DEDUP_ENDPOINT_MAX_METERS = 150.0;
+    public const int CLIMB_DEDUP_SAMPLE_POINTS = 40;
 
-    public const float CLIMB_DEDUP_MAX_DISTANCE_DIFF = 0.20;
+    public const float CLIMB_DEDUP_CROSS_TRACK_MAX_METERS = 55.0;
 
-    public const float CLIMB_DEDUP_MEAN_WAYPOINT_MAX_METERS = 80.0;
+    public const float CLIMB_DEDUP_MIN_BIDIRECTIONAL_OVERLAP = 0.78;
+
+    public const float CLIMB_DEDUP_ENDPOINT_MIN_CAP_METERS = 360.0;
+
+    public const float CLIMB_DEDUP_ENDPOINT_MAX_CAP_METERS = 500.0;
+
+    public const float CLIMB_DEDUP_ENDPOINT_DISTANCE_RATIO = 0.12;
+
+    public const float CLIMB_DEDUP_FORWARD_MIN_RATIO = 0.75;
+
+    public const float CLIMB_SUBCLIMB_MIN_CONTAINMENT = 0.85;
+
+    public const float CLIMB_SUBCLIMB_PARENT_DISTANCE_RATIO = 1.15;
+
+    public const float CLIMB_VERIFY_MIN_GAIN_METERS = 21.0;
+
+    public const float CLIMB_VERIFY_MIN_GRADE_PCT = 2.1;
 
     public const float PASS_ENDPOINT_MAX_METERS = 60.0;
 
@@ -85,11 +102,17 @@ class SegmentMatchingService
     public function __construct(
         private readonly ClimbDetector $climbDetector = new ClimbDetector,
         private readonly ?HealthSourceRegistry $healthSources = null,
+        private readonly ?AppSettings $appSettings = null,
     ) {}
 
     private function healthSources(): HealthSourceRegistry
     {
         return $this->healthSources ?? app(HealthSourceRegistry::class);
+    }
+
+    private function appSettings(): AppSettings
+    {
+        return $this->appSettings ?? app(AppSettings::class);
     }
 
     /**
@@ -126,6 +149,7 @@ class SegmentMatchingService
         }
 
         $climbsCreated = 0;
+        $climbsTouched = false;
         $detectedClimbs = $this->climbDetector->detect($activity, $rawSeries);
 
         foreach ($detectedClimbs as $climb) {
@@ -144,6 +168,7 @@ class SegmentMatchingService
             }
 
             $waypoints = $this->resampleWaypoints($coords, $cumulative, self::WAYPOINT_COUNT);
+            $dedupPoly = $this->buildDedupPolyline($coords, $cumulative);
             [$minLat, $maxLat, $minLng, $maxLng] = $this->computeBoundingBox($coords);
             $start = $coords[0];
             $end = $coords[count($coords) - 1];
@@ -159,17 +184,21 @@ class SegmentMatchingService
                 bboxMaxLat: $maxLat,
                 bboxMinLng: $minLng,
                 bboxMaxLng: $maxLng,
-                waypoints: $waypoints,
+                dedupPoly: $dedupPoly['points'],
+                dedupCumDist: $dedupPoly['cum_dist'],
             );
 
             if ($existingClimb !== null) {
+                $existingClimb->increment('detection_count');
+                $climbsTouched = true;
+
                 continue;
             }
 
             $previewPoints = $this->simplifyForPreview($coords, self::PREVIEW_MAX_POINTS);
             $encodedPreview = HeatmapService::encodePolyline($previewPoints);
 
-            $segment = Segment::query()->create([
+            Segment::query()->create([
                 'name' => $this->buildInitialClimbName($activity, $climb['distance_meters'], $climb['avg_grade_pct']),
                 'name_override' => null,
                 'place_label' => null,
@@ -195,6 +224,9 @@ class SegmentMatchingService
                 'encoded_polyline' => $encodedPreview,
                 'is_starred' => false,
                 'effort_count' => 0,
+                'detection_count' => 1,
+                'is_sub_climb' => false,
+                'is_climb_verified' => true,
                 'best_elapsed_seconds' => null,
                 'best_effort_id' => null,
                 'last_effort_at' => null,
@@ -202,7 +234,7 @@ class SegmentMatchingService
             ]);
 
             $climbsCreated++;
-            $this->dispatchGeocodingIfEnabled($segment);
+            $climbsTouched = true;
         }
 
         $activityCoords = $this->pointsToLatLng($points);
@@ -219,6 +251,8 @@ class SegmentMatchingService
 
         $weightKg = $this->resolveAthleteWeightKg($activity);
         $effortsRecorded = 0;
+        /** @var array<int, true> $touchedSegmentIds */
+        $touchedSegmentIds = [];
 
         foreach ($candidates as $segment) {
             $passes = $this->findPassesInStream($segment, $points);
@@ -252,7 +286,22 @@ class SegmentMatchingService
                 ->whereNotIn('start_index', $matchedStartIndices)
                 ->delete();
 
-            $this->refreshSegmentRankings($segment);
+            $this->refreshSegmentRankings($segment, dispatchGeocode: false);
+            $touchedSegmentIds[$segment->id] = true;
+        }
+
+        if ($climbsTouched) {
+            $this->refreshSubClimbFlagsForSport($activity->sport_category);
+        }
+
+        if ($touchedSegmentIds !== []) {
+            $refreshedSegments = Segment::query()
+                ->whereIn('id', array_keys($touchedSegmentIds))
+                ->get();
+
+            foreach ($refreshedSegments as $refreshedSegment) {
+                $this->dispatchGeocodingIfEnabled($refreshedSegment);
+            }
         }
 
         $activity->update(['segments_scanned_at' => $now]);
@@ -347,6 +396,9 @@ class SegmentMatchingService
             'encoded_polyline' => $encodedPreview,
             'is_starred' => false,
             'effort_count' => 0,
+            'detection_count' => 0,
+            'is_sub_climb' => false,
+            'is_climb_verified' => true,
             'best_elapsed_seconds' => null,
             'best_effort_id' => null,
             'last_effort_at' => null,
@@ -366,7 +418,7 @@ class SegmentMatchingService
             $effortData,
         );
 
-        $this->refreshSegmentRankings($segment);
+        $segment = $this->refreshSegmentRankings($segment, dispatchGeocode: false);
         $this->dispatchGeocodingIfEnabled($segment);
 
         $historicalCandidateCount = $this->historicalCandidateQuery($segment, excludeActivityId: $activity->id)->count();
@@ -466,15 +518,15 @@ class SegmentMatchingService
             }
         }
 
-        $this->refreshSegmentRankings($segment);
+        $this->refreshSegmentRankings($segment, dispatchGeocode: false);
 
         return $effortsRecorded;
     }
 
     /**
-     * Recompute rankings (1..N by elapsed_seconds ASC), PR flag, and aggregate stats on a Segment.
+     * Recompute rankings (1..N by elapsed_seconds ASC), PR flag, climb verification, and aggregate stats on a Segment.
      */
-    public function refreshSegmentRankings(Segment $segment): Segment
+    public function refreshSegmentRankings(Segment $segment, bool $dispatchGeocode = true): Segment
     {
         $efforts = SegmentEffort::query()
             ->where('segment_id', $segment->id)
@@ -486,6 +538,7 @@ class SegmentMatchingService
         if ($efforts->isEmpty()) {
             $segment->update([
                 'effort_count' => 0,
+                'is_climb_verified' => true,
                 'best_elapsed_seconds' => null,
                 'best_effort_id' => null,
                 'last_effort_at' => null,
@@ -497,6 +550,10 @@ class SegmentMatchingService
         $rank = 0;
         $bestEffort = null;
         $lastEffortAt = null;
+        /** @var list<float> $effortGains */
+        $effortGains = [];
+        /** @var list<float> $effortGrades */
+        $effortGrades = [];
 
         foreach ($efforts as $effort) {
             $rank++;
@@ -510,6 +567,14 @@ class SegmentMatchingService
                 $lastEffortAt = $effort->started_at_local;
             }
 
+            if ($effort->elevation_gain !== null) {
+                $effortGains[] = $effort->elevation_gain;
+            }
+
+            if ($effort->avg_grade_pct !== null) {
+                $effortGrades[] = $effort->avg_grade_pct;
+            }
+
             if ($effort->rank !== $rank || $effort->is_pr !== $isPr) {
                 $effort->update([
                     'rank' => $rank,
@@ -518,14 +583,34 @@ class SegmentMatchingService
             }
         }
 
+        $isClimbVerified = true;
+
+        if (
+            $segment->kind === Segment::KIND_CLIMB
+            && count($effortGains) >= 2
+            && count($effortGrades) >= 2
+        ) {
+            $medianGain = $this->medianFloat($effortGains);
+            $medianGrade = $this->medianFloat($effortGrades);
+            $isClimbVerified = $medianGain >= self::CLIMB_VERIFY_MIN_GAIN_METERS
+                && $medianGrade >= self::CLIMB_VERIFY_MIN_GRADE_PCT;
+        }
+
         $segment->update([
             'effort_count' => $efforts->count(),
+            'is_climb_verified' => $isClimbVerified,
             'best_elapsed_seconds' => $bestEffort?->elapsed_seconds,
             'best_effort_id' => $bestEffort?->id,
             'last_effort_at' => $lastEffortAt,
         ]);
 
-        return $segment->fresh() ?? $segment;
+        $fresh = $segment->fresh() ?? $segment;
+
+        if ($dispatchGeocode) {
+            $this->dispatchGeocodingIfEnabled($fresh);
+        }
+
+        return $fresh;
     }
 
     /**
@@ -549,17 +634,19 @@ class SegmentMatchingService
     }
 
     /**
-     * Scan all outdoor streamed activities that have not yet been scanned for climbs and segments.
+     * Scan all outdoor streamed activities that have not yet been scanned for climbs and segments
+     * using a two-pass consensus pipeline:
+     *   Pass 1: Detect & cluster climbs across all unscanned activities with directional polyline dedup,
+     *           selecting median-distance canonical geometry for newly discovered climbs.
+     *   Pass 2: Match all unscanned activities against all candidate segments so every climb receives
+     *           its complete effort history, verify climb telemetry, flag nested sub-climbs, and queue
+     *           geocoding only for segments that satisfy the visibility threshold.
      *
      * @return SegmentScanRunSummary
      */
     public function scanUnscanned(int $chunkSize = 50): array
     {
         $chunkSize = max(1, $chunkSize);
-        $scanned = 0;
-        $effortsRecorded = 0;
-        $climbsCreated = 0;
-
         $ids = Activity::query()
             ->where('is_indoor', false)
             ->whereNull('segments_scanned_at')
@@ -577,6 +664,363 @@ class SegmentMatchingService
             ->pluck('id')
             ->all();
 
+        if ($ids === []) {
+            return [
+                'scanned' => 0,
+                'efforts_recorded' => 0,
+                'climbs_created' => 0,
+                'segments_total' => Segment::query()->count(),
+            ];
+        }
+
+        /**
+         * Preload existing climb segments into an in-memory spatial index by sport_category.
+         *
+         * @var array<string, list<array{
+         *     segment: Segment,
+         *     distance_meters: float,
+         *     start_lat: float,
+         *     start_lng: float,
+         *     end_lat: float,
+         *     end_lng: float,
+         *     bbox_min_lat: float,
+         *     bbox_max_lat: float,
+         *     bbox_min_lng: float,
+         *     bbox_max_lng: float,
+         *     dedup_poly: list<array{0: float, 1: float}>,
+         *     dedup_cum: list<float>,
+         *     new_detections: int
+         * }>> $existingBySport
+         */
+        $existingBySport = [];
+
+        foreach (Segment::query()->climbs()->orderBy('id')->get() as $existingClimb) {
+            $dedup = $this->segmentDedupPolyline($existingClimb);
+
+            $existingBySport[$existingClimb->sport_category][] = [
+                'segment' => $existingClimb,
+                'distance_meters' => $existingClimb->distance_meters,
+                'start_lat' => $existingClimb->start_lat,
+                'start_lng' => $existingClimb->start_lng,
+                'end_lat' => $existingClimb->end_lat,
+                'end_lng' => $existingClimb->end_lng,
+                'bbox_min_lat' => $existingClimb->bbox_min_lat,
+                'bbox_max_lat' => $existingClimb->bbox_max_lat,
+                'bbox_min_lng' => $existingClimb->bbox_min_lng,
+                'bbox_max_lng' => $existingClimb->bbox_max_lng,
+                'dedup_poly' => $dedup['points'],
+                'dedup_cum' => $dedup['cum_dist'],
+                'new_detections' => 0,
+            ];
+        }
+
+        /**
+         * Newly discovered climb clusters accumulated during Pass 1 before choosing consensus geometry.
+         *
+         * @var array<string, list<array{
+         *     rep_distance: float,
+         *     rep_start_lat: float,
+         *     rep_start_lng: float,
+         *     rep_end_lat: float,
+         *     rep_end_lng: float,
+         *     rep_bbox_min_lat: float,
+         *     rep_bbox_max_lat: float,
+         *     rep_bbox_min_lng: float,
+         *     rep_bbox_max_lng: float,
+         *     rep_dedup_poly: list<array{0: float, 1: float}>,
+         *     rep_dedup_cum: list<float>,
+         *     observations: list<array{
+         *         activity_id: int,
+         *         activity_location: ?string,
+         *         climb: array{
+         *             distance_meters: float,
+         *             elevation_gain: float,
+         *             elevation_loss: float,
+         *             avg_grade_pct: float,
+         *             max_grade_pct: float,
+         *             fiets_score: float,
+         *             climb_category: string
+         *         },
+         *         start_lat: float,
+         *         start_lng: float,
+         *         end_lat: float,
+         *         end_lng: float,
+         *         bbox_min_lat: float,
+         *         bbox_max_lat: float,
+         *         bbox_min_lng: float,
+         *         bbox_max_lng: float,
+         *         waypoints: list<array{0: float, 1: float}>,
+         *         encoded_polyline: string
+         *     }>
+         * }>> $newClustersBySport
+         */
+        $newClustersBySport = [];
+        /** @var array<string, true> $sportsTouched */
+        $sportsTouched = [];
+
+        // Pass 1: Detect and cluster climbs across all unscanned activities.
+        foreach (array_chunk($ids, $chunkSize) as $idChunk) {
+            $activities = Activity::query()
+                ->with('stream')
+                ->whereIn('id', $idChunk)
+                ->orderBy('started_at_local')
+                ->orderBy('id')
+                ->get();
+
+            foreach ($activities as $activity) {
+                $stream = $activity->stream;
+
+                if ($stream === null || ! is_array($stream->series) || $stream->series === []) {
+                    continue;
+                }
+
+                $rawSeries = $stream->series;
+                $points = $this->extractGnssPoints($rawSeries);
+
+                if (count($points) < self::CUSTOM_MIN_GNSS_POINTS) {
+                    continue;
+                }
+
+                $detectedClimbs = $this->climbDetector->detect($activity, $rawSeries);
+
+                if ($detectedClimbs === []) {
+                    continue;
+                }
+
+                $sport = $activity->sport_category;
+                $sportsTouched[$sport] = true;
+
+                foreach ($detectedClimbs as $climb) {
+                    $slicePoints = $this->sliceGnssPointsByOrigIndex($points, $climb['start_index'], $climb['end_index']);
+
+                    if (count($slicePoints) < self::CUSTOM_MIN_GNSS_POINTS) {
+                        continue;
+                    }
+
+                    $coords = $this->pointsToLatLng($slicePoints);
+                    $cumulative = $this->computeCumulativeDistances($coords);
+                    $totalPolyDist = $cumulative[count($cumulative) - 1];
+
+                    if ($totalPolyDist <= 0.0) {
+                        continue;
+                    }
+
+                    $dedup = $this->buildDedupPolyline($coords, $cumulative);
+                    [$minLat, $maxLat, $minLng, $maxLng] = $this->computeBoundingBox($coords);
+                    $start = $coords[0];
+                    $end = $coords[count($coords) - 1];
+
+                    // Check existing persisted climbs first.
+                    $bestExistingIdx = null;
+                    $bestExistingScore = -1.0;
+
+                    foreach ($existingBySport[$sport] ?? [] as $idx => $existingEntry) {
+                        if (
+                            $existingEntry['bbox_max_lat'] < $minLat - self::BBOX_PADDING_DEG
+                            || $existingEntry['bbox_min_lat'] > $maxLat + self::BBOX_PADDING_DEG
+                            || $existingEntry['bbox_max_lng'] < $minLng - self::BBOX_PADDING_DEG
+                            || $existingEntry['bbox_min_lng'] > $maxLng + self::BBOX_PADDING_DEG
+                        ) {
+                            continue;
+                        }
+
+                        $score = $this->climbOverlapScore(
+                            distanceA: $climb['distance_meters'],
+                            startLatA: $start[0],
+                            startLngA: $start[1],
+                            endLatA: $end[0],
+                            endLngA: $end[1],
+                            polyA: $dedup['points'],
+                            cumA: $dedup['cum_dist'],
+                            distanceB: $existingEntry['distance_meters'],
+                            startLatB: $existingEntry['start_lat'],
+                            startLngB: $existingEntry['start_lng'],
+                            endLatB: $existingEntry['end_lat'],
+                            endLngB: $existingEntry['end_lng'],
+                            polyB: $existingEntry['dedup_poly'],
+                            cumB: $existingEntry['dedup_cum'],
+                        );
+
+                        if ($score !== null && $score > $bestExistingScore) {
+                            $bestExistingScore = $score;
+                            $bestExistingIdx = $idx;
+                        }
+                    }
+
+                    if ($bestExistingIdx !== null) {
+                        $existingBySport[$sport][$bestExistingIdx]['new_detections']++;
+
+                        continue;
+                    }
+
+                    // Check newly discovered in-batch clusters next.
+                    $waypoints = $this->resampleWaypoints($coords, $cumulative, self::WAYPOINT_COUNT);
+                    $previewPoints = $this->simplifyForPreview($coords, self::PREVIEW_MAX_POINTS);
+                    $encodedPreview = HeatmapService::encodePolyline($previewPoints);
+
+                    $observation = [
+                        'activity_id' => $activity->id,
+                        'activity_location' => $activity->location_name,
+                        'climb' => [
+                            'distance_meters' => $climb['distance_meters'],
+                            'elevation_gain' => $climb['elevation_gain'],
+                            'elevation_loss' => $climb['elevation_loss'],
+                            'avg_grade_pct' => $climb['avg_grade_pct'],
+                            'max_grade_pct' => $climb['max_grade_pct'],
+                            'fiets_score' => $climb['fiets_score'],
+                            'climb_category' => $climb['climb_category'],
+                        ],
+                        'start_lat' => $start[0],
+                        'start_lng' => $start[1],
+                        'end_lat' => $end[0],
+                        'end_lng' => $end[1],
+                        'bbox_min_lat' => $minLat,
+                        'bbox_max_lat' => $maxLat,
+                        'bbox_min_lng' => $minLng,
+                        'bbox_max_lng' => $maxLng,
+                        'waypoints' => $waypoints,
+                        'encoded_polyline' => $encodedPreview,
+                    ];
+
+                    $bestNewIdx = null;
+                    $bestNewScore = -1.0;
+
+                    foreach ($newClustersBySport[$sport] ?? [] as $idx => $cluster) {
+                        if (
+                            $cluster['rep_bbox_max_lat'] < $minLat - self::BBOX_PADDING_DEG
+                            || $cluster['rep_bbox_min_lat'] > $maxLat + self::BBOX_PADDING_DEG
+                            || $cluster['rep_bbox_max_lng'] < $minLng - self::BBOX_PADDING_DEG
+                            || $cluster['rep_bbox_min_lng'] > $maxLng + self::BBOX_PADDING_DEG
+                        ) {
+                            continue;
+                        }
+
+                        $score = $this->climbOverlapScore(
+                            distanceA: $climb['distance_meters'],
+                            startLatA: $start[0],
+                            startLngA: $start[1],
+                            endLatA: $end[0],
+                            endLngA: $end[1],
+                            polyA: $dedup['points'],
+                            cumA: $dedup['cum_dist'],
+                            distanceB: $cluster['rep_distance'],
+                            startLatB: $cluster['rep_start_lat'],
+                            startLngB: $cluster['rep_start_lng'],
+                            endLatB: $cluster['rep_end_lat'],
+                            endLngB: $cluster['rep_end_lng'],
+                            polyB: $cluster['rep_dedup_poly'],
+                            cumB: $cluster['rep_dedup_cum'],
+                        );
+
+                        if ($score !== null && $score > $bestNewScore) {
+                            $bestNewScore = $score;
+                            $bestNewIdx = $idx;
+                        }
+                    }
+
+                    if ($bestNewIdx !== null) {
+                        $newClustersBySport[$sport][$bestNewIdx]['observations'][] = $observation;
+
+                        continue;
+                    }
+
+                    $newClustersBySport[$sport][] = [
+                        'rep_distance' => $climb['distance_meters'],
+                        'rep_start_lat' => $start[0],
+                        'rep_start_lng' => $start[1],
+                        'rep_end_lat' => $end[0],
+                        'rep_end_lng' => $end[1],
+                        'rep_bbox_min_lat' => $minLat,
+                        'rep_bbox_max_lat' => $maxLat,
+                        'rep_bbox_min_lng' => $minLng,
+                        'rep_bbox_max_lng' => $maxLng,
+                        'rep_dedup_poly' => $dedup['points'],
+                        'rep_dedup_cum' => $dedup['cum_dist'],
+                        'observations' => [$observation],
+                    ];
+                }
+            }
+        }
+
+        // Persist detection count increments on existing climbs.
+        foreach ($existingBySport as $entries) {
+            foreach ($entries as $entry) {
+                if ($entry['new_detections'] > 0) {
+                    $entry['segment']->increment('detection_count', $entry['new_detections']);
+                }
+            }
+        }
+
+        // Consolidate newly discovered clusters after medoid selection so seed-order variance
+        // never leaves two overlapping canonical climbs in the same sport.
+        foreach ($newClustersBySport as $sport => $clusters) {
+            if (count($clusters) <= 1) {
+                continue;
+            }
+
+            $newClustersBySport[$sport] = $this->consolidateNewClusters($clusters);
+        }
+
+        // Persist newly discovered climb clusters using medoid-endpoint consensus geometry.
+        $climbsCreated = 0;
+
+        foreach ($newClustersBySport as $sport => $clusters) {
+            foreach ($clusters as $cluster) {
+                $observations = $cluster['observations'];
+                $canonical = $this->selectConsensusObservation($observations);
+                $climb = $canonical['climb'];
+
+                Segment::query()->create([
+                    'name' => $this->buildInitialClimbNameFromLocation(
+                        $canonical['activity_location'],
+                        $climb['distance_meters'],
+                        $climb['avg_grade_pct'],
+                    ),
+                    'name_override' => null,
+                    'place_label' => null,
+                    'kind' => Segment::KIND_CLIMB,
+                    'sport_category' => $sport,
+                    'source_activity_id' => $canonical['activity_id'],
+                    'climb_category' => $climb['climb_category'],
+                    'distance_meters' => $climb['distance_meters'],
+                    'elevation_gain' => $climb['elevation_gain'],
+                    'elevation_loss' => $climb['elevation_loss'],
+                    'avg_grade_pct' => $climb['avg_grade_pct'],
+                    'max_grade_pct' => $climb['max_grade_pct'],
+                    'fiets_score' => $climb['fiets_score'],
+                    'start_lat' => $canonical['start_lat'],
+                    'start_lng' => $canonical['start_lng'],
+                    'end_lat' => $canonical['end_lat'],
+                    'end_lng' => $canonical['end_lng'],
+                    'bbox_min_lat' => $canonical['bbox_min_lat'],
+                    'bbox_max_lat' => $canonical['bbox_max_lat'],
+                    'bbox_min_lng' => $canonical['bbox_min_lng'],
+                    'bbox_max_lng' => $canonical['bbox_max_lng'],
+                    'waypoints' => $canonical['waypoints'],
+                    'encoded_polyline' => $canonical['encoded_polyline'],
+                    'is_starred' => false,
+                    'effort_count' => 0,
+                    'detection_count' => count($observations),
+                    'is_sub_climb' => false,
+                    'is_climb_verified' => true,
+                    'best_elapsed_seconds' => null,
+                    'best_effort_id' => null,
+                    'last_effort_at' => null,
+                    'geocoded_at' => null,
+                ]);
+
+                $climbsCreated++;
+            }
+        }
+
+        // Pass 2: Match all unscanned activities against all segments so every climb gets complete history.
+        $allSegmentsBySport = Segment::query()->orderBy('id')->get()->groupBy('sport_category');
+        $now = CarbonImmutable::now('UTC');
+        $scanned = 0;
+        $effortsRecorded = 0;
+        /** @var array<int, true> $touchedSegmentIds */
+        $touchedSegmentIds = [];
+
         foreach (array_chunk($ids, $chunkSize) as $idChunk) {
             $activities = Activity::query()
                 ->with('stream')
@@ -587,9 +1031,106 @@ class SegmentMatchingService
 
             foreach ($activities as $activity) {
                 $scanned++;
-                $summary = $this->scanActivity($activity, $activity->stream);
-                $effortsRecorded += $summary['efforts_recorded'];
-                $climbsCreated += $summary['climbs_created'];
+                $stream = $activity->stream;
+
+                if ($stream === null || ! is_array($stream->series) || $stream->series === []) {
+                    $activity->update(['segments_scanned_at' => $now]);
+
+                    continue;
+                }
+
+                $points = $this->extractGnssPoints($stream->series);
+
+                if (count($points) < self::CUSTOM_MIN_GNSS_POINTS) {
+                    $activity->update(['segments_scanned_at' => $now]);
+
+                    continue;
+                }
+
+                $sportSegments = $allSegmentsBySport->get($activity->sport_category);
+
+                if ($sportSegments !== null && $sportSegments->isNotEmpty()) {
+                    $activityCoords = $this->pointsToLatLng($points);
+                    [$actMinLat, $actMaxLat, $actMinLng, $actMaxLng] = $this->computeBoundingBox($activityCoords);
+                    $weightKg = $this->resolveAthleteWeightKg($activity);
+
+                    foreach ($sportSegments as $segment) {
+                        if (
+                            $segment->bbox_max_lat < $actMinLat - self::BBOX_PADDING_DEG
+                            || $segment->bbox_min_lat > $actMaxLat + self::BBOX_PADDING_DEG
+                            || $segment->bbox_max_lng < $actMinLng - self::BBOX_PADDING_DEG
+                            || $segment->bbox_min_lng > $actMaxLng + self::BBOX_PADDING_DEG
+                        ) {
+                            continue;
+                        }
+
+                        $passes = $this->findPassesInStream($segment, $points);
+
+                        if ($passes === []) {
+                            continue;
+                        }
+
+                        /** @var list<int> $matchedStartIndices */
+                        $matchedStartIndices = [];
+
+                        foreach ($passes as $pass) {
+                            $effortData = $this->computeEffortMetrics($activity, $points, $pass['entry_idx'], $pass['exit_idx'], $weightKg);
+                            $matchedStartIndices[] = $effortData['start_index'];
+
+                            SegmentEffort::query()->updateOrCreate(
+                                [
+                                    'segment_id' => $segment->id,
+                                    'activity_id' => $activity->id,
+                                    'start_index' => $effortData['start_index'],
+                                ],
+                                $effortData,
+                            );
+
+                            $effortsRecorded++;
+                        }
+
+                        SegmentEffort::query()
+                            ->where('segment_id', $segment->id)
+                            ->where('activity_id', $activity->id)
+                            ->whereNotIn('start_index', $matchedStartIndices)
+                            ->delete();
+
+                        $touchedSegmentIds[$segment->id] = true;
+                        $sportsTouched[$segment->sport_category] = true;
+                    }
+                }
+
+                $activity->update(['segments_scanned_at' => $now]);
+            }
+        }
+
+        // Refresh rankings and climb verification on all touched segments.
+        if ($touchedSegmentIds !== []) {
+            $touchedSegments = Segment::query()
+                ->whereIn('id', array_keys($touchedSegmentIds))
+                ->orderBy('id')
+                ->get();
+
+            foreach ($touchedSegments as $segment) {
+                $this->refreshSegmentRankings($segment, dispatchGeocode: false);
+            }
+        }
+
+        // Update sub-climb flags once effort_count and is_climb_verified are final.
+        foreach (array_keys($sportsTouched) as $sport) {
+            $this->refreshSubClimbFlagsForSport($sport);
+        }
+
+        // Dispatch geocoding only for touched segments that now satisfy visibility rules.
+        if ($touchedSegmentIds !== []) {
+            $visibleReady = Segment::query()
+                ->whereIn('id', array_keys($touchedSegmentIds))
+                ->whereNull('geocoded_at')
+                ->orderBy('id')
+                ->get();
+
+            foreach ($visibleReady as $segment) {
+                $this->dispatchGeocodingIfEnabled($segment);
             }
         }
 
@@ -616,7 +1157,8 @@ class SegmentMatchingService
          *     start_lng: float,
          *     end_lat: float,
          *     end_lng: float,
-         *     waypoints: list<array{0: float, 1: float}>,
+         *     dedup_poly: list<array{0: float, 1: float}>,
+         *     dedup_cum: list<float>,
          *     name_override: ?string,
          *     is_starred: bool
          * }> $preservedClimbs
@@ -640,6 +1182,7 @@ class SegmentMatchingService
             $override = is_string($climb->name_override) && trim($climb->name_override) !== ''
                 ? trim($climb->name_override)
                 : null;
+            $dedup = $this->segmentDedupPolyline($climb);
 
             $preservedClimbs[] = [
                 'sport_category' => $climb->sport_category,
@@ -648,7 +1191,8 @@ class SegmentMatchingService
                 'start_lng' => $climb->start_lng,
                 'end_lat' => $climb->end_lat,
                 'end_lng' => $climb->end_lng,
-                'waypoints' => $climb->waypoints,
+                'dedup_poly' => $dedup['points'],
+                'dedup_cum' => $dedup['cum_dist'],
                 'name_override' => $override,
                 'is_starred' => $climb->is_starred,
             ];
@@ -1067,7 +1611,10 @@ class SegmentMatchingService
     }
 
     /**
-     * @param  list<array{0: float, 1: float}>  $waypoints
+     * Find the closest matching persisted climb segment using directional distance-weighted polyline overlap.
+     *
+     * @param  list<array{0: float, 1: float}>  $dedupPoly
+     * @param  list<float>  $dedupCumDist
      */
     private function findMatchingClimbSegment(
         string $sportCategory,
@@ -1080,7 +1627,8 @@ class SegmentMatchingService
         float $bboxMaxLat,
         float $bboxMinLng,
         float $bboxMaxLng,
-        array $waypoints,
+        array $dedupPoly,
+        array $dedupCumDist,
     ): ?Segment {
         $candidates = Segment::query()
             ->climbs()
@@ -1093,26 +1641,30 @@ class SegmentMatchingService
             ->get();
 
         $bestMatch = null;
-        $bestMean = INF;
+        $bestScore = -1.0;
 
         foreach ($candidates as $candidate) {
-            $mean = $this->climbSimilarityMeanDistance(
+            $candDedup = $this->segmentDedupPolyline($candidate);
+
+            $score = $this->climbOverlapScore(
                 distanceA: $distanceMeters,
                 startLatA: $startLat,
                 startLngA: $startLng,
                 endLatA: $endLat,
                 endLngA: $endLng,
-                waypointsA: $waypoints,
+                polyA: $dedupPoly,
+                cumA: $dedupCumDist,
                 distanceB: $candidate->distance_meters,
                 startLatB: $candidate->start_lat,
                 startLngB: $candidate->start_lng,
                 endLatB: $candidate->end_lat,
                 endLngB: $candidate->end_lng,
-                waypointsB: $candidate->waypoints,
+                polyB: $candDedup['points'],
+                cumB: $candDedup['cum_dist'],
             );
 
-            if ($mean !== null && $mean < $bestMean) {
-                $bestMean = $mean;
+            if ($score !== null && $score > $bestScore) {
+                $bestScore = $score;
                 $bestMatch = $candidate;
             }
         }
@@ -1121,52 +1673,531 @@ class SegmentMatchingService
     }
 
     /**
-     * @param  list<array{0: float, 1: float}>  $waypointsA
-     * @param  list<array{0: float, 1: float}>  $waypointsB
+     * Score whether two climbs represent the same hill using proportional endpoint caps
+     * and bidirectional directional polyline overlap. Returns null when distinct.
+     *
+     * @param  list<array{0: float, 1: float}>  $polyA
+     * @param  list<float>  $cumA
+     * @param  list<array{0: float, 1: float}>  $polyB
+     * @param  list<float>  $cumB
      */
-    private function climbSimilarityMeanDistance(
+    private function climbOverlapScore(
         float $distanceA,
         float $startLatA,
         float $startLngA,
         float $endLatA,
         float $endLngA,
-        array $waypointsA,
+        array $polyA,
+        array $cumA,
         float $distanceB,
         float $startLatB,
         float $startLngB,
         float $endLatB,
         float $endLngB,
-        array $waypointsB,
+        array $polyB,
+        array $cumB,
     ): ?float {
+        $maxDist = max($distanceA, $distanceB);
+
+        if ($maxDist <= 0.0 || count($polyA) < 2 || count($polyB) < 2) {
+            return null;
+        }
+
+        $endpointCap = min(
+            self::CLIMB_DEDUP_ENDPOINT_MAX_CAP_METERS,
+            max(
+                self::CLIMB_DEDUP_ENDPOINT_MIN_CAP_METERS,
+                $maxDist * self::CLIMB_DEDUP_ENDPOINT_DISTANCE_RATIO,
+            ),
+        );
+
         $startDist = RouteMatchingService::haversineMeters($startLatA, $startLngA, $startLatB, $startLngB);
 
-        if ($startDist > self::CLIMB_DEDUP_ENDPOINT_MAX_METERS) {
+        if ($startDist > $endpointCap) {
             return null;
         }
 
         $endDist = RouteMatchingService::haversineMeters($endLatA, $endLngA, $endLatB, $endLngB);
 
-        if ($endDist > self::CLIMB_DEDUP_ENDPOINT_MAX_METERS) {
+        if ($endDist > $endpointCap) {
             return null;
         }
 
-        $maxDist = max($distanceA, $distanceB);
+        $overlap = $this->computeDirectionalPolylineOverlap($polyA, $cumA, $polyB, $cumB);
 
-        if ($maxDist <= 0.0 || (abs($distanceA - $distanceB) / $maxDist) > self::CLIMB_DEDUP_MAX_DISTANCE_DIFF) {
+        if ($overlap['min'] < self::CLIMB_DEDUP_MIN_BIDIRECTIONAL_OVERLAP) {
             return null;
         }
 
-        if (count($waypointsA) !== self::WAYPOINT_COUNT || count($waypointsB) !== self::WAYPOINT_COUNT) {
-            return null;
+        return $overlap['min'];
+    }
+
+    /**
+     * Resample a polyline into evenly-spaced points by cumulative distance for directional overlap checks.
+     *
+     * @param  list<array{0: float, 1: float}>  $coords
+     * @param  list<float>  $cumulativeDistances
+     * @return array{points: list<array{0: float, 1: float}>, cum_dist: list<float>}
+     */
+    private function buildDedupPolyline(array $coords, array $cumulativeDistances): array
+    {
+        if (count($coords) < 2 || $cumulativeDistances[count($cumulativeDistances) - 1] <= 0.0) {
+            return ['points' => $coords, 'cum_dist' => $cumulativeDistances];
         }
 
-        [$meanDist] = $this->compareWaypoints($waypointsA, $waypointsB);
+        $resampled = $this->resampleWaypoints($coords, $cumulativeDistances, self::CLIMB_DEDUP_SAMPLE_POINTS);
 
-        if ($meanDist > self::CLIMB_DEDUP_MEAN_WAYPOINT_MAX_METERS) {
-            return null;
+        return [
+            'points' => $resampled,
+            'cum_dist' => $this->computeCumulativeDistances($resampled),
+        ];
+    }
+
+    /**
+     * Build the evenly-spaced dedup polyline for a persisted Segment (preferring dense encoded_polyline over 20 waypoints).
+     *
+     * @return array{points: list<array{0: float, 1: float}>, cum_dist: list<float>}
+     */
+    private function segmentDedupPolyline(Segment $segment): array
+    {
+        $coords = [];
+
+        if (is_string($segment->encoded_polyline) && $segment->encoded_polyline !== '') {
+            $decoded = HeatmapService::decodePolyline($segment->encoded_polyline);
+
+            if (count($decoded) >= 2) {
+                $coords = $decoded;
+            }
         }
 
-        return $meanDist;
+        if (count($coords) < 2) {
+            $coords = $segment->waypoints;
+        }
+
+        if (count($coords) < 2) {
+            return ['points' => [], 'cum_dist' => []];
+        }
+
+        $cum = $this->computeCumulativeDistances($coords);
+
+        return $this->buildDedupPolyline($coords, $cum);
+    }
+
+    /**
+     * Compute directional point-to-segment polyline coverage in both directions.
+     * Rejects opposite-direction passes (e.g. descent vs ascent on the same road).
+     *
+     * @param  list<array{0: float, 1: float}>  $polyA
+     * @param  list<float>  $cumA
+     * @param  list<array{0: float, 1: float}>  $polyB
+     * @param  list<float>  $cumB
+     * @return array{a_on_b: float, b_on_a: float, min: float, max: float}
+     */
+    public function computeDirectionalPolylineOverlap(
+        array $polyA,
+        array $cumA,
+        array $polyB,
+        array $cumB,
+        float $toleranceMeters = self::CLIMB_DEDUP_CROSS_TRACK_MAX_METERS,
+    ): array {
+        $countA = count($polyA);
+        $countB = count($polyB);
+
+        if ($countA < 2 || $countB < 2) {
+            return ['a_on_b' => 0.0, 'b_on_a' => 0.0, 'min' => 0.0, 'max' => 0.0];
+        }
+
+        $covA = $this->directionalCoverage($polyA, $polyB, $cumB, $toleranceMeters);
+
+        if ($covA <= 0.0) {
+            return ['a_on_b' => 0.0, 'b_on_a' => 0.0, 'min' => 0.0, 'max' => 0.0];
+        }
+
+        $covB = $this->directionalCoverage($polyB, $polyA, $cumA, $toleranceMeters);
+
+        if ($covB <= 0.0) {
+            return ['a_on_b' => 0.0, 'b_on_a' => 0.0, 'min' => 0.0, 'max' => 0.0];
+        }
+
+        return [
+            'a_on_b' => $covA,
+            'b_on_a' => $covB,
+            'min' => min($covA, $covB),
+            'max' => max($covA, $covB),
+        ];
+    }
+
+    /**
+     * Fraction of `$source` points lying within `$toleranceMeters` of a same-direction segment of `$target`.
+     * Uses tangent dot-product alignment so tight MTB switchbacks match cleanly while opposite-direction
+     * descents on the same road are rejected.
+     *
+     * @param  list<array{0: float, 1: float}>  $source
+     * @param  list<array{0: float, 1: float}>  $target
+     * @param  list<float>  $targetCumDist
+     */
+    private function directionalCoverage(
+        array $source,
+        array $target,
+        array $targetCumDist,
+        float $toleranceMeters,
+    ): float {
+        $sourceCount = count($source);
+        $targetSegCount = count($target) - 1;
+
+        if ($sourceCount < 2 || $targetSegCount < 1) {
+            return 0.0;
+        }
+
+        $refLat = $source[0][0];
+        $mPerDegLat = 111132.0;
+        $mPerDegLng = 111320.0 * cos(deg2rad($refLat));
+
+        /** @var list<float> $sx */
+        $sx = [];
+        /** @var list<float> $sy */
+        $sy = [];
+
+        foreach ($source as $pt) {
+            $sx[] = $pt[1] * $mPerDegLng;
+            $sy[] = $pt[0] * $mPerDegLat;
+        }
+
+        /** @var list<float> $tx */
+        $tx = [];
+        /** @var list<float> $ty */
+        $ty = [];
+
+        foreach ($target as $pt) {
+            $tx[] = $pt[1] * $mPerDegLng;
+            $ty[] = $pt[0] * $mPerDegLat;
+        }
+
+        $tolSq = $toleranceMeters * $toleranceMeters;
+        $matchedCount = 0;
+
+        for ($s = 0; $s < $sourceCount; $s++) {
+            $px = $sx[$s];
+            $py = $sy[$s];
+            $prevIdx = max(0, $s - 1);
+            $nextIdx = min($sourceCount - 1, $s + 1);
+            $sdx = $sx[$nextIdx] - $sx[$prevIdx];
+            $sdy = $sy[$nextIdx] - $sy[$prevIdx];
+            $hasTangent = (($sdx * $sdx) + ($sdy * $sdy)) > 1e-6;
+
+            $bestDistSq = INF;
+
+            for ($i = 0; $i < $targetSegCount; $i++) {
+                $ax = $tx[$i];
+                $ay = $ty[$i];
+                $dx = $tx[$i + 1] - $ax;
+                $dy = $ty[$i + 1] - $ay;
+
+                if ($hasTangent && (($sdx * $dx) + ($sdy * $dy)) <= 0.0) {
+                    continue;
+                }
+
+                $lenSq = ($dx * $dx) + ($dy * $dy);
+                $t = $lenSq > 0.0
+                    ? ((($px - $ax) * $dx) + (($py - $ay) * $dy)) / $lenSq
+                    : 0.0;
+
+                if ($t < 0.0) {
+                    $t = 0.0;
+                } elseif ($t > 1.0) {
+                    $t = 1.0;
+                }
+
+                $cx = $ax + ($t * $dx);
+                $cy = $ay + ($t * $dy);
+                $ex = $px - $cx;
+                $ey = $py - $cy;
+                $distSq = ($ex * $ex) + ($ey * $ey);
+
+                if ($distSq < $bestDistSq) {
+                    $bestDistSq = $distSq;
+                }
+            }
+
+            if ($bestDistSq <= $tolSq) {
+                $matchedCount++;
+            }
+        }
+
+        if ($matchedCount < 2) {
+            return 0.0;
+        }
+
+        return $matchedCount / $sourceCount;
+    }
+
+    /**
+     * Pick the consensus observation in a climb cluster whose start/end endpoints are most central
+     * (medoid) across all observations, breaking ties by proximity to median distance.
+     *
+     * @template TObs of array{
+     *     climb: array{distance_meters: float},
+     *     start_lat: float,
+     *     start_lng: float,
+     *     end_lat: float,
+     *     end_lng: float
+     * }
+     *
+     * @param  non-empty-list<TObs>  $observations
+     * @return TObs
+     */
+    private function selectConsensusObservation(array $observations): array
+    {
+        $count = count($observations);
+
+        if ($count === 1) {
+            return $observations[0];
+        }
+
+        $distances = array_map(
+            static fn (array $obs): float => $obs['climb']['distance_meters'],
+            $observations,
+        );
+        $medianDist = $this->medianFloat($distances);
+
+        // Downsample candidate pool to at most 40 evenly-spaced entries for large clusters.
+        if ($count > 40) {
+            $sample = [];
+            $step = ($count - 1) / 39.0;
+
+            for ($i = 0; $i < 40; $i++) {
+                $sample[] = $observations[(int) round($i * $step)];
+            }
+        } else {
+            $sample = $observations;
+        }
+
+        $sampleCount = count($sample);
+        $bestIdx = 0;
+        $bestScore = INF;
+
+        for ($i = 0; $i < $sampleCount; $i++) {
+            $endpointSum = 0.0;
+
+            for ($j = 0; $j < $sampleCount; $j++) {
+                if ($i === $j) {
+                    continue;
+                }
+
+                $endpointSum += RouteMatchingService::haversineMeters(
+                    $sample[$i]['start_lat'],
+                    $sample[$i]['start_lng'],
+                    $sample[$j]['start_lat'],
+                    $sample[$j]['start_lng'],
+                );
+                $endpointSum += RouteMatchingService::haversineMeters(
+                    $sample[$i]['end_lat'],
+                    $sample[$i]['end_lng'],
+                    $sample[$j]['end_lat'],
+                    $sample[$j]['end_lng'],
+                );
+            }
+
+            $avgEndpointDist = $endpointSum / max(1, $sampleCount - 1);
+            $distPenalty = abs($sample[$i]['climb']['distance_meters'] - $medianDist) * 0.25;
+            $score = $avgEndpointDist + $distPenalty;
+
+            if ($score < $bestScore) {
+                $bestScore = $score;
+                $bestIdx = $i;
+            }
+        }
+
+        return $sample[$bestIdx];
+    }
+
+    /**
+     * Merge any in-batch climb clusters whose medoid canonical geometries overlap above threshold.
+     *
+     * @param  list<array<string, mixed>>  $clusters
+     * @return list<array<string, mixed>>
+     */
+    private function consolidateNewClusters(array $clusters): array
+    {
+        // Sort larger clusters first so dominant canonical climbs absorb smaller seed-drifted variants.
+        usort(
+            $clusters,
+            static fn (array $a, array $b): int => count($b['observations']) <=> count($a['observations']),
+        );
+
+        /** @var list<array{
+         *     cluster: array<string, mixed>,
+         *     distance: float,
+         *     start_lat: float,
+         *     start_lng: float,
+         *     end_lat: float,
+         *     end_lng: float,
+         *     bbox_min_lat: float,
+         *     bbox_max_lat: float,
+         *     bbox_min_lng: float,
+         *     bbox_max_lng: float,
+         *     dedup_poly: list<array{0: float, 1: float}>,
+         *     dedup_cum: list<float>
+         * }> $merged
+         */
+        $merged = [];
+
+        foreach ($clusters as $cluster) {
+            $canonical = $this->selectConsensusObservation($cluster['observations']);
+            $decoded = HeatmapService::decodePolyline($canonical['encoded_polyline']);
+            $polyCoords = count($decoded) >= 2 ? $decoded : $canonical['waypoints'];
+            $cum = $this->computeCumulativeDistances($polyCoords);
+            $dedup = $this->buildDedupPolyline($polyCoords, $cum);
+
+            $bestTargetIdx = null;
+            $bestScore = -1.0;
+
+            foreach ($merged as $idx => $target) {
+                if (
+                    $target['bbox_max_lat'] < $canonical['bbox_min_lat'] - self::BBOX_PADDING_DEG
+                    || $target['bbox_min_lat'] > $canonical['bbox_max_lat'] + self::BBOX_PADDING_DEG
+                    || $target['bbox_max_lng'] < $canonical['bbox_min_lng'] - self::BBOX_PADDING_DEG
+                    || $target['bbox_min_lng'] > $canonical['bbox_max_lng'] + self::BBOX_PADDING_DEG
+                ) {
+                    continue;
+                }
+
+                $score = $this->climbOverlapScore(
+                    distanceA: $canonical['climb']['distance_meters'],
+                    startLatA: $canonical['start_lat'],
+                    startLngA: $canonical['start_lng'],
+                    endLatA: $canonical['end_lat'],
+                    endLngA: $canonical['end_lng'],
+                    polyA: $dedup['points'],
+                    cumA: $dedup['cum_dist'],
+                    distanceB: $target['distance'],
+                    startLatB: $target['start_lat'],
+                    startLngB: $target['start_lng'],
+                    endLatB: $target['end_lat'],
+                    endLngB: $target['end_lng'],
+                    polyB: $target['dedup_poly'],
+                    cumB: $target['dedup_cum'],
+                );
+
+                if ($score !== null && $score > $bestScore) {
+                    $bestScore = $score;
+                    $bestTargetIdx = $idx;
+                }
+            }
+
+            if ($bestTargetIdx !== null) {
+                $merged[$bestTargetIdx]['cluster']['observations'] = array_merge(
+                    $merged[$bestTargetIdx]['cluster']['observations'],
+                    $cluster['observations'],
+                );
+
+                continue;
+            }
+
+            $merged[] = [
+                'cluster' => $cluster,
+                'distance' => $canonical['climb']['distance_meters'],
+                'start_lat' => $canonical['start_lat'],
+                'start_lng' => $canonical['start_lng'],
+                'end_lat' => $canonical['end_lat'],
+                'end_lng' => $canonical['end_lng'],
+                'bbox_min_lat' => $canonical['bbox_min_lat'],
+                'bbox_max_lat' => $canonical['bbox_max_lat'],
+                'bbox_min_lng' => $canonical['bbox_min_lng'],
+                'bbox_max_lng' => $canonical['bbox_max_lng'],
+                'dedup_poly' => $dedup['points'],
+                'dedup_cum' => $dedup['cum_dist'],
+            ];
+        }
+
+        return array_map(
+            static fn (array $entry): array => $entry['cluster'],
+            $merged,
+        );
+    }
+
+    /**
+     * Recompute `is_sub_climb` for all climb segments within a sport_category.
+     * A climb is flagged as a sub-climb when >= 85% of its polyline lies along a longer,
+     * verified, and at least as significant climb in the same direction.
+     */
+    public function refreshSubClimbFlagsForSport(string $sportCategory): void
+    {
+        $climbs = Segment::query()
+            ->climbs()
+            ->where('sport_category', $sportCategory)
+            ->orderBy('id')
+            ->get();
+
+        if ($climbs->isEmpty()) {
+            return;
+        }
+
+        $minEfforts = $this->appSettings()->segmentsMinEfforts();
+
+        /** @var array<int, array{segment: Segment, poly: list<array{0: float, 1: float}>, cum: list<float>}> $entries */
+        $entries = [];
+
+        foreach ($climbs as $climb) {
+            $dedup = $this->segmentDedupPolyline($climb);
+            $entries[$climb->id] = [
+                'segment' => $climb,
+                'poly' => $dedup['points'],
+                'cum' => $dedup['cum_dist'],
+            ];
+        }
+
+        foreach ($entries as $entryA) {
+            $segA = $entryA['segment'];
+            $isSubClimb = false;
+
+            if ($segA->is_climb_verified && count($entryA['poly']) >= 2) {
+                foreach ($entries as $entryB) {
+                    $segB = $entryB['segment'];
+
+                    if ($segB->id === $segA->id || ! $segB->is_climb_verified) {
+                        continue;
+                    }
+
+                    if ($segB->distance_meters <= ($segA->distance_meters * self::CLIMB_SUBCLIMB_PARENT_DISTANCE_RATIO)) {
+                        continue;
+                    }
+
+                    if (
+                        $segB->detection_count <= $segA->detection_count
+                        && $segB->effort_count < $minEfforts
+                        && $segB->detection_count < $minEfforts
+                    ) {
+                        continue;
+                    }
+
+                    if (
+                        $segB->bbox_max_lat < $segA->bbox_min_lat - self::BBOX_PADDING_DEG
+                        || $segB->bbox_min_lat > $segA->bbox_max_lat + self::BBOX_PADDING_DEG
+                        || $segB->bbox_max_lng < $segA->bbox_min_lng - self::BBOX_PADDING_DEG
+                        || $segB->bbox_min_lng > $segA->bbox_max_lng + self::BBOX_PADDING_DEG
+                    ) {
+                        continue;
+                    }
+
+                    $covAOnB = $this->directionalCoverage(
+                        $entryA['poly'],
+                        $entryB['poly'],
+                        $entryB['cum'],
+                        self::CLIMB_DEDUP_CROSS_TRACK_MAX_METERS,
+                    );
+
+                    if ($covAOnB >= self::CLIMB_SUBCLIMB_MIN_CONTAINMENT) {
+                        $isSubClimb = true;
+                        break;
+                    }
+                }
+            }
+
+            if ($segA->is_sub_climb !== $isSubClimb) {
+                $segA->update(['is_sub_climb' => $isSubClimb]);
+            }
+        }
     }
 
     /**
@@ -1503,7 +2534,8 @@ class SegmentMatchingService
      *     start_lng: float,
      *     end_lat: float,
      *     end_lng: float,
-     *     waypoints: list<array{0: float, 1: float}>,
+     *     dedup_poly: list<array{0: float, 1: float}>,
+     *     dedup_cum: list<float>,
      *     name_override: ?string,
      *     is_starred: bool
      * }>  $preservedClimbs
@@ -1513,31 +2545,34 @@ class SegmentMatchingService
         $newClimbs = Segment::query()->climbs()->get();
 
         foreach ($newClimbs as $climb) {
+            $dedup = $this->segmentDedupPolyline($climb);
             $bestMatch = null;
-            $bestMean = INF;
+            $bestScore = -1.0;
 
             foreach ($preservedClimbs as $preserved) {
                 if ($preserved['sport_category'] !== $climb->sport_category) {
                     continue;
                 }
 
-                $mean = $this->climbSimilarityMeanDistance(
+                $score = $this->climbOverlapScore(
                     distanceA: $climb->distance_meters,
                     startLatA: $climb->start_lat,
                     startLngA: $climb->start_lng,
                     endLatA: $climb->end_lat,
                     endLngA: $climb->end_lng,
-                    waypointsA: $climb->waypoints,
+                    polyA: $dedup['points'],
+                    cumA: $dedup['cum_dist'],
                     distanceB: $preserved['distance_meters'],
                     startLatB: $preserved['start_lat'],
                     startLngB: $preserved['start_lng'],
                     endLatB: $preserved['end_lat'],
                     endLngB: $preserved['end_lng'],
-                    waypointsB: $preserved['waypoints'],
+                    polyB: $preserved['dedup_poly'],
+                    cumB: $preserved['dedup_cum'],
                 );
 
-                if ($mean !== null && $mean < $bestMean) {
-                    $bestMean = $mean;
+                if ($score !== null && $score > $bestScore) {
+                    $bestScore = $score;
                     $bestMatch = $preserved;
                 }
             }
@@ -1555,6 +2590,7 @@ class SegmentMatchingService
 
                 if ($updates !== []) {
                     $climb->update($updates);
+                    $this->dispatchGeocodingIfEnabled($climb->fresh() ?? $climb);
                 }
             }
         }
@@ -1625,12 +2661,17 @@ class SegmentMatchingService
 
     private function buildInitialClimbName(Activity $activity, float $distanceMeters, float $avgGradePct): string
     {
+        return $this->buildInitialClimbNameFromLocation($activity->location_name, $distanceMeters, $avgGradePct);
+    }
+
+    private function buildInitialClimbNameFromLocation(?string $locationName, float $distanceMeters, float $avgGradePct): string
+    {
         $distLabel = $distanceMeters >= 1000.0
             ? number_format($distanceMeters / 1000.0, 2).' km'
             : ((int) round($distanceMeters)).' m';
         $gradeLabel = number_format($avgGradePct, 1).'%';
-        $location = is_string($activity->location_name) && trim($activity->location_name) !== ''
-            ? trim(explode(',', trim($activity->location_name))[0])
+        $location = is_string($locationName) && trim($locationName) !== ''
+            ? trim(explode(',', trim($locationName))[0])
             : null;
 
         if ($location !== null && $location !== '') {
@@ -1638,6 +2679,22 @@ class SegmentMatchingService
         }
 
         return mb_substr("Climb ({$distLabel} @ {$gradeLabel})", 0, 160);
+    }
+
+    /**
+     * @param  list<float>  $values
+     */
+    private function medianFloat(array $values): float
+    {
+        sort($values);
+        $count = count($values);
+        $mid = intdiv($count, 2);
+
+        if ($count % 2 === 1) {
+            return $values[$mid];
+        }
+
+        return ($values[$mid - 1] + $values[$mid]) / 2.0;
     }
 
     private function buildInitialCustomName(Activity $activity, float $distanceMeters): string
@@ -1659,7 +2716,9 @@ class SegmentMatchingService
     private function dispatchGeocodingIfEnabled(Segment $segment): void
     {
         if (
-            (bool) config('services.nominatim.enabled', true)
+            $segment->geocoded_at === null
+            && $segment->isVisible()
+            && (bool) config('services.nominatim.enabled', true)
             && (bool) config('services.nominatim.auto_sync', true)
         ) {
             GeocodeSegmentJob::dispatch($segment->id);

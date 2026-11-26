@@ -42,6 +42,18 @@ class ClimbDetector
         'walking' => 300.0,
     ];
 
+    /**
+     * Maximum physically plausible average grade (%) per sport to reject barometer/lift spikes.
+     *
+     * @var array<string, float>
+     */
+    public const array MAX_AVG_GRADE_BY_SPORT = [
+        'biking' => 25.0,
+        'running' => 40.0,
+        'hiking' => 40.0,
+        'walking' => 40.0,
+    ];
+
     public const float MIN_ELEVATION_GAIN_METERS = 30.0;
 
     public const float MIN_AVG_GRADE_PCT = 3.0;
@@ -104,6 +116,7 @@ class ClimbDetector
         }
 
         $minDistance = self::MIN_DISTANCE_BY_SPORT[$sportCategory];
+        $maxAvgGrade = self::MAX_AVG_GRADE_BY_SPORT[$sportCategory] ?? 40.0;
         $points = $this->extractValidPoints($series);
         $count = count($points);
 
@@ -171,7 +184,7 @@ class ClimbDetector
                 || ($spanDistance >= self::MAX_DIP_DISTANCE_METERS && $dipDistance > 30.0 && $overallGrade < self::MIN_AVG_GRADE_PCT);
 
             if ($dipExceeded) {
-                $climb = $this->finalizeCandidate($points, $smoothedAlt, $climbStart, $peakIdx, $minDistance);
+                $climb = $this->finalizeCandidate($points, $smoothedAlt, $climbStart, $peakIdx, $minDistance, $maxAvgGrade);
 
                 if ($climb !== null) {
                     $detected[] = $climb;
@@ -187,7 +200,7 @@ class ClimbDetector
         }
 
         if ($inClimb) {
-            $climb = $this->finalizeCandidate($points, $smoothedAlt, $climbStart, $peakIdx, $minDistance);
+            $climb = $this->finalizeCandidate($points, $smoothedAlt, $climbStart, $peakIdx, $minDistance, $maxAvgGrade);
 
             if ($climb !== null) {
                 $detected[] = $climb;
@@ -288,6 +301,7 @@ class ClimbDetector
         int $start,
         int $end,
         float $minDistance,
+        float $maxAvgGrade = 40.0,
     ): ?array {
         if ($end <= $start) {
             return null;
@@ -332,7 +346,7 @@ class ClimbDetector
 
         $avgGradePct = ($netGain / $distance) * 100.0;
 
-        if ($avgGradePct < self::MIN_AVG_GRADE_PCT) {
+        if ($avgGradePct < self::MIN_AVG_GRADE_PCT || $avgGradePct > $maxAvgGrade) {
             return null;
         }
 

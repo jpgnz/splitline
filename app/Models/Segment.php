@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 use Database\Factories\SegmentFactory;
 use Illuminate\Database\Eloquent\Builder;
@@ -38,6 +39,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $encoded_polyline
  * @property bool $is_starred
  * @property int $effort_count
+ * @property int $detection_count
+ * @property bool $is_sub_climb
+ * @property bool $is_climb_verified
  * @property float|null $best_elapsed_seconds
  * @property int|null $best_effort_id
  * @property CarbonImmutable|null $last_effort_at
@@ -100,6 +104,9 @@ class Segment extends Model
         'encoded_polyline',
         'is_starred',
         'effort_count',
+        'detection_count',
+        'is_sub_climb',
+        'is_climb_verified',
         'best_elapsed_seconds',
         'best_effort_id',
         'last_effort_at',
@@ -132,6 +139,9 @@ class Segment extends Model
             'waypoints' => 'array',
             'is_starred' => 'boolean',
             'effort_count' => 'integer',
+            'detection_count' => 'integer',
+            'is_sub_climb' => 'boolean',
+            'is_climb_verified' => 'boolean',
             'best_elapsed_seconds' => 'float',
             'best_effort_id' => 'integer',
             'last_effort_at' => 'immutable_datetime',
@@ -188,6 +198,68 @@ class Segment extends Model
     public function scopeCustom(Builder $query): Builder
     {
         return $query->where('kind', self::KIND_CUSTOM);
+    }
+
+    /**
+     * Scope segments that should be surfaced in the directory, activity panels, and geocoding queue.
+     * Custom segments and starred segments are always visible; auto-detected climbs require verified
+     * climbing telemetry and at least `$minEfforts` passes (and independent detections if nested inside
+     * a longer climb).
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeVisible(Builder $query, ?int $minEfforts = null): Builder
+    {
+        $threshold = max(
+            AppSettings::MIN_SEGMENTS_MIN_EFFORTS,
+            $minEfforts ?? app(AppSettings::class)->segmentsMinEfforts(),
+        );
+
+        return $query->where(function (Builder $sub) use ($threshold): void {
+            $sub->where('kind', self::KIND_CUSTOM)
+                ->orWhere('is_starred', true)
+                ->orWhere(function (Builder $climb) use ($threshold): void {
+                    $climb
+                        ->where('kind', self::KIND_CLIMB)
+                        ->where('is_climb_verified', true)
+                        ->where('effort_count', '>=', $threshold)
+                        ->where(function (Builder $subClimbCheck) use ($threshold): void {
+                            $subClimbCheck
+                                ->where('is_sub_climb', false)
+                                ->orWhere('detection_count', '>=', $threshold);
+                        });
+                });
+        });
+    }
+
+    /**
+     * Determine whether this segment satisfies the current visibility threshold.
+     */
+    public function isVisible(?int $minEfforts = null): bool
+    {
+        if ($this->kind === self::KIND_CUSTOM || $this->is_starred) {
+            return true;
+        }
+
+        if (! $this->is_climb_verified) {
+            return false;
+        }
+
+        $threshold = max(
+            AppSettings::MIN_SEGMENTS_MIN_EFFORTS,
+            $minEfforts ?? app(AppSettings::class)->segmentsMinEfforts(),
+        );
+
+        if ($this->effort_count < $threshold) {
+            return false;
+        }
+
+        if ($this->is_sub_climb && $this->detection_count < $threshold) {
+            return false;
+        }
+
+        return true;
     }
 
     /**

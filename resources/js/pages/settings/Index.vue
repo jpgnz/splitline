@@ -13,6 +13,7 @@ import {
     History,
     Layers,
     MapPin,
+    Mountain,
     RefreshCw,
     Sparkles,
     Tag,
@@ -21,6 +22,7 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import {
     updateHealthSources,
+    updateSegments,
     updateSports,
     updateUnits,
 } from '@/actions/App/Http/Controllers/SettingsController';
@@ -108,6 +110,13 @@ interface GeocodingConfigSummary {
     rate_limit_ms: number;
 }
 
+interface SegmentsSettingsPayload {
+    min_efforts: number;
+    default_min_efforts: number;
+    visible_climbs_count: number;
+    tracked_climbs_count: number;
+}
+
 interface SettingsProps {
     unit_system: UnitSystem;
     timezone: string;
@@ -124,6 +133,7 @@ interface SettingsProps {
         hints: DiscoveryHint[];
     };
     health_sources: HealthSourcesPayload;
+    segments_settings: SegmentsSettingsPayload;
 }
 
 const props = defineProps<SettingsProps>();
@@ -772,6 +782,35 @@ function submitHealthSources(): void {
         },
         onError: () => {
             toast.error('Please review your health data source selections.');
+        },
+    });
+}
+
+const SEGMENTS_MIN_EFFORTS_PRESETS = [1, 3, 5, 10] as const;
+
+const segmentsForm = useForm<{ min_efforts: number }>({
+    min_efforts: props.segments_settings.min_efforts,
+});
+
+watch(
+    () => props.segments_settings.min_efforts,
+    (nextMinEfforts) => {
+        segmentsForm.min_efforts = nextMinEfforts;
+        segmentsForm.defaults({ min_efforts: nextMinEfforts });
+    },
+);
+
+function submitSegmentsSettings(): void {
+    segmentsForm.patch(updateSegments.url(), {
+        preserveScroll: true,
+        onSuccess: () => {
+            const count = segmentsForm.min_efforts;
+            toast.success(
+                `Auto-detected climb threshold set to ${count} ${count === 1 ? 'effort' : 'efforts'}.`,
+            );
+        },
+        onError: () => {
+            toast.error('Minimum efforts must be between 1 and 50.');
         },
     });
 }
@@ -1810,6 +1849,136 @@ function submitHealthSources(): void {
                                 healthSourcesForm.processing
                                     ? 'Saving...'
                                     : 'Save Health Sources'
+                            }}
+                        </button>
+                    </div>
+                </form>
+            </section>
+
+            <!-- 4A. Segments & Auto-Detected Climbs -->
+            <section
+                class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
+            >
+                <form class="space-y-5" @submit.prevent="submitSegmentsSettings">
+                    <div
+                        class="flex flex-wrap items-start justify-between gap-3"
+                    >
+                        <div class="space-y-1">
+                            <div class="flex items-center gap-2">
+                                <Mountain
+                                    class="size-4 text-amber-600 dark:text-amber-400"
+                                />
+                                <h2
+                                    class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                >
+                                    Segments &amp; Auto-Detected Climbs
+                                </h2>
+                            </div>
+                            <p class="text-sm text-zinc-500 dark:text-zinc-400">
+                                Minimum number of climbs required before an
+                                auto-detected climb appears in your Segments
+                                directory and activity breakdowns. Custom and
+                                starred segments are always shown.
+                            </p>
+                        </div>
+
+                        <span
+                            class="inline-flex items-center rounded-full bg-amber-500/12 px-2.5 py-0.5 font-mono text-[10px] font-medium text-amber-700 tabular-nums dark:text-amber-300"
+                        >
+                            Showing
+                            {{
+                                formatNumber(
+                                    segments_settings.visible_climbs_count,
+                                )
+                            }}
+                            of
+                            {{
+                                formatNumber(
+                                    segments_settings.tracked_climbs_count,
+                                )
+                            }}
+                            climbs
+                        </span>
+                    </div>
+
+                    <div
+                        class="flex flex-col gap-4 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/50 p-4 sm:flex-row sm:items-center sm:justify-between dark:border-zinc-800 dark:bg-zinc-900/35"
+                    >
+                        <div class="space-y-1">
+                            <label
+                                for="segments-min-efforts"
+                                class="text-sm font-medium text-zinc-900 dark:text-zinc-100"
+                            >
+                                Minimum Efforts per Auto-Climb
+                            </label>
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                Default is
+                                {{ segments_settings.default_min_efforts }}.
+                                Changes apply immediately without rescanning
+                                your activity history.
+                            </p>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2">
+                            <div
+                                class="inline-flex rounded-lg border border-zinc-200/90 bg-white p-0.5 dark:border-zinc-800 dark:bg-[#141417]"
+                            >
+                                <button
+                                    v-for="preset in SEGMENTS_MIN_EFFORTS_PRESETS"
+                                    :key="preset"
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-xs font-medium tabular-nums transition-colors"
+                                    :class="
+                                        segmentsForm.min_efforts === preset
+                                            ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                                            : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="segmentsForm.min_efforts = preset"
+                                >
+                                    {{ preset }}
+                                </button>
+                            </div>
+
+                            <input
+                                id="segments-min-efforts"
+                                v-model.number="segmentsForm.min_efforts"
+                                type="number"
+                                min="1"
+                                max="50"
+                                step="1"
+                                class="w-20 rounded-lg border border-zinc-200 bg-white px-3 py-1.5 font-mono text-xs text-zinc-900 tabular-nums focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                            />
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="segmentsForm.errors.min_efforts"
+                        class="rounded-lg border border-rose-500/30 bg-rose-500/10 px-3.5 py-2.5 text-xs text-rose-700 dark:text-rose-300"
+                    >
+                        {{ segmentsForm.errors.min_efforts }}
+                    </div>
+
+                    <div
+                        class="flex items-center justify-between gap-3 border-t border-zinc-100 pt-4 dark:border-zinc-800/80"
+                    >
+                        <span
+                            class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        >
+                            {{
+                                segmentsForm.isDirty
+                                    ? 'Unsaved changes'
+                                    : 'Up to date'
+                            }}
+                        </span>
+                        <button
+                            type="submit"
+                            :disabled="segmentsForm.processing"
+                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                        >
+                            {{
+                                segmentsForm.processing
+                                    ? 'Saving...'
+                                    : 'Save Segment Settings'
                             }}
                         </button>
                     </div>
