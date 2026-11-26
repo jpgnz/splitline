@@ -8,6 +8,7 @@ use App\Models\HeartRateZone;
 use App\Services\Gear\GearService;
 use App\Services\Routes\MatchedRouteService;
 use App\Support\DateWindowResolver;
+use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -22,7 +23,13 @@ class ActivityQueryService
         private readonly ?SportRegistry $sports = null,
         private readonly ?DateWindowResolver $dateWindows = null,
         private readonly ?MatchedRouteService $matchedRoutes = null,
+        private readonly ?HealthSourceRegistry $healthSources = null,
     ) {}
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
+    }
 
     private function matchedRouteService(): MatchedRouteService
     {
@@ -281,7 +288,28 @@ class ActivityQueryService
     /**
      * Build the full activity detail payload including zones, streams, best efforts, effort context, pace distribution, and adjacent activities.
      *
-     * @return array<string, mixed>
+     * @return array{
+     *     activity: array<string, mixed>,
+     *     hrZones: list<array{zone: int, label: string, min_hr: ?int, max_hr: ?int, seconds: float, pct: float}>,
+     *     powerZones: list<array{zone: int, label: string, min_watts: ?int, max_watts: ?int, seconds: float, pct: float}>,
+     *     paceDistribution: ?array<string, mixed>,
+     *     effortContext: array<string, mixed>,
+     *     stream: ?array{
+     *         series: array<int|string, mixed>,
+     *         polyline: array<int|string, mixed>,
+     *         laps: array<int|string, mixed>,
+     *         km_splits: array<int|string, mixed>,
+     *         run_walk_segments: array<int|string, mixed>,
+     *         jumps: array<int|string, mixed>
+     *     },
+     *     weather: ?array<string, mixed>,
+     *     bestEfforts: list<array<string, mixed>>,
+     *     prevActivity: ?array{id: int, name: string},
+     *     nextActivity: ?array{id: int, name: string},
+     *     gear: array<string, mixed>,
+     *     matchedRoute: ?array<string, mixed>,
+     *     discipline_options: list<array{value: string, label: string}>
+     * }
      */
     public function detail(Activity $activity): array
     {
@@ -329,8 +357,12 @@ class ActivityQueryService
                 'external_id' => $activity->external_id,
                 'garmin_activity_id' => $activity->garmin_activity_id,
                 'name' => $activity->name,
+                'garmin_name' => $activity->garmin_name,
+                'name_override' => $activity->name_override,
                 'activity_type_key' => $activity->activity_type_key,
                 'sport_category' => $activity->sport_category,
+                'garmin_sport_category' => $activity->garmin_sport_category,
+                'sport_category_override' => $activity->sport_category_override,
                 'sport_discipline' => $activity->sport_discipline,
                 'biking_discipline' => $activity->sport_discipline,
                 'discipline_override' => $activity->discipline_override,
@@ -413,6 +445,7 @@ class ActivityQueryService
                 'walk_duration_seconds' => $activity->walk_duration_seconds,
                 'idle_duration_seconds' => $activity->idle_duration_seconds,
                 'is_favorite' => $activity->is_favorite,
+                'favorite_override' => $activity->favorite_override,
                 'is_pr' => $activity->is_pr,
                 'is_manual' => $activity->is_manual,
                 'streams_synced_at' => $activity->streams_synced_at?->toIso8601String(),
@@ -941,7 +974,7 @@ class ActivityQueryService
             default => 'DEFAULT',
         };
 
-        $sportZones = HeartRateZone::query()
+        $sportZones = $this->healthSources()->applyScope(HeartRateZone::query(), 'heart_rate_zones')
             ->whereIn('sport', array_values(array_unique([$preferredSport, 'DEFAULT'])))
             ->get()
             ->keyBy('sport');

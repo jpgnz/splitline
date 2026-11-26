@@ -12,6 +12,7 @@ use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
 use App\Services\Activities\AnnualActivitySummaryService;
 use App\Services\Goals\GoalProgressService;
+use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -24,11 +25,17 @@ class DashboardService
         private readonly HealthStatusService $healthStatusService = new HealthStatusService,
         private readonly ?SportRegistry $sports = null,
         private readonly AnnualActivitySummaryService $annualActivitySummaryService = new AnnualActivitySummaryService,
+        private readonly ?HealthSourceRegistry $healthSources = null,
     ) {}
 
     private function sportRegistry(): SportRegistry
     {
         return $this->sports ?? app(SportRegistry::class);
+    }
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
     }
 
     /**
@@ -258,15 +265,15 @@ class DashboardService
             : $selectedDate->addDay()->format('Y-m-d');
         $dateLabel = $selectedDate->format('D, j M Y');
 
-        $dailyMetric = DailyMetric::query()
+        $dailyMetric = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->where('calendar_date', $selectedDateStr)
             ->first();
 
-        $sleepRecord = SleepRecord::query()
+        $sleepRecord = $this->healthSources()->applyScope(SleepRecord::query(), 'sleep')
             ->where('calendar_date', $selectedDateStr)
             ->first();
 
-        $hrvRecord = HrvRecord::query()
+        $hrvRecord = $this->healthSources()->applyScope(HrvRecord::query(), 'hrv')
             ->where('calendar_date', $selectedDateStr)
             ->first();
 
@@ -311,7 +318,7 @@ class DashboardService
             }
         }
 
-        $latestDate = DailyMetric::query()->max('calendar_date');
+        $latestDate = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')->max('calendar_date');
 
         if (is_string($latestDate)) {
             $parsedLatest = $this->parseDateString($latestDate, $timezone);
@@ -469,7 +476,7 @@ class DashboardService
         $startStr = $selectedDate->subDays(6)->format('Y-m-d');
         $endStr = $selectedDate->format('Y-m-d');
 
-        $records = SleepRecord::query()
+        $records = $this->healthSources()->applyScope(SleepRecord::query(), 'sleep')
             ->whereBetween('calendar_date', [$startStr, $endStr])
             ->orderBy('calendar_date')
             ->get();
@@ -526,7 +533,7 @@ class DashboardService
         $startStr = $selectedDate->subDays(27)->format('Y-m-d');
         $endStr = $selectedDate->format('Y-m-d');
 
-        $records = HrvRecord::query()
+        $records = $this->healthSources()->applyScope(HrvRecord::query(), 'hrv')
             ->whereBetween('calendar_date', [$startStr, $endStr])
             ->orderBy('calendar_date')
             ->get();
@@ -1061,7 +1068,7 @@ class DashboardService
         $weekStartStr = $selectedDate->startOfWeek(CarbonInterface::MONDAY)->format('Y-m-d');
         $selectedDateStr = $selectedDate->format('Y-m-d');
 
-        $weekRecords = DailyMetric::query()
+        $weekRecords = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->whereBetween('calendar_date', [$weekStartStr, $selectedDateStr])
             ->orderBy('calendar_date')
             ->get([
@@ -1124,7 +1131,7 @@ class DashboardService
     {
         $selectedDateStr = $selectedDate->format('Y-m-d');
 
-        $effectiveGoal = WeightGoal::query()
+        $effectiveGoal = $this->healthSources()->applyScope(WeightGoal::query(), 'weight')
             ->where('start_date', '<=', $selectedDateStr)
             ->where(function ($query) use ($selectedDateStr): void {
                 $query->whereNull('end_date')
@@ -1137,7 +1144,7 @@ class DashboardService
             ? round($effectiveGoal->goal_grams / 1000, 1)
             : null;
 
-        $latest = WeightMeasurement::query()
+        $latest = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
             ->where('calendar_date', '<=', $selectedDateStr)
             ->orderByDesc('calendar_date')
             ->orderByDesc('measured_at')
@@ -1159,7 +1166,7 @@ class DashboardService
             ];
         }
 
-        $previousMeasurement = WeightMeasurement::query()
+        $previousMeasurement = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
             ->where('id', '!=', $latest->id)
             ->where('calendar_date', '<', $latest->calendar_date)
             ->orderByDesc('calendar_date')
@@ -1198,7 +1205,7 @@ class DashboardService
         $targetDate = $selectedDate->subDays(30);
         $targetStr = $targetDate->format('Y-m-d');
 
-        $before = WeightMeasurement::query()
+        $before = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
             ->where('id', '!=', $latest->id)
             ->where('calendar_date', '<=', $targetStr)
             ->where('calendar_date', '>=', $targetDate->subDays(30)->format('Y-m-d'))
@@ -1207,7 +1214,7 @@ class DashboardService
             ->orderByDesc('id')
             ->first();
 
-        $after = WeightMeasurement::query()
+        $after = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
             ->where('id', '!=', $latest->id)
             ->where('calendar_date', '>', $targetStr)
             ->where('calendar_date', '<=', $targetDate->addDays(15)->format('Y-m-d'))
@@ -1254,19 +1261,19 @@ class DashboardService
      */
     private function buildVo2Fitness(string $selectedDateStr): array
     {
-        $runningRecord = Vo2MaxRecord::query()
+        $runningRecord = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
             ->where('sport', 'running')
             ->where('calendar_date', '<=', $selectedDateStr)
             ->orderByDesc('calendar_date')
             ->first();
 
-        $cyclingRecord = Vo2MaxRecord::query()
+        $cyclingRecord = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
             ->where('sport', 'cycling')
             ->where('calendar_date', '<=', $selectedDateStr)
             ->orderByDesc('calendar_date')
             ->first();
 
-        $fitnessAgeRecord = FitnessAgeRecord::query()
+        $fitnessAgeRecord = $this->healthSources()->applyScope(FitnessAgeRecord::query(), 'fitness_age')
             ->where('calendar_date', '<=', $selectedDateStr)
             ->whereNotNull('fitness_age')
             ->orderByDesc('calendar_date')

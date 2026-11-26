@@ -18,8 +18,12 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property ?string $external_id
  * @property ?int $garmin_activity_id
  * @property string $name
+ * @property string|null $garmin_name
+ * @property string|null $name_override
  * @property string $activity_type_key
  * @property string $sport_category
+ * @property string|null $garmin_sport_category
+ * @property string|null $sport_category_override
  * @property string|null $sport_discipline
  * @property string|null $discipline_override
  * @property bool $is_indoor
@@ -112,6 +116,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property float|null $walk_duration_seconds
  * @property float|null $idle_duration_seconds
  * @property bool $is_favorite
+ * @property bool $garmin_is_favorite
+ * @property bool|null $favorite_override
  * @property bool $is_pr
  * @property bool $is_manual
  * @property CarbonImmutable|null $streams_synced_at
@@ -138,8 +144,12 @@ class Activity extends Model
         'external_id',
         'garmin_activity_id',
         'name',
+        'garmin_name',
+        'name_override',
         'activity_type_key',
         'sport_category',
+        'garmin_sport_category',
+        'sport_category_override',
         'sport_discipline',
         'discipline_override',
         'is_indoor',
@@ -232,6 +242,8 @@ class Activity extends Model
         'walk_duration_seconds',
         'idle_duration_seconds',
         'is_favorite',
+        'garmin_is_favorite',
+        'favorite_override',
         'is_pr',
         'is_manual',
         'streams_synced_at',
@@ -335,6 +347,8 @@ class Activity extends Model
             'walk_duration_seconds' => 'float',
             'idle_duration_seconds' => 'float',
             'is_favorite' => 'boolean',
+            'garmin_is_favorite' => 'boolean',
+            'favorite_override' => 'boolean',
             'is_pr' => 'boolean',
             'is_manual' => 'boolean',
             'streams_synced_at' => 'immutable_datetime',

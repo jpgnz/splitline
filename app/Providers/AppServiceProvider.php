@@ -6,6 +6,7 @@ use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Support\AppSettings;
 use App\Support\AppVersion;
+use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Foundation\Application;
@@ -42,6 +43,7 @@ class AppServiceProvider extends ServiceProvider
         $this->app->scoped(AppSettings::class);
         $this->app->singleton(AppVersion::class);
         $this->app->scoped(SportRegistry::class);
+        $this->app->scoped(HealthSourceRegistry::class);
 
         $this->app->bind(GarminPersonalConfig::class, static function (): GarminPersonalConfig {
             $apiKey = config('services.garmin.key');
