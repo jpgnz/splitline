@@ -485,6 +485,17 @@ function formatDateWithYear(dateStr: string | null): string {
                         >
                             {{ route.name }}
                         </h2>
+                        <p
+                            v-if="route.place_label"
+                            class="mt-0.5 flex items-center gap-1 truncate text-xs text-zinc-500 dark:text-zinc-400"
+                        >
+                            <MapPin
+                                class="size-3 shrink-0 text-zinc-400 dark:text-zinc-500"
+                            />
+                            <span class="truncate">{{
+                                route.place_label
+                            }}</span>
+                        </p>
                         <div
                             class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                         >
@@ -499,7 +510,7 @@ function formatDateWithYear(dateStr: string | null): string {
                                 {{ formatElevation(route.elevation_gain) }}
                             </span>
                             <span
-                                v-if="route.location_name"
+                                v-if="!route.place_label && route.location_name"
                                 class="inline-flex items-center gap-1 truncate"
                             >
                                 <MapPin class="size-3 shrink-0" />
@@ -691,5 +702,20 @@ function formatDateWithYear(dateStr: string | null): string {
                 </button>
             </div>
         </section>
+
+        <!-- ODbL Place Naming Attribution -->
+        <p
+            class="text-right font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+        >
+            Place names &copy;
+            <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-600 dark:decoration-zinc-700 dark:hover:text-zinc-300"
+            >
+                OpenStreetMap contributors (ODbL)
+            </a>
+        </p>
     </div>
 </template>

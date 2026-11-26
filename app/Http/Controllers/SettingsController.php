@@ -6,6 +6,7 @@ use App\Http\Requests\UpdateHealthSourcesRequest;
 use App\Http\Requests\UpdateSportsSettingsRequest;
 use App\Http\Requests\UpdateUnitsRequest;
 use App\Models\SyncRun;
+use App\Services\Geocoding\NominatimClient;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
@@ -22,6 +23,7 @@ class SettingsController extends Controller
         SportRegistry $sports,
         QueueStatusService $queueStatus,
         HealthSourceRegistry $healthSources,
+        NominatimClient $nominatim,
     ): Response {
         return Inertia::render('settings/Index', [
             'unit_system' => $settings->unitSystem(),
@@ -32,6 +34,13 @@ class SettingsController extends Controller
             ],
             'backfill' => $this->backfillSummary(),
             'enrichment_queue' => fn (): array => $queueStatus->summary(),
+            'geocoding' => [
+                'enabled' => $nominatim->isEnabled(),
+                'auto_sync' => (bool) config('services.nominatim.auto_sync', true),
+                'host' => $nominatim->providerHost(),
+                'is_public_endpoint' => $nominatim->isPublicHost(),
+                'rate_limit_ms' => $nominatim->effectiveRateLimitMs(),
+            ],
             'sports_settings' => $sports->settingsPayload(),
             'health_sources' => $healthSources->settingsPayload(),
         ]);

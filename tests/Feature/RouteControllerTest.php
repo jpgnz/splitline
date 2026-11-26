@@ -316,12 +316,29 @@ it('includes matchedRoute payload on ActivityController::show only when cluster 
     $s2 = ActivityStream::factory()->create(['activity_id' => $slower->id, 'polyline' => routeTestLoop(drift: 0.0001)]);
     $matcher->matchActivity($slower, $s2);
 
+    $cluster = RouteCluster::query()->matched()->firstOrFail();
+    $cluster->update(['place_label' => 'Cornwall Park · Auckland']);
+
+    $this->get('/routes?search=cornwall')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('routes', 1)
+            ->where('routes.0.place_label', 'Cornwall Park · Auckland'),
+        );
+
+    $this->get("/routes/{$cluster->id}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('route.place_label', 'Cornwall Park · Auckland'),
+        );
+
     // Deltas are distance-normalised: 1380s/5020m vs 1260s/5000m, both scaled to the 5010m median distance
     $this->get("/activities/{$slower->id}")
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
             ->component('Activities/Show')
             ->where('matchedRoute.route.activity_count', 2)
+            ->where('matchedRoute.route.place_label', 'Cornwall Park · Auckland')
             ->where('matchedRoute.current.rank', 2)
             ->where('matchedRoute.current.total_attempts', 2)
             ->where('matchedRoute.current.is_pr', false)

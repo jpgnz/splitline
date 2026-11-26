@@ -58,4 +58,16 @@ return [
         'max_requests_per_minute' => (int) env('OPEN_METEO_RATE_LIMIT_PER_MINUTE', 50),
     ],
 
+    'nominatim' => [
+        'enabled' => (bool) env('NOMINATIM_ENABLED', true),
+        'auto_sync' => (bool) env('NOMINATIM_AUTO_SYNC', true),
+        'base_url' => env('NOMINATIM_BASE_URL', 'https://nominatim.openstreetmap.org'),
+        'rate_limit_ms' => (int) env('NOMINATIM_RATE_LIMIT_MS', 1100),
+        'user_agent' => env('NOMINATIM_USER_AGENT'),
+        'referer' => env('NOMINATIM_REFERER'),
+        'email' => env('NOMINATIM_EMAIL'),
+        'timeout' => (int) env('NOMINATIM_TIMEOUT', 15),
+        'max_retries' => (int) env('NOMINATIM_MAX_RETRIES', 2),
+    ],
+
 ];

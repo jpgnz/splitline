@@ -2,6 +2,7 @@
 
 namespace App\Services\Routes;
 
+use App\Jobs\GeocodeRouteClusterJob;
 use App\Models\Activity;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\ActivityStream;
@@ -260,12 +261,33 @@ class RouteMatchingService
         ];
 
         if ($cluster->name_override === null || trim($cluster->name_override) === '') {
-            $updates['name'] = $this->deriveClusterName($activities, $isLoop, $medianDistance);
+            if (
+                ! self::hasSpecificActivityName($activities)
+                && $cluster->geocoded_at !== null
+                && is_string($cluster->place_label)
+                && trim($cluster->place_label) !== ''
+            ) {
+                $shortPlace = trim(explode(' · ', trim($cluster->place_label))[0]);
+                $updates['name'] = self::formatGeocodedClusterName($shortPlace, $isLoop, $medianDistance);
+            } else {
+                $updates['name'] = $this->deriveClusterName($activities, $isLoop, $medianDistance);
+            }
         }
 
         $cluster->update($updates);
 
-        return $cluster->fresh() ?? $cluster;
+        $refreshed = $cluster->fresh() ?? $cluster;
+
+        if (
+            $refreshed->activity_count >= 2
+            && $refreshed->geocoded_at === null
+            && (bool) config('services.nominatim.enabled', true)
+            && (bool) config('services.nominatim.auto_sync', true)
+        ) {
+            GeocodeRouteClusterJob::dispatch($refreshed->id);
+        }
+
+        return $refreshed;
     }
 
     /**
@@ -1023,6 +1045,110 @@ class RouteMatchingService
     }
 
     /**
+     * Determine whether an activity title is a generic provider-generated default rather than a custom name.
+     */
+    public static function isGenericActivityName(string $name, ?string $locationName = null): bool
+    {
+        $trimmed = trim($name);
+
+        if ($trimmed === '') {
+            return true;
+        }
+
+        $lower = mb_strtolower($trimmed);
+
+        if (isset(self::GENERIC_ACTIVITY_NAMES[$lower])) {
+            return true;
+        }
+
+        if ($locationName !== null && trim($locationName) !== '') {
+            $locLower = mb_strtolower(trim($locationName));
+
+            if (str_starts_with($lower, $locLower.' ')) {
+                $remainder = trim(mb_substr($lower, mb_strlen($locLower)));
+
+                if (isset(self::GENERIC_ACTIVITY_NAMES[$remainder])) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Determine whether any linked activity carries a non-generic custom title.
+     *
+     * @param  list<Activity>  $activities
+     */
+    public static function hasSpecificActivityName(array $activities): bool
+    {
+        foreach ($activities as $activity) {
+            if (! self::isGenericActivityName($activity->name, $activity->location_name)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Determine whether a cluster's auto-generated name looks like a generic fallback that can be upgraded
+     * with a reverse-geocoded OSM place label.
+     */
+    public static function isGenericClusterName(string $name): bool
+    {
+        $trimmed = trim($name);
+
+        if ($trimmed === '' || self::isGenericActivityName($trimmed)) {
+            return true;
+        }
+
+        if (preg_match('/^(?:.+\s+)?\d+(?:\.\d+)?\s*km\s+(?:Loop|Route)$/i', $trimmed) === 1) {
+            return true;
+        }
+
+        return preg_match('/^.+\s+→\s+.+\s+\(\d+(?:\.\d+)?\s*km\)$/u', $trimmed) === 1;
+    }
+
+    /**
+     * Check whether a RouteCluster's auto-name should be upgraded using reverse-geocoded place naming.
+     * Never allows overwriting `name_override` or custom non-generic activity titles.
+     *
+     * @param  list<Activity>  $activities
+     */
+    public static function shouldUpgradeClusterNameWithPlace(RouteCluster $cluster, array $activities = []): bool
+    {
+        if (is_string($cluster->name_override) && trim($cluster->name_override) !== '') {
+            return false;
+        }
+
+        if ($activities !== []) {
+            return ! self::hasSpecificActivityName($activities);
+        }
+
+        return self::isGenericClusterName($cluster->name);
+    }
+
+    /**
+     * Format a clean auto-name for a geocoded route cluster (e.g. "Cornwall Park 5.2 km Loop"
+     * or "Ponsonby → Mission Bay (8.4 km)").
+     */
+    public static function formatGeocodedClusterName(string $place, bool $isLoop, float $distanceMeters): string
+    {
+        $cleanPlace = trim($place);
+        $km = number_format($distanceMeters / 1000.0, 1);
+
+        if (! $isLoop && str_contains($cleanPlace, '→')) {
+            return mb_substr("{$cleanPlace} ({$km} km)", 0, 160);
+        }
+
+        $suffix = $isLoop ? 'Loop' : 'Route';
+
+        return mb_substr("{$cleanPlace} {$km} km {$suffix}", 0, 160);
+    }
+
+    /**
      * Derive a human-friendly route name from cluster member activities.
      *
      * @param  list<Activity>  $activities
@@ -1041,7 +1167,7 @@ class RouteMatchingService
             if ($name !== '') {
                 $fallbackName ??= $name;
 
-                if (! isset(self::GENERIC_ACTIVITY_NAMES[mb_strtolower($name)])) {
+                if (! self::isGenericActivityName($name, $activity->location_name)) {
                     $specificNameVotes[$name] = ($specificNameVotes[$name] ?? 0) + 1;
                 }
             }

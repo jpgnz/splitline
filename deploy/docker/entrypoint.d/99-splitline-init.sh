@@ -72,3 +72,4 @@ run_artisan config:cache --no-interaction
 run_artisan route:cache --no-interaction
 run_artisan view:cache --no-interaction
 run_artisan routes:match --queue --no-interaction
+run_artisan geocode:sync --queue --no-interaction

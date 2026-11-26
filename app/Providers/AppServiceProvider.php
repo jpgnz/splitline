@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Jobs\GeocodeRouteClusterJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Support\AppSettings;
@@ -134,6 +135,7 @@ class AppServiceProvider extends ServiceProvider
             $primaryQueue !== '' ? $primaryQueue : 'default',
             SyncActivityStreamJob::QUEUE,
             SyncActivityWeatherJob::QUEUE,
+            GeocodeRouteClusterJob::QUEUE,
         ])));
 
         DevCommands::artisan("queue:listen --queue={$queues} --tries=1 --timeout=0", 'queue');
