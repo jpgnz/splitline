@@ -3,13 +3,20 @@ import { Head, Link, router } from '@inertiajs/vue3';
 import {
     ArrowUpRight,
     Crosshair,
+    Grid2x2,
     Layers,
     Map as MapIcon,
     RefreshCw,
     RotateCcw,
     X,
 } from '@lucide/vue';
-import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
+import type {
+    Feature,
+    FeatureCollection,
+    LineString,
+    Point,
+    Polygon,
+} from 'geojson';
 import {
     AttributionControl,
     LngLatBounds,
@@ -94,6 +101,21 @@ interface DecodedHeatmapTrack extends Omit<HeatmapTrack, 'polyline'> {
     polyline: [number, number][];
 }
 
+interface ExplorerSummary {
+    zoom: number;
+    total_tiles: number;
+    max_square: {
+        size: number;
+        min_x: number;
+        min_y: number;
+    };
+    max_cluster: {
+        size: number;
+        tiles: [number, number][];
+    };
+    tiles: [number, number, number][];
+}
+
 interface HeatmapProps {
     filters: {
         sport: HeatmapSport;
@@ -108,6 +130,7 @@ interface HeatmapProps {
         total_elevation_gain: number;
         unsynced_gnss_count: number;
     };
+    explorer?: ExplorerSummary;
     tracks: HeatmapTrack[];
 }
 
@@ -130,6 +153,11 @@ const { formatDistanceCompact, formatElevation } = useUnits();
 
 const CLICK_RADIUS_PX = 14;
 
+const EXPLORER_TILES_SOURCE_ID = 'heatmap-explorer-tiles';
+const EXPLORER_TILES_FILL_LAYER_ID = 'heatmap-explorer-tiles-fill';
+const EXPLORER_TILES_LINE_LAYER_ID = 'heatmap-explorer-tiles-line';
+const EXPLORER_SQUARE_SOURCE_ID = 'heatmap-explorer-max-square';
+const EXPLORER_SQUARE_LINE_LAYER_ID = 'heatmap-explorer-max-square-line';
 const BASE_TRACKS_SOURCE_ID = 'heatmap-base-tracks';
 const BASE_TRACKS_LAYER_ID = 'heatmap-base-tracks-line';
 const HIGHLIGHT_TRACKS_SOURCE_ID = 'heatmap-highlight-tracks';
@@ -180,6 +208,7 @@ const hoveredTrackId = ref<number | null>(null);
 const isQueueingSync = ref<boolean>(false);
 const activeOrder = ref<HeatmapOrder>(props.order ?? 'newest_on_top');
 const prioritySportKey = ref<string | null>(null);
+const showExplorerTiles = ref<boolean>(false);
 
 let map: MapLibreMap | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -231,6 +260,16 @@ const decodedTracks = computed<DecodedHeatmapTrack[]>(() =>
 );
 
 const hasTracks = computed<boolean>(() => decodedTracks.value.length > 0);
+const explorerSummary = computed<ExplorerSummary>(() => ({
+    zoom: props.explorer?.zoom ?? 14,
+    total_tiles: props.explorer?.total_tiles ?? 0,
+    max_square: props.explorer?.max_square ?? { size: 0, min_x: 0, min_y: 0 },
+    max_cluster: props.explorer?.max_cluster ?? { size: 0, tiles: [] },
+    tiles: props.explorer?.tiles ?? [],
+}));
+const hasExplorerTiles = computed<boolean>(
+    () => explorerSummary.value.total_tiles > 0,
+);
 const hasActiveFilters = computed<boolean>(
     () => props.filters.sport !== 'all' || props.filters.timeframe !== 'all',
 );
@@ -717,6 +756,109 @@ function setHoveredTrack(activityId: number | null): void {
     renderHighlights();
 }
 
+function tileBounds(
+    x: number,
+    y: number,
+    zoom = 14,
+): { north: number; south: number; west: number; east: number } {
+    const n = 2 ** zoom;
+    const west = (x / n) * 360 - 180;
+    const east = ((x + 1) / n) * 360 - 180;
+    const north =
+        (Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / n))) * 180) / Math.PI;
+    const south =
+        (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * 180) /
+        Math.PI;
+
+    return { north, south, west, east };
+}
+
+function buildExplorerFeatureCollections(): {
+    tiles: FeatureCollection<Polygon>;
+    maxSquare: FeatureCollection<Polygon>;
+} {
+    const summary = explorerSummary.value;
+    const zoom = summary.zoom || 14;
+    const clusterSet = new Set<string>();
+
+    for (const [cx, cy] of summary.max_cluster.tiles) {
+        clusterSet.add(`${cx}:${cy}`);
+    }
+
+    const tileFeatures: Array<Feature<Polygon>> = [];
+
+    for (const [x, y, visits] of summary.tiles) {
+        const { north, south, west, east } = tileBounds(x, y, zoom);
+
+        tileFeatures.push({
+            type: 'Feature',
+            properties: {
+                x,
+                y,
+                visits,
+                is_cluster: clusterSet.has(`${x}:${y}`),
+            },
+            geometry: {
+                type: 'Polygon',
+                coordinates: [
+                    [
+                        [west, north],
+                        [east, north],
+                        [east, south],
+                        [west, south],
+                        [west, north],
+                    ],
+                ],
+            },
+        });
+    }
+
+    const maxSquareFeatures: Array<Feature<Polygon>> = [];
+
+    if (summary.max_square.size > 0) {
+        const topLeft = tileBounds(
+            summary.max_square.min_x,
+            summary.max_square.min_y,
+            zoom,
+        );
+        const bottomRight = tileBounds(
+            summary.max_square.min_x + summary.max_square.size - 1,
+            summary.max_square.min_y + summary.max_square.size - 1,
+            zoom,
+        );
+
+        maxSquareFeatures.push({
+            type: 'Feature',
+            properties: {
+                size: summary.max_square.size,
+            },
+            geometry: {
+                type: 'Polygon',
+                coordinates: [
+                    [
+                        [topLeft.west, topLeft.north],
+                        [bottomRight.east, topLeft.north],
+                        [bottomRight.east, bottomRight.south],
+                        [topLeft.west, bottomRight.south],
+                        [topLeft.west, topLeft.north],
+                    ],
+                ],
+            },
+        });
+    }
+
+    return {
+        tiles: {
+            type: 'FeatureCollection',
+            features: tileFeatures,
+        },
+        maxSquare: {
+            type: 'FeatureCollection',
+            features: maxSquareFeatures,
+        },
+    };
+}
+
 function buildTracksFeatureCollection(
     tracks: DecodedHeatmapTrack[],
 ): FeatureCollection<LineString> {
@@ -767,6 +909,53 @@ function ensureOverlayLayers(): void {
 
     const casing = casingColor();
 
+    if (!map.getSource(EXPLORER_TILES_SOURCE_ID)) {
+        map.addSource(EXPLORER_TILES_SOURCE_ID, {
+            type: 'geojson',
+            data: emptyFeatureCollection(),
+        });
+    }
+
+    if (!map.getLayer(EXPLORER_TILES_FILL_LAYER_ID)) {
+        map.addLayer({
+            id: EXPLORER_TILES_FILL_LAYER_ID,
+            type: 'fill',
+            source: EXPLORER_TILES_SOURCE_ID,
+            paint: {
+                'fill-color': [
+                    'case',
+                    ['==', ['get', 'is_cluster'], true],
+                    '#0ea5e9',
+                    '#10b981',
+                ],
+                'fill-opacity': [
+                    'case',
+                    ['==', ['get', 'is_cluster'], true],
+                    isDark.value ? 0.24 : 0.18,
+                    isDark.value ? 0.14 : 0.12,
+                ],
+            },
+        });
+    }
+
+    if (!map.getLayer(EXPLORER_TILES_LINE_LAYER_ID)) {
+        map.addLayer({
+            id: EXPLORER_TILES_LINE_LAYER_ID,
+            type: 'line',
+            source: EXPLORER_TILES_SOURCE_ID,
+            paint: {
+                'line-color': [
+                    'case',
+                    ['==', ['get', 'is_cluster'], true],
+                    isDark.value ? '#38bdf8' : '#0284c7',
+                    isDark.value ? '#34d399' : '#059669',
+                ],
+                'line-width': 0.85,
+                'line-opacity': isDark.value ? 0.55 : 0.45,
+            },
+        });
+    }
+
     if (!map.getSource(BASE_TRACKS_SOURCE_ID)) {
         map.addSource(BASE_TRACKS_SOURCE_ID, {
             type: 'geojson',
@@ -787,6 +976,31 @@ function ensureOverlayLayers(): void {
                 'line-color': ['get', 'color'],
                 'line-width': 2.5,
                 'line-opacity': baseTrackOpacity(),
+            },
+        });
+    }
+
+    if (!map.getSource(EXPLORER_SQUARE_SOURCE_ID)) {
+        map.addSource(EXPLORER_SQUARE_SOURCE_ID, {
+            type: 'geojson',
+            data: emptyFeatureCollection(),
+        });
+    }
+
+    if (!map.getLayer(EXPLORER_SQUARE_LINE_LAYER_ID)) {
+        map.addLayer({
+            id: EXPLORER_SQUARE_LINE_LAYER_ID,
+            type: 'line',
+            source: EXPLORER_SQUARE_SOURCE_ID,
+            layout: {
+                'line-cap': 'square',
+                'line-join': 'miter',
+            },
+            paint: {
+                'line-color': isDark.value ? '#fbbf24' : '#d97706',
+                'line-width': 2.5,
+                'line-dasharray': [4, 2],
+                'line-opacity': 0.95,
             },
         });
     }
@@ -905,6 +1119,32 @@ function updateBaseTrackStyle(): void {
         'line-opacity',
         baseTrackOpacity(),
     );
+}
+
+function renderExplorerLayers(): void {
+    if (!map || !styleReady) {
+        return;
+    }
+
+    ensureOverlayLayers();
+
+    const tilesSource = map.getSource(EXPLORER_TILES_SOURCE_ID) as
+        | GeoJSONSource
+        | undefined;
+    const squareSource = map.getSource(EXPLORER_SQUARE_SOURCE_ID) as
+        | GeoJSONSource
+        | undefined;
+
+    if (!showExplorerTiles.value || !hasExplorerTiles.value) {
+        tilesSource?.setData(emptyFeatureCollection());
+        squareSource?.setData(emptyFeatureCollection());
+
+        return;
+    }
+
+    const { tiles, maxSquare } = buildExplorerFeatureCollections();
+    tilesSource?.setData(tiles);
+    squareSource?.setData(maxSquare);
 }
 
 function renderBaseTracks(): void {
@@ -1110,6 +1350,7 @@ function initMap(): void {
     map.on('style.load', () => {
         styleReady = true;
         renderBaseTracks();
+        renderExplorerLayers();
         renderHighlights();
     });
 
@@ -1186,6 +1427,17 @@ watch(orderedTracksForRender, () => {
     }
 });
 
+watch(showExplorerTiles, () => {
+    renderExplorerLayers();
+});
+
+watch(
+    () => props.explorer,
+    () => {
+        renderExplorerLayers();
+    },
+);
+
 watch(
     () => props.tracks,
     async () => {
@@ -1208,6 +1460,7 @@ watch(
         }
 
         renderBaseTracks();
+        renderExplorerLayers();
         renderHighlights();
         fitAllTracks(false);
     },
@@ -1304,38 +1557,89 @@ onBeforeUnmount(() => {
                     @apply-custom="applyCustomTimeframe"
                 />
 
-                <!-- Layer Render Order -->
-                <div
-                    class="flex flex-wrap items-center gap-1.5"
-                    :class="!hasTracks ? 'opacity-50' : ''"
-                >
-                    <span
-                        class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
-                    >
-                        <Layers class="size-3" />
-                        <span>Order</span>
-                    </span>
+                <!-- Explorer Tiles + Layer Render Order -->
+                <div class="flex flex-wrap items-center gap-3">
+                    <!-- Explorer z14 Grid Toggle -->
                     <div
-                        class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-                        role="group"
-                        aria-label="Route layer order"
+                        class="flex flex-wrap items-center gap-1.5"
+                        :class="
+                            !hasTracks || !hasExplorerTiles ? 'opacity-50' : ''
+                        "
                     >
-                        <button
-                            v-for="opt in ORDER_OPTIONS"
-                            :key="opt.value"
-                            type="button"
-                            :title="opt.title"
-                            :disabled="!hasTracks"
-                            class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
-                            :class="
-                                activeOrder === opt.value
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                    : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                            "
-                            @click="selectOrder(opt.value)"
+                        <span
+                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
                         >
-                            {{ opt.label }}
-                        </button>
+                            <Grid2x2 class="size-3" />
+                            <span>Explorer</span>
+                        </span>
+                        <div
+                            class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            role="group"
+                            aria-label="Explorer tiles overlay"
+                        >
+                            <button
+                                type="button"
+                                :disabled="!hasTracks || !hasExplorerTiles"
+                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
+                                :class="
+                                    !showExplorerTiles
+                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                "
+                                @click="showExplorerTiles = false"
+                            >
+                                Off
+                            </button>
+                            <button
+                                type="button"
+                                :disabled="!hasTracks || !hasExplorerTiles"
+                                title="Overlay visited z14 OSM Explorer tiles, Max Cluster, and Max Square"
+                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
+                                :class="
+                                    showExplorerTiles
+                                        ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-950'
+                                        : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                "
+                                @click="showExplorerTiles = true"
+                            >
+                                Tiles
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Layer Render Order -->
+                    <div
+                        class="flex flex-wrap items-center gap-1.5"
+                        :class="!hasTracks ? 'opacity-50' : ''"
+                    >
+                        <span
+                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                        >
+                            <Layers class="size-3" />
+                            <span>Order</span>
+                        </span>
+                        <div
+                            class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            role="group"
+                            aria-label="Route layer order"
+                        >
+                            <button
+                                v-for="opt in ORDER_OPTIONS"
+                                :key="opt.value"
+                                type="button"
+                                :title="opt.title"
+                                :disabled="!hasTracks"
+                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
+                                :class="
+                                    activeOrder === opt.value
+                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                "
+                                @click="selectOrder(opt.value)"
+                            >
+                                {{ opt.label }}
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1388,6 +1692,68 @@ onBeforeUnmount(() => {
                             {{ formatElevation(summary.total_elevation_gain) }}
                         </span>
                     </div>
+
+                    <template v-if="hasTracks && hasExplorerTiles">
+                        <span
+                            class="hidden h-4 w-px bg-zinc-200 sm:inline-block dark:bg-zinc-800"
+                            aria-hidden="true"
+                        />
+
+                        <div
+                            class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                        >
+                            <div class="flex items-baseline gap-1.5">
+                                <span
+                                    class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Tiles
+                                </span>
+                                <span
+                                    class="font-mono text-xs font-semibold text-emerald-700 tabular-nums dark:text-emerald-400"
+                                >
+                                    {{
+                                        formatNumber(
+                                            explorerSummary.total_tiles,
+                                            0,
+                                        )
+                                    }}
+                                </span>
+                            </div>
+
+                            <div class="flex items-baseline gap-1.5">
+                                <span
+                                    class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Max Square
+                                </span>
+                                <span
+                                    class="font-mono text-xs font-semibold text-amber-700 tabular-nums dark:text-amber-400"
+                                >
+                                    {{ explorerSummary.max_square.size }}×{{
+                                        explorerSummary.max_square.size
+                                    }}
+                                </span>
+                            </div>
+
+                            <div class="flex items-baseline gap-1.5">
+                                <span
+                                    class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Max Cluster
+                                </span>
+                                <span
+                                    class="font-mono text-xs font-semibold text-sky-700 tabular-nums dark:text-sky-400"
+                                >
+                                    {{
+                                        formatNumber(
+                                            explorerSummary.max_cluster.size,
+                                            0,
+                                        )
+                                    }}
+                                </span>
+                            </div>
+                        </div>
+                    </template>
                 </div>
 
                 <div
@@ -1506,6 +1872,41 @@ onBeforeUnmount(() => {
                                 :style="{ backgroundColor: item.color }"
                             />
                             <span>{{ item.label }}</span>
+                        </span>
+                    </template>
+                    <template v-if="showExplorerTiles && hasExplorerTiles">
+                        <span
+                            class="mx-0.5 h-3 w-px bg-zinc-200 dark:bg-zinc-700"
+                            aria-hidden="true"
+                        />
+                        <span class="inline-flex items-center gap-1.5 px-0.5">
+                            <span
+                                class="size-2 rounded-[2px] border border-emerald-500 bg-emerald-500/25"
+                            />
+                            <span>z{{ explorerSummary.zoom }} Tile</span>
+                        </span>
+                        <span
+                            v-if="explorerSummary.max_cluster.size > 0"
+                            class="inline-flex items-center gap-1.5 px-0.5"
+                        >
+                            <span
+                                class="size-2 rounded-[2px] border border-sky-500 bg-sky-500/30"
+                            />
+                            <span>Cluster</span>
+                        </span>
+                        <span
+                            v-if="explorerSummary.max_square.size > 0"
+                            class="inline-flex items-center gap-1.5 px-0.5"
+                        >
+                            <span
+                                class="size-2 rounded-[2px] border border-dashed border-amber-500"
+                            />
+                            <span>
+                                {{ explorerSummary.max_square.size }}×{{
+                                    explorerSummary.max_square.size
+                                }}
+                                Square
+                            </span>
                         </span>
                     </template>
                 </div>

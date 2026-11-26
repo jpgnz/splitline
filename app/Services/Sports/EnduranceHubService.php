@@ -195,6 +195,7 @@ class EnduranceHubService
         private readonly ?DateWindowResolver $dateWindows = null,
         private readonly AnnualActivitySummaryService $annualActivitySummaryService = new AnnualActivitySummaryService,
         private readonly ?HealthSourceRegistry $healthSources = null,
+        private readonly ?EddingtonService $eddingtonService = null,
     ) {}
 
     private function dateWindowResolver(): DateWindowResolver
@@ -205,6 +206,11 @@ class EnduranceHubService
     private function healthSources(): HealthSourceRegistry
     {
         return $this->healthSources ?? app(HealthSourceRegistry::class);
+    }
+
+    private function eddingtonService(): EddingtonService
+    {
+        return $this->eddingtonService ?? app(EddingtonService::class);
     }
 
     /**
@@ -376,6 +382,9 @@ class EnduranceHubService
             'weeklyVolume' => $this->buildWeeklyVolume($baseQuery, $volumeWindow, $today, $timezone),
             'annualSummary' => in_array($entry['sport_category'], ['running', 'biking'], true)
                 ? $this->annualActivitySummaryService->forQuery($baseQuery, $today)
+                : null,
+            'eddington' => in_array($entry['metric_mode'], ['pace', 'speed'], true)
+                ? $this->eddingtonService()->forQuery($baseQuery)
                 : null,
             'hrZones' => $this->buildHrZones($baseQuery, $zoneWindow),
             'goals' => $this->collectSportGoals($normalizedKey),
