@@ -25,6 +25,7 @@ import {
     Target,
     Timer,
     TrendingUp,
+    Trophy,
     Waves,
     // Wrench,
     X,
@@ -43,6 +44,7 @@ import { index as fitnessIndex } from '@/routes/fitness';
 import { index as goalsIndex } from '@/routes/goals';
 import { index as heatmapIndex } from '@/routes/heatmap';
 import { index as insightsIndex } from '@/routes/insights';
+import { index as recapIndex } from '@/routes/recap';
 import { index as routesIndex } from '@/routes/routes';
 import { index as segmentsIndex } from '@/routes/segments';
 import { index as settingsIndex } from '@/routes/settings';
@@ -202,6 +204,12 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                 label: 'Goals',
                 href: goalsIndex.url(),
                 icon: Target,
+            },
+            {
+                key: 'recap',
+                label: 'Year in Sport',
+                href: recapIndex.url(),
+                icon: Trophy,
             },
             // Gear is hidden for now until Garmin Personal API exposes gear-service
             // (or we decide to maintain equipment manually).

@@ -6,6 +6,7 @@ import {
     ChevronRight,
     MapPin,
     RefreshCw,
+    Share2,
     Trophy,
     Wind,
     X,
@@ -25,6 +26,7 @@ import ActivityMatchedRoute from '@/components/activities/ActivityMatchedRoute.v
 import ActivityPaceAnalysis from '@/components/activities/ActivityPaceAnalysis.vue';
 import ActivityPaceDistribution from '@/components/activities/ActivityPaceDistribution.vue';
 import ActivitySegmentsPanel from '@/components/activities/ActivitySegmentsPanel.vue';
+import ActivityShareCardModal from '@/components/activities/ActivityShareCardModal.vue';
 import ActivitySplitsAndLaps from '@/components/activities/ActivitySplitsAndLaps.vue';
 import ActivityStreamsPanel, {
     countTelemetryPanels,
@@ -132,6 +134,7 @@ const verticalMetricMode = ref<'ratio' | 'oscillation'>('ratio');
 const powerUnitMode = ref<'watts' | 'pct'>('watts');
 const isSyncingStreams = ref<boolean>(false);
 const isSyncingWeather = ref<boolean>(false);
+const shareModalOpen = ref<boolean>(false);
 
 watch(
     () => props.activity.id,
@@ -143,6 +146,7 @@ watch(
         highlightedRange.value = null;
         splitsTab.value =
             (props.stream?.km_splits?.length ?? 0) > 0 ? 'splits' : 'laps';
+        shareModalOpen.value = false;
     },
 );
 
@@ -1151,6 +1155,14 @@ const tabs = computed<
                     :has-gps="hasCoordinates || polyline.length > 0"
                     :has-original-archive="Boolean(hasOriginalArchive)"
                 />
+                <button
+                    type="button"
+                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white"
+                    @click="shareModalOpen = true"
+                >
+                    <Share2 class="size-3.5" />
+                    <span>Share Card</span>
+                </button>
             </div>
         </header>
 
@@ -1588,6 +1600,32 @@ const tabs = computed<
             :activity="activity"
             :uses-pace="usesPace"
             :weather="weather"
+        />
+
+        <!-- Shareable Summary Card Modal -->
+        <ActivityShareCardModal
+            :open="shareModalOpen"
+            :activity="{
+                id: activity.id,
+                name: activity.name,
+                started_at_local: activity.started_at_local,
+                sport_category: activity.sport_category,
+                effective_discipline: effectiveDiscipline,
+                location_name: activity.location_name,
+                distance_meters: activity.distance_meters,
+                duration_seconds: activity.duration_seconds,
+                elevation_gain: activity.elevation_gain,
+                avg_speed: activity.avg_speed,
+                avg_hr: activity.avg_hr,
+                avg_power: activity.avg_power,
+                accentHex: sportMeta.accentHex,
+                sportLabel: sportMeta.label,
+                usesPace,
+            }"
+            :polyline="polyline"
+            :series="series"
+            :weather="weather"
+            @close="shareModalOpen = false"
         />
     </div>
 </template>
