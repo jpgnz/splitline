@@ -16,6 +16,7 @@ use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Support\Facades\Schema;
 use InvalidArgumentException;
 
 /**
@@ -386,6 +387,7 @@ class EnduranceHubService
             'eddington' => in_array($entry['metric_mode'], ['pace', 'speed'], true)
                 ? $this->eddingtonService()->forQuery($baseQuery)
                 : null,
+            'aerobicDrift' => $this->buildAerobicDrift($baseQuery, $today),
             'hrZones' => $this->buildHrZones($baseQuery, $zoneWindow),
             'goals' => $this->collectSportGoals($normalizedKey),
             'milestones' => $this->buildMilestones($baseQuery, $entry['sport_category']),
@@ -396,6 +398,198 @@ class EnduranceHubService
                 'climbing' => $climbingModule,
                 'offroad' => $offroadModule,
             ],
+        ];
+    }
+
+    /**
+     * Build the 12-month Aerobic Efficiency Factor & Decoupling trend series from activity_derived_metrics.
+     *
+     * @param  Builder<Activity>  $baseQuery
+     * @return array{
+     *     count: int,
+     *     avg_decoupling_pct: ?float,
+     *     well_coupled_pct: ?float,
+     *     latest_ef: ?float,
+     *     latest_metric: ?string,
+     *     primary_metric: ?string,
+     *     ef_delta_90d: ?float,
+     *     points: list<array{
+     *         date: string,
+     *         activity_id: int,
+     *         name: string,
+     *         efficiency_factor: ?float,
+     *         first_half_ef: ?float,
+     *         second_half_ef: ?float,
+     *         decoupling_pct: ?float,
+     *         decoupling_metric: ?string,
+     *         decoupling_rating: ?string,
+     *         distance_meters: float,
+     *         duration_seconds: float
+     *     }>
+     * }
+     */
+    private function buildAerobicDrift(Builder $baseQuery, CarbonImmutable $today): array
+    {
+        $empty = [
+            'count' => 0,
+            'avg_decoupling_pct' => null,
+            'well_coupled_pct' => null,
+            'latest_ef' => null,
+            'latest_metric' => null,
+            'primary_metric' => null,
+            'ef_delta_90d' => null,
+            'points' => [],
+        ];
+
+        if (! Schema::hasTable('activity_derived_metrics')) {
+            return $empty;
+        }
+
+        $windowStart = $today->subMonths(12)->format('Y-m-d').' 00:00:00';
+
+        $rows = (clone $baseQuery)
+            ->join('activity_derived_metrics', 'activity_derived_metrics.activity_id', '=', 'activities.id')
+            ->where('activities.started_at_local', '>=', $windowStart)
+            ->where(static function (Builder $sub): void {
+                $sub->whereNotNull('activity_derived_metrics.efficiency_factor')
+                    ->orWhereNotNull('activity_derived_metrics.decoupling_pct');
+            })
+            ->orderByDesc('activities.started_at_local')
+            ->orderByDesc('activities.id')
+            ->limit(120)
+            ->toBase()
+            ->get([
+                'activities.id',
+                'activities.name',
+                'activities.started_at_local',
+                'activities.distance_meters',
+                'activities.duration_seconds',
+                'activity_derived_metrics.efficiency_factor',
+                'activity_derived_metrics.first_half_ef',
+                'activity_derived_metrics.second_half_ef',
+                'activity_derived_metrics.decoupling_pct',
+                'activity_derived_metrics.decoupling_metric',
+                'activity_derived_metrics.decoupling_rating',
+            ])
+            ->reverse()
+            ->values();
+
+        if ($rows->isEmpty()) {
+            return $empty;
+        }
+
+        $points = [];
+        $decouplingValues = [];
+        $wellCoupledCount = 0;
+        $latestEf = null;
+        $latestMetric = null;
+        /** @var array<string, int> $metricCounts */
+        $metricCounts = [];
+
+        foreach ($rows as $row) {
+            $rawDate = isset($row->started_at_local) && is_string($row->started_at_local)
+                ? substr($row->started_at_local, 0, 10)
+                : '';
+
+            $ef = $this->rowNullableFloat($row, 'efficiency_factor', 3);
+            $firstHalfEf = $this->rowNullableFloat($row, 'first_half_ef', 3);
+            $secondHalfEf = $this->rowNullableFloat($row, 'second_half_ef', 3);
+            $decouplingPct = $this->rowNullableFloat($row, 'decoupling_pct', 2);
+            $metric = isset($row->decoupling_metric) && is_string($row->decoupling_metric)
+                ? $row->decoupling_metric
+                : null;
+            $rating = isset($row->decoupling_rating) && is_string($row->decoupling_rating)
+                ? $row->decoupling_rating
+                : null;
+
+            if ($decouplingPct !== null) {
+                $decouplingValues[] = $decouplingPct;
+
+                if ($decouplingPct < 5.0) {
+                    $wellCoupledCount++;
+                }
+            }
+
+            if ($ef !== null) {
+                $latestEf = $ef;
+                $latestMetric = $metric;
+            }
+
+            if ($metric !== null) {
+                $metricCounts[$metric] = ($metricCounts[$metric] ?? 0) + 1;
+            }
+
+            $points[] = [
+                'date' => $rawDate,
+                'activity_id' => $this->rowInt($row, 'id'),
+                'name' => isset($row->name) && is_string($row->name) ? $row->name : 'Activity',
+                'efficiency_factor' => $ef,
+                'first_half_ef' => $firstHalfEf,
+                'second_half_ef' => $secondHalfEf,
+                'decoupling_pct' => $decouplingPct,
+                'decoupling_metric' => $metric,
+                'decoupling_rating' => $rating,
+                'distance_meters' => round($this->rowFloat($row, 'distance_meters'), 1),
+                'duration_seconds' => round($this->rowFloat($row, 'duration_seconds'), 1),
+            ];
+        }
+
+        $primaryMetric = $latestMetric;
+
+        if ($metricCounts !== []) {
+            arsort($metricCounts);
+            $primaryMetric = array_key_first($metricCounts);
+        }
+
+        $avgDecouplingPct = $decouplingValues !== []
+            ? round(array_sum($decouplingValues) / count($decouplingValues), 2)
+            : null;
+        $wellCoupledPct = $decouplingValues !== []
+            ? round(($wellCoupledCount / count($decouplingValues)) * 100.0, 1)
+            : null;
+
+        $cutoff90 = $today->subDays(90)->format('Y-m-d');
+        $recentEf = [];
+        $baselineEf = [];
+
+        foreach ($points as $point) {
+            if ($point['efficiency_factor'] === null) {
+                continue;
+            }
+
+            if ($latestMetric !== null && $point['decoupling_metric'] !== $latestMetric) {
+                continue;
+            }
+
+            if ($point['date'] >= $cutoff90) {
+                $recentEf[] = $point['efficiency_factor'];
+            } else {
+                $baselineEf[] = $point['efficiency_factor'];
+            }
+        }
+
+        $efDelta90d = null;
+
+        if ($recentEf !== [] && $baselineEf !== []) {
+            $recentAvg = array_sum($recentEf) / count($recentEf);
+            $baselineAvg = array_sum($baselineEf) / count($baselineEf);
+            $efDelta90d = round($recentAvg - $baselineAvg, 3);
+        } elseif (count($recentEf) >= 2) {
+            $half = intdiv(count($recentEf), 2);
+            $early = array_slice($recentEf, 0, $half);
+            $late = array_slice($recentEf, count($recentEf) - $half, $half);
+            $efDelta90d = round((array_sum($late) / count($late)) - (array_sum($early) / count($early)), 3);
+        }
+
+        return [
+            'count' => count($points),
+            'avg_decoupling_pct' => $avgDecouplingPct,
+            'well_coupled_pct' => $wellCoupledPct,
+            'latest_ef' => $latestEf,
+            'latest_metric' => $latestMetric,
+            'primary_metric' => $primaryMetric,
+            'ef_delta_90d' => $efDelta90d,
+            'points' => $points,
         ];
     }
 

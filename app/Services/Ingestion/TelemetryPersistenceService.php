@@ -18,6 +18,7 @@ use App\Models\SleepRecord;
 use App\Models\Vo2MaxRecord;
 use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
+use App\Services\Activities\ActivityDerivedMetricsService;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Gear\GearService;
 use App\Services\Routes\RouteMatchingService;
@@ -118,6 +119,7 @@ class TelemetryPersistenceService
         private readonly BestEffortCalculator $bestEffortCalculator,
         private readonly GearService $gearService = new GearService,
         private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
+        private readonly ActivityDerivedMetricsService $derivedMetricsService = new ActivityDerivedMetricsService,
     ) {}
 
     /**
@@ -382,6 +384,7 @@ class TelemetryPersistenceService
         }
 
         MatchActivitySegmentsJob::dispatch($activity->id);
+        $this->derivedMetricsService->computeAndStore($activity, $activityStream);
 
         if (
             ! $activity->is_indoor

@@ -14,6 +14,10 @@ Schedule::command('segments:scan --queue')
     ->hourly()
     ->withoutOverlapping();
 
+Schedule::command('activities:compute-derived-metrics --queue')
+    ->hourly()
+    ->withoutOverlapping();
+
 Schedule::command('geocode:sync --queue')
     ->hourly()
     ->withoutOverlapping();
