@@ -206,7 +206,7 @@ export interface AnnualRecapPageProps {
     has_data: boolean;
     totals: RecapTotals;
     yoy: RecapYoy;
-    sports: RecapSportBreakdownItem[];
+    sport_breakdown: RecapSportBreakdownItem[];
     peaks: RecapPeaks;
     consistency: RecapConsistency;
     milestones: RecapMilestones;

@@ -47,7 +47,7 @@ it('returns a clean empty state when no activities or health records exist', fun
             'elevation_pct' => null,
             'activities_pct' => null,
         ])
-        ->and($payload['sports'])->toBe([])
+        ->and($payload['sport_breakdown'])->toBe([])
         ->and($payload['peaks'])->toBe([
             'biggest_week' => null,
             'biggest_month' => null,
@@ -249,12 +249,12 @@ it('builds sport breakdown, peak moments, monthly progression, and daily and wee
     $payload = app(AnnualRecapService::class)->build(2026);
 
     // Sports sorted by duration desc: running (11000s), hiking (10800s), biking (7200s) -> total 29000s
-    expect(array_column($payload['sports'], 'key'))->toBe(['running', 'hiking', 'biking'])
-        ->and($payload['sports'][0]['label'])->toBe('Running')
-        ->and($payload['sports'][0]['count'])->toBe(4)
-        ->and($payload['sports'][0]['distance_meters'])->toBe(36000.0)
-        ->and($payload['sports'][2]['label'])->toBe('Cycling')
-        ->and($payload['sports'][2]['distance_meters'])->toBe(60000.0);
+    expect(array_column($payload['sport_breakdown'], 'key'))->toBe(['running', 'hiking', 'biking'])
+        ->and($payload['sport_breakdown'][0]['label'])->toBe('Running')
+        ->and($payload['sport_breakdown'][0]['count'])->toBe(4)
+        ->and($payload['sport_breakdown'][0]['distance_meters'])->toBe(36000.0)
+        ->and($payload['sport_breakdown'][2]['label'])->toBe('Cycling')
+        ->and($payload['sport_breakdown'][2]['distance_meters'])->toBe(60000.0);
 
     // Peak moments
     expect($payload['peaks']['biggest_week'])->toMatchArray([
