@@ -195,3 +195,30 @@ it('syncs activity streams and flashes status on success and failure', function 
         ->assertRedirect("/activities/{$activity->id}")
         ->assertSessionHas('status', 'Failed to sync activity streams: FIT archive unavailable');
 });
+
+it('supports stepped 12w, 6m, and 1y date windows on the activities index', function () {
+    $juneRun = Activity::factory()->create([
+        'name' => 'Winter Tempo',
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-06-15 07:00:00'),
+        'distance_meters' => 10000.0,
+    ]);
+
+    Activity::factory()->create([
+        'name' => 'November Long Run',
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-11-18 07:00:00'),
+        'distance_meters' => 20000.0,
+    ]);
+
+    $this->get('/activities?range=12w&end=2026-06-30')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Activities/Index')
+            ->where('filters.range', '12w')
+            ->where('dateWindow.end', '2026-06-30')
+            ->where('dateWindow.isLatest', false)
+            ->where('summary.count', 1)
+            ->where('activities.data.0.id', $juneRun->id),
+        );
+});

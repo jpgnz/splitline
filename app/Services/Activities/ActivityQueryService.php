@@ -6,6 +6,7 @@ use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
 use App\Services\Gear\GearService;
+use App\Support\DateWindowResolver;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -18,11 +19,17 @@ class ActivityQueryService
         private readonly ActivityEffortService $effortService = new ActivityEffortService,
         private readonly PaceDistributionService $paceDistributionService = new PaceDistributionService,
         private readonly ?SportRegistry $sports = null,
+        private readonly ?DateWindowResolver $dateWindows = null,
     ) {}
 
     private function sportRegistry(): SportRegistry
     {
         return $this->sports ?? app(SportRegistry::class);
+    }
+
+    private function dateWindowResolver(): DateWindowResolver
+    {
+        return $this->dateWindows ?? app(DateWindowResolver::class);
     }
 
     private const int PER_PAGE = 25;
@@ -58,7 +65,7 @@ class ActivityQueryService
     /**
      * @var list<string>
      */
-    private const array VALID_RANGES = ['30d', 'this_year', 'last_year', 'all', 'custom'];
+    private const array VALID_RANGES = ['30d', '12w', '6m', '1y', 'this_year', 'last_year', 'all', 'custom'];
 
     /**
      * @var list<string>
@@ -201,18 +208,23 @@ class ActivityQueryService
 
         $search = $this->normalizeSearch($filters['search'] ?? null);
         $sport = $this->normalizeChoice($filters['sport'] ?? null, self::VALID_SPORTS, 'all');
-        $from = $this->normalizeDate($filters['from'] ?? null, $timezone);
-        $to = $this->normalizeDate($filters['to'] ?? null, $timezone);
+        $rawRange = is_string($filters['range'] ?? null) ? $filters['range'] : null;
+        $rawEnd = is_string($filters['end'] ?? null) ? $filters['end'] : null;
+        $rawFrom = is_string($filters['from'] ?? null) ? $filters['from'] : null;
+        $rawTo = is_string($filters['to'] ?? null) ? $filters['to'] : null;
 
-        $rawRange = $filters['range'] ?? null;
-
-        if (is_string($rawRange) && in_array($rawRange, self::VALID_RANGES, true)) {
-            $range = $rawRange;
-        } elseif ($from !== null || $to !== null) {
-            $range = 'custom';
-        } else {
-            $range = 'all';
-        }
+        $dateWindow = $this->dateWindowResolver()->resolveDayWindow(
+            $rawRange,
+            $rawEnd,
+            $rawFrom,
+            $rawTo,
+            $today,
+            self::VALID_RANGES,
+            'all',
+        );
+        $range = $dateWindow['range'];
+        $from = $dateWindow['from'];
+        $to = $dateWindow['to'];
 
         $pr = $this->normalizeBool($filters['pr'] ?? false);
         $favorite = $this->normalizeBool($filters['favorite'] ?? false);
@@ -222,7 +234,7 @@ class ActivityQueryService
 
         $filteredQuery = Activity::query();
         $this->applyFacetFilters($filteredQuery, $search, $sport, $pr, $favorite);
-        $this->applyDateRangeFilter($filteredQuery, $range, $from, $to, $today);
+        $this->applyDateWindowFilter($filteredQuery, $dateWindow);
 
         $summary = $this->buildSummary($filteredQuery);
 
@@ -241,6 +253,7 @@ class ActivityQueryService
             'summary' => $summary,
             'activities' => $paginator->toArray(),
             'calendar' => $calendar,
+            'dateWindow' => $dateWindow,
             'available_sports' => $this->sportRegistry()->filterableSports(),
             'filters' => [
                 'search' => $search ?? '',
@@ -474,21 +487,6 @@ class ActivityQueryService
         return $default;
     }
 
-    private function normalizeDate(mixed $value, string $timezone): ?string
-    {
-        if (! is_string($value) || preg_match('/^\d{4}-\d{2}-\d{2}$/', $value) !== 1) {
-            return null;
-        }
-
-        $parsed = CarbonImmutable::createFromFormat('!Y-m-d', $value, $timezone);
-
-        if ($parsed === null || $parsed->format('Y-m-d') !== $value) {
-            return null;
-        }
-
-        return $value;
-    }
-
     private function normalizeBool(mixed $value): bool
     {
         if (is_bool($value)) {
@@ -545,51 +543,37 @@ class ActivityQueryService
 
     /**
      * @param  Builder<Activity>  $query
+     * @param  array{
+     *     range: string,
+     *     start: ?string,
+     *     end: string,
+     *     from: ?string,
+     *     to: ?string
+     * }  $dateWindow
      */
-    private function applyDateRangeFilter(
-        Builder $query,
-        string $range,
-        ?string $from,
-        ?string $to,
-        CarbonImmutable $today,
-    ): void {
-        if ($range === '30d') {
-            $query->whereBetween('started_at_local', [
-                $today->subDays(29)->format('Y-m-d').' 00:00:00',
-                $today->format('Y-m-d').' 23:59:59',
-            ]);
-
+    private function applyDateWindowFilter(Builder $query, array $dateWindow): void
+    {
+        if ($dateWindow['range'] === 'all') {
             return;
         }
 
-        if ($range === 'this_year') {
-            $query->whereBetween('started_at_local', [
-                $today->startOfYear()->format('Y-m-d').' 00:00:00',
-                $today->endOfYear()->format('Y-m-d').' 23:59:59',
-            ]);
-
-            return;
-        }
-
-        if ($range === 'last_year') {
-            $lastYear = $today->subYear();
-
-            $query->whereBetween('started_at_local', [
-                $lastYear->startOfYear()->format('Y-m-d').' 00:00:00',
-                $lastYear->endOfYear()->format('Y-m-d').' 23:59:59',
-            ]);
-
-            return;
-        }
-
-        if ($range === 'custom') {
-            if ($from !== null) {
-                $query->where('started_at_local', '>=', $from.' 00:00:00');
+        if ($dateWindow['range'] === 'custom') {
+            if ($dateWindow['from'] !== null) {
+                $query->where('started_at_local', '>=', $dateWindow['from'].' 00:00:00');
             }
 
-            if ($to !== null) {
-                $query->where('started_at_local', '<=', $to.' 23:59:59');
+            if ($dateWindow['to'] !== null) {
+                $query->where('started_at_local', '<=', $dateWindow['to'].' 23:59:59');
             }
+
+            return;
+        }
+
+        if ($dateWindow['start'] !== null) {
+            $query->whereBetween('started_at_local', [
+                $dateWindow['start'].' 00:00:00',
+                $dateWindow['end'].' 23:59:59',
+            ]);
         }
     }
 
