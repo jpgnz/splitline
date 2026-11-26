@@ -15,6 +15,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $id
  * @property string $name
  * @property string|null $name_override
+ * @property string|null $place_label
  * @property string $sport_category
  * @property int|null $representative_activity_id
  * @property bool $is_loop
@@ -32,6 +33,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property string|null $encoded_polyline
  * @property int $activity_count
  * @property CarbonImmutable|null $last_activity_at
+ * @property CarbonImmutable|null $geocoded_at
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read Activity|null $representativeActivity
@@ -48,6 +50,7 @@ class RouteCluster extends Model
     protected $fillable = [
         'name',
         'name_override',
+        'place_label',
         'sport_category',
         'representative_activity_id',
         'is_loop',
@@ -65,6 +68,7 @@ class RouteCluster extends Model
         'encoded_polyline',
         'activity_count',
         'last_activity_at',
+        'geocoded_at',
     ];
 
     /**
@@ -90,6 +94,7 @@ class RouteCluster extends Model
             'waypoints' => 'array',
             'activity_count' => 'integer',
             'last_activity_at' => 'immutable_datetime',
+            'geocoded_at' => 'immutable_datetime',
         ];
     }
 

@@ -2,9 +2,11 @@
 
 namespace App\Services\Sync;
 
+use App\Jobs\GeocodeRouteClusterJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
+use App\Models\RouteCluster;
 use App\Services\Routes\RouteMatchingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
@@ -17,8 +19,8 @@ use Illuminate\Support\Facades\Schema;
  *     has_active_work: bool
  * }
  * @phpstan-type EnrichmentQueueSummary array{
- *     jobs: array{default: int, streams: int, weather: int, total: int},
- *     pending: array{streams: int, weather: int, routes: int},
+ *     jobs: array{default: int, streams: int, weather: int, geocode: int, total: int},
+ *     pending: array{streams: int, weather: int, routes: int, geocoding: int},
  *     has_active_work: bool
  * }
  */
@@ -60,7 +62,7 @@ class QueueStatusService
     }
 
     /**
-     * @return array{default: int, streams: int, weather: int, total: int}
+     * @return array{default: int, streams: int, weather: int, geocode: int, total: int}
      */
     private function queuedJobCounts(): array
     {
@@ -69,6 +71,7 @@ class QueueStatusService
                 'default' => 0,
                 'streams' => 0,
                 'weather' => 0,
+                'geocode' => 0,
                 'total' => 0,
             ];
         }
@@ -81,6 +84,7 @@ class QueueStatusService
         $default = 0;
         $streams = 0;
         $weather = 0;
+        $geocode = 0;
 
         foreach ($rows as $row) {
             $queue = is_string($row->queue ?? null) ? $row->queue : 'default';
@@ -90,6 +94,8 @@ class QueueStatusService
                 $streams += $count;
             } elseif ($queue === SyncActivityWeatherJob::QUEUE) {
                 $weather += $count;
+            } elseif ($queue === GeocodeRouteClusterJob::QUEUE) {
+                $geocode += $count;
             } else {
                 $default += $count;
             }
@@ -99,12 +105,13 @@ class QueueStatusService
             'default' => $default,
             'streams' => $streams,
             'weather' => $weather,
-            'total' => $default + $streams + $weather,
+            'geocode' => $geocode,
+            'total' => $default + $streams + $weather + $geocode,
         ];
     }
 
     /**
-     * @return array{streams: int, weather: int, routes: int}
+     * @return array{streams: int, weather: int, routes: int, geocoding: int}
      */
     private function pendingEnrichmentCounts(): array
     {
@@ -113,6 +120,7 @@ class QueueStatusService
                 'streams' => 0,
                 'weather' => 0,
                 'routes' => 0,
+                'geocoding' => 0,
             ];
         }
 
@@ -131,10 +139,29 @@ class QueueStatusService
             ? $this->routeMatchingService->unfingerprintedCount()
             : 0;
 
+        $pendingGeocoding = Activity::query()
+            ->where('is_indoor', false)
+            ->whereNotNull('start_lat')
+            ->whereNotNull('start_lng')
+            ->where(function (Builder $sub): void {
+                $sub
+                    ->whereNull('location_name')
+                    ->orWhere('location_name', '');
+            })
+            ->count();
+
+        if (Schema::hasTable('route_clusters') && Schema::hasColumn('route_clusters', 'geocoded_at')) {
+            $pendingGeocoding += RouteCluster::query()
+                ->matched()
+                ->whereNull('geocoded_at')
+                ->count();
+        }
+
         return [
             'streams' => $awaitingStreams,
             'weather' => $missingWeather,
             'routes' => $unfingerprintedRoutes,
+            'geocoding' => $pendingGeocoding,
         ];
     }
 }

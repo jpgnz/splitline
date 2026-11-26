@@ -80,6 +80,7 @@ export interface MatchedRouteCard {
     name: string;
     auto_name: string;
     name_override: string | null;
+    place_label: string | null;
     sport_category: string;
     effective_discipline: string | null;
     sport_key: string;
@@ -130,6 +131,7 @@ export interface MatchedRouteDetail {
     name: string;
     auto_name: string;
     name_override: string | null;
+    place_label: string | null;
     sport_category: string;
     effective_discipline: string | null;
     sport_key: string;
@@ -171,6 +173,7 @@ export interface ActivityMatchedRoutePayload {
     route: {
         id: number;
         name: string;
+        place_label: string | null;
         sport_category: string;
         effective_discipline: string | null;
         sport_key: string;

@@ -492,7 +492,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     {{ route.is_loop ? 'Loop' : 'Point-to-Point' }}
                 </span>
                 <span
-                    v-if="route.location_name"
+                    v-if="!route.place_label && route.location_name"
                     class="inline-flex items-center gap-1 font-mono text-xs text-zinc-500 dark:text-zinc-400"
                 >
                     <MapPin class="size-3.5" />
@@ -526,6 +526,15 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                             <Pencil class="size-3.5" />
                         </button>
                     </div>
+                    <p
+                        v-if="route.place_label"
+                        class="mt-1 flex items-center gap-1.5 text-sm text-zinc-500 dark:text-zinc-400"
+                    >
+                        <MapPin
+                            class="size-3.5 shrink-0 text-zinc-400 dark:text-zinc-500"
+                        />
+                        <span class="truncate">{{ route.place_label }}</span>
+                    </p>
                     <p
                         v-if="
                             route.name_override &&
@@ -1510,5 +1519,20 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                 </table>
             </div>
         </section>
+
+        <!-- ODbL Place Naming Attribution -->
+        <p
+            class="text-right font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+        >
+            Place names &copy;
+            <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-600 dark:decoration-zinc-700 dark:hover:text-zinc-300"
+            >
+                OpenStreetMap contributors (ODbL)
+            </a>
+        </p>
     </div>
 </template>

@@ -102,13 +102,15 @@ Back up `splitline_fits` as well to keep cached FIT archives without re-download
 
 Prefix commands with `docker exec -it splitline` when running in Docker.
 
-| Command                                                                                          | Description                                                                  |
-| :----------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------- |
-| `php artisan garmin:check [--refresh]`                                                           | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.            |
-| `php artisan garmin:sync [--days=7]`                                                             | Incremental sync of health summaries and activities (runs every 30 minutes). |
-| `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                         | Resumable all-time history backfill from Garmin.                             |
-| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]` | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.       |
-| `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`      | Fetch and store historical Open-Meteo weather for outdoor activities.        |
+| Command                                                                                          | Description                                                                    |
+| :----------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| `php artisan garmin:check [--refresh]`                                                           | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.              |
+| `php artisan garmin:sync [--days=7]`                                                             | Incremental sync of health summaries and activities (runs every 30 minutes).   |
+| `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                         | Resumable all-time history backfill from Garmin.                               |
+| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]` | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.         |
+| `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`      | Fetch and store historical Open-Meteo weather for outdoor activities.          |
+| `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                   | Fingerprint outdoor GNSS polylines and cluster repeated matched routes.        |
+| `php artisan geocode:sync [--queue] [--limit=50] [--force]`                                      | Reverse-geocode matched routes and activities missing place names (Nominatim). |
 
 ## Configuration
 
@@ -129,6 +131,15 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 | `DB_SQLITE_BUSY_TIMEOUT`   | `5000` _(Docker)_                     | SQLite busy timeout in milliseconds.                                                                                                                                    |
 | `OPEN_METEO_ENABLED`       | `true`                                | Enable historical activity weather lookups.                                                                                                                             |
 | `OPEN_METEO_AUTO_SYNC`     | `true`                                | Automatically queue weather lookups for newly synced outdoor activities.                                                                                                |
+| `NOMINATIM_ENABLED`        | `true`                                | Enable reverse geocoding for Matched Routes and outdoor activities missing `location_name`.                                                                             |
+| `NOMINATIM_AUTO_SYNC`      | `true`                                | Automatically queue background reverse geocoding for matched routes and outdoor activities missing location names.                                                      |
+| `NOMINATIM_BASE_URL`       | `https://nominatim.openstreetmap.org` | Nominatim endpoint URL (point to a self-hosted Nominatim instance to remove public rate limits).                                                                        |
+| `NOMINATIM_RATE_LIMIT_MS`  | `1100`                                | Minimum spacing in milliseconds between Nominatim requests (enforces ≥1000ms on the public OSMF host; set to `0` for self-hosted instances).                            |
+| `NOMINATIM_USER_AGENT`     | _(Splitline/version)_                 | Custom HTTP `User-Agent` header (defaults to `Splitline/{version} (+https://github.com/splitline-php/splitline)`).                                                      |
+| `NOMINATIM_REFERER`        | _(`APP_URL`)_                         | Optional HTTP `Referer` header sent to Nominatim (defaults to `APP_URL` when valid HTTP/HTTPS).                                                                         |
+| `NOMINATIM_EMAIL`          | _(empty)_                             | Optional contact email passed per the OSMF Nominatim Usage Policy.                                                                                                      |
+| `NOMINATIM_TIMEOUT`        | `15`                                  | HTTP request timeout in seconds for Nominatim reverse lookups.                                                                                                          |
+| `NOMINATIM_MAX_RETRIES`    | `2`                                   | Maximum retry attempts for transient connection/5xx errors.                                                                                                             |
 
 ## Development
 
@@ -138,6 +149,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, CI checks, and contribut
 
 - **Weather**: [Open-Meteo.com](https://open-meteo.com/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Maps**: OpenFreeMap vector tiles and OpenStreetMap data.
+- **Place Naming (Geocoding)**: [OpenStreetMap Nominatim](https://nominatim.openstreetmap.org/) — place names © OpenStreetMap contributors, licensed under [ODbL](https://www.openstreetmap.org/copyright).
 - **Disclaimer**: Splitline is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Garmin Ltd. or its subsidiaries. Garmin and Garmin Connect are trademarks of Garmin Ltd. or its subsidiaries.
 
 ## License
