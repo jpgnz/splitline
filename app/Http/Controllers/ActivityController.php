@@ -23,6 +23,7 @@ class ActivityController extends Controller
                 'search',
                 'sport',
                 'range',
+                'end',
                 'from',
                 'to',
                 'pr',

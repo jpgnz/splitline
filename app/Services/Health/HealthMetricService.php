@@ -9,6 +9,7 @@ use App\Models\SleepRecord;
 use App\Models\Vo2MaxRecord;
 use App\Models\WeightMeasurement;
 use App\Support\AppSettings;
+use App\Support\DateWindowResolver;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
 use InvalidArgumentException;
@@ -23,7 +24,13 @@ class HealthMetricService
 
     public function __construct(
         private readonly ?AppSettings $settings = null,
+        private readonly ?DateWindowResolver $dateWindows = null,
     ) {}
+
+    private function dateWindowResolver(): DateWindowResolver
+    {
+        return $this->dateWindows ?? app(DateWindowResolver::class);
+    }
 
     private function isImperial(): bool
     {
@@ -35,7 +42,7 @@ class HealthMetricService
     /**
      * @var list<string>
      */
-    private const array VALID_RANGES = ['7d', '28d', '90d', '1y', 'all'];
+    private const array VALID_RANGES = ['7d', '28d', '90d', '1y', 'all', 'custom'];
 
     /**
      * @var array<string, array{
@@ -182,6 +189,17 @@ class HealthMetricService
      *     range: string,
      *     startDate: ?string,
      *     endDate: string,
+     *     dateWindow: array{
+     *         range: string,
+     *         start: ?string,
+     *         end: string,
+     *         from: ?string,
+     *         to: ?string,
+     *         prevEnd: ?string,
+     *         nextEnd: ?string,
+     *         isLatest: bool,
+     *         label: string
+     *     },
      *     summary: array{
      *         latest: ?string,
      *         average: ?string,
@@ -197,15 +215,32 @@ class HealthMetricService
      *     rows: list<array<string, string|int|float|null>>
      * }
      */
-    public function forMetric(string $metric, ?string $range = null): array
-    {
+    public function forMetric(
+        string $metric,
+        ?string $range = null,
+        ?string $end = null,
+        ?string $from = null,
+        ?string $to = null,
+    ): array {
         if (! $this->isSupported($metric)) {
             throw new InvalidArgumentException("Unsupported health metric: {$metric}");
         }
 
         $meta = self::METRICS[$metric];
-        $normalizedRange = $this->normalizeRange($range);
-        [$startDate, $endDate] = $this->resolveDateWindow($normalizedRange);
+        $timezone = (string) config('app.display_timezone', 'UTC');
+        $today = CarbonImmutable::now($timezone)->startOfDay();
+        $dateWindow = $this->dateWindowResolver()->resolveDayWindow(
+            $range,
+            $end,
+            $from,
+            $to,
+            $today,
+            self::VALID_RANGES,
+            '28d',
+        );
+        $normalizedRange = $dateWindow['range'];
+        $startDate = $dateWindow['start'];
+        $endDate = $dateWindow['end'];
 
         $data = match ($metric) {
             'body-battery' => $this->buildBodyBattery($startDate, $endDate),
@@ -242,6 +277,7 @@ class HealthMetricService
             'range' => $normalizedRange,
             'startDate' => $startDate,
             'endDate' => $endDate,
+            'dateWindow' => $dateWindow,
             'summary' => $data['summary'],
             'baseline' => $data['baseline'],
             'priorPoint' => $data['priorPoint'] ?? null,
@@ -249,26 +285,6 @@ class HealthMetricService
             'columns' => $data['columns'],
             'rows' => array_slice(array_reverse($data['rows']), 0, self::MAX_TABLE_ROWS),
         ];
-    }
-
-    /**
-     * @return array{0: ?string, 1: string}
-     */
-    private function resolveDateWindow(string $range): array
-    {
-        $timezone = (string) config('app.display_timezone', 'UTC');
-        $today = CarbonImmutable::now($timezone)->startOfDay();
-        $endDate = $today->format('Y-m-d');
-
-        $startDate = match ($range) {
-            '7d' => $today->subDays(6)->format('Y-m-d'),
-            '28d' => $today->subDays(27)->format('Y-m-d'),
-            '90d' => $today->subDays(89)->format('Y-m-d'),
-            '1y' => $today->subDays(364)->format('Y-m-d'),
-            default => null,
-        };
-
-        return [$startDate, $endDate];
     }
 
     /**
@@ -859,6 +875,14 @@ class HealthMetricService
     {
         if (in_array($range, ['7d', '28d', '90d'], true)) {
             return $this->buildDailyIntensityMinutes($startDate, $endDate, $range);
+        }
+
+        if ($range === 'custom' && $startDate !== null) {
+            $spanDays = (int) CarbonImmutable::parse($startDate)->diffInDays(CarbonImmutable::parse($endDate)) + 1;
+
+            if ($spanDays <= 90) {
+                return $this->buildDailyIntensityMinutes($startDate, $endDate, $range);
+            }
         }
 
         return $this->buildWeeklyIntensityMinutes($startDate, $endDate);
