@@ -11,6 +11,7 @@ use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Models\Segment;
 use App\Models\SyncRun;
 use App\Services\Geocoding\NominatimClient;
+use App\Services\Ingestion\ImportWatchService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
@@ -28,6 +29,7 @@ class SettingsController extends Controller
         QueueStatusService $queueStatus,
         HealthSourceRegistry $healthSources,
         NominatimClient $nominatim,
+        ImportWatchService $importWatch,
     ): Response {
         return Inertia::render('settings/Index', [
             'unit_system' => $settings->unitSystem(),
@@ -45,6 +47,7 @@ class SettingsController extends Controller
                 'is_public_endpoint' => $nominatim->isPublicHost(),
                 'rate_limit_ms' => $nominatim->effectiveRateLimitMs(),
             ],
+            'import_watch' => $importWatch->statusPayload(),
             'sports_settings' => $sports->settingsPayload(),
             'health_sources' => $healthSources->settingsPayload(),
             'segments_settings' => $this->segmentsSettingsSummary($settings),
