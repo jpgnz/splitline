@@ -23,6 +23,7 @@ import {
     Sun,
     Target,
     Timer,
+    TrendingUp,
     Waves,
     // Wrench,
     X,
@@ -36,6 +37,7 @@ import { formatRelativeTime } from '@/lib/format';
 import { useSports } from '@/lib/sports';
 import { dashboard } from '@/routes';
 import { index as activitiesIndex } from '@/routes/activities';
+import { index as fitnessIndex } from '@/routes/fitness';
 // import { index as gearIndex } from '@/routes/gear';
 import { index as goalsIndex } from '@/routes/goals';
 import { index as heatmapIndex } from '@/routes/heatmap';
@@ -117,6 +119,12 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                     icon: LayoutGrid,
                     exact: true,
                     activePrefixes: ['/health/'],
+                },
+                {
+                    key: 'fitness',
+                    label: 'Training Load',
+                    href: fitnessIndex.url(),
+                    icon: TrendingUp,
                 },
                 {
                     key: 'activities',
