@@ -21,3 +21,8 @@ Schedule::command('activities:compute-derived-metrics --queue')
 Schedule::command('geocode:sync --queue')
     ->hourly()
     ->withoutOverlapping();
+
+Schedule::command('import:watch')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->when(fn (): bool => trim((string) config('services.import_watch.dir', '')) !== '');
