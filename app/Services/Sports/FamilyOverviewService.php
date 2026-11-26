@@ -3,6 +3,7 @@
 namespace App\Services\Sports;
 
 use App\Models\Activity;
+use App\Services\Activities\AnnualActivitySummaryService;
 use App\Services\Goals\GoalProgressService;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
@@ -71,6 +72,7 @@ class FamilyOverviewService
     public function __construct(
         private readonly SportRegistry $sports,
         private readonly GoalProgressService $goalProgressService,
+        private readonly AnnualActivitySummaryService $annualActivitySummaryService = new AnnualActivitySummaryService,
     ) {}
 
     /**
@@ -88,6 +90,19 @@ class FamilyOverviewService
      *     },
      *     disciplineSummaries: list<FamilyDisciplineSummary>,
      *     weeklyVolume: list<FamilyWeeklyVolumePoint>,
+     *     annualSummary: array{
+     *         today: string,
+     *         years: list<int>,
+     *         daily: list<array{
+     *             date: string,
+     *             activities: int,
+     *             distance_meters: float,
+     *             elevation_gain: float,
+     *             duration_seconds: float,
+     *             calories: int,
+     *             training_load: float
+     *         }>
+     *     },
      *     goals: list<array<string, mixed>>,
      *     reclassifyInbox: list<ReclassifyActivityItem>,
      *     reclassifyInboxTotal: int
@@ -148,6 +163,10 @@ class FamilyOverviewService
             ],
             'disciplineSummaries' => $disciplineSummaries,
             'weeklyVolume' => $this->buildWeeklyVolume($normalizedFamily, $enabledDisciplines, $today),
+            'annualSummary' => $this->annualActivitySummaryService->forQuery(
+                $this->sports->applyScope(Activity::query(), $normalizedFamily),
+                $today,
+            ),
             'goals' => $this->collectFamilyGoals($normalizedFamily, $enabledDisciplines),
             'reclassifyInbox' => $reclassifyInbox,
             'reclassifyInboxTotal' => $reclassifyInboxTotal,
