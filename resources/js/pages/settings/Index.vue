@@ -28,6 +28,9 @@ import {
 } from '@/actions/App/Http/Controllers/SettingsController';
 import AppearanceTabs from '@/components/AppearanceTabs.vue';
 import { useEnrichmentQueueFeed } from '@/composables/useEnrichmentQueueFeed';
+import DataExportCard, {
+    type DataExportSummary,
+} from '@/components/settings/DataExportCard.vue';
 import ImportWatcherCard, {
     type ImportWatchStatus,
 } from '@/components/settings/ImportWatcherCard.vue';
@@ -131,6 +134,7 @@ interface SettingsProps {
     enrichment_queue: EnrichmentQueueSummary;
     geocoding: GeocodingConfigSummary;
     import_watch: ImportWatchStatus;
+    data_export: DataExportSummary;
     sports_settings: {
         config: SportsConfig;
         counts: Record<string, number>;
@@ -1994,6 +1998,9 @@ function submitSegmentsSettings(): void {
 
             <!-- 4B. Automated Drop-Folder Import Watcher -->
             <ImportWatcherCard :import-watch="import_watch" />
+
+            <!-- 4C. Backup, Export & Data Portability -->
+            <DataExportCard :summary="data_export" />
 
             <!-- 5. Data Provider & Environment -->
             <section

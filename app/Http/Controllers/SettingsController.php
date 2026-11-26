@@ -10,6 +10,7 @@ use App\Jobs\GeocodeSegmentJob;
 use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Models\Segment;
 use App\Models\SyncRun;
+use App\Services\Export\DataExportService;
 use App\Services\Geocoding\NominatimClient;
 use App\Services\Ingestion\ImportWatchService;
 use App\Services\Sync\QueueStatusService;
@@ -30,6 +31,7 @@ class SettingsController extends Controller
         HealthSourceRegistry $healthSources,
         NominatimClient $nominatim,
         ImportWatchService $importWatch,
+        DataExportService $dataExport,
     ): Response {
         return Inertia::render('settings/Index', [
             'unit_system' => $settings->unitSystem(),
@@ -48,6 +50,7 @@ class SettingsController extends Controller
                 'rate_limit_ms' => $nominatim->effectiveRateLimitMs(),
             ],
             'import_watch' => $importWatch->statusPayload(),
+            'data_export' => $dataExport->summaryPayload(),
             'sports_settings' => $sports->settingsPayload(),
             'health_sources' => $healthSources->settingsPayload(),
             'segments_settings' => $this->segmentsSettingsSummary($settings),
