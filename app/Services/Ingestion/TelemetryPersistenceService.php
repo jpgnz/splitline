@@ -20,6 +20,7 @@ use App\Models\WeightMeasurement;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Gear\GearService;
 use App\Services\Routes\RouteMatchingService;
+use App\Services\Segments\SegmentMatchingService;
 use Carbon\CarbonImmutable;
 use Splitline\Core\Data\ActivityStreamData;
 use Splitline\Core\Data\ActivityWeatherData;
@@ -117,6 +118,7 @@ class TelemetryPersistenceService
         private readonly BestEffortCalculator $bestEffortCalculator,
         private readonly GearService $gearService = new GearService,
         private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
+        private readonly SegmentMatchingService $segmentMatchingService = new SegmentMatchingService,
     ) {}
 
     /**
@@ -376,6 +378,13 @@ class TelemetryPersistenceService
             $this->routeMatchingService->matchActivity($activity, $activityStream);
         } catch (Throwable $exception) {
             // Route matching is best-effort enrichment; the scheduled routes:match scan retries it.
+            report($exception);
+        }
+
+        try {
+            $this->segmentMatchingService->scanActivity($activity, $activityStream);
+        } catch (Throwable $exception) {
+            // Segment scanning is best-effort enrichment; the scheduled segments:scan retries it.
             report($exception);
         }
 

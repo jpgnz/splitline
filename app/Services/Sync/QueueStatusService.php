@@ -7,7 +7,9 @@ use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use App\Services\Routes\RouteMatchingService;
+use App\Services\Segments\SegmentMatchingService;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -20,7 +22,7 @@ use Illuminate\Support\Facades\Schema;
  * }
  * @phpstan-type EnrichmentQueueSummary array{
  *     jobs: array{default: int, streams: int, weather: int, geocode: int, total: int},
- *     pending: array{streams: int, weather: int, routes: int, geocoding: int},
+ *     pending: array{streams: int, weather: int, routes: int, segments: int, geocoding: int},
  *     has_active_work: bool
  * }
  */
@@ -28,6 +30,7 @@ class QueueStatusService
 {
     public function __construct(
         private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
+        private readonly SegmentMatchingService $segmentMatchingService = new SegmentMatchingService,
     ) {}
 
     /**
@@ -111,7 +114,7 @@ class QueueStatusService
     }
 
     /**
-     * @return array{streams: int, weather: int, routes: int, geocoding: int}
+     * @return array{streams: int, weather: int, routes: int, segments: int, geocoding: int}
      */
     private function pendingEnrichmentCounts(): array
     {
@@ -120,6 +123,7 @@ class QueueStatusService
                 'streams' => 0,
                 'weather' => 0,
                 'routes' => 0,
+                'segments' => 0,
                 'geocoding' => 0,
             ];
         }
@@ -139,6 +143,10 @@ class QueueStatusService
             ? $this->routeMatchingService->unfingerprintedCount()
             : 0;
 
+        $unscannedSegments = ($hasEnrichmentTables && Schema::hasColumn('activities', 'segments_scanned_at'))
+            ? $this->segmentMatchingService->unscannedCount()
+            : 0;
+
         $pendingGeocoding = 0;
 
         if (Schema::hasColumn('activities', 'geocode_attempted_at')) {
@@ -149,10 +157,17 @@ class QueueStatusService
             $pendingGeocoding += RouteCluster::query()->awaitingGeocoding()->count();
         }
 
+        if (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocoded_at')) {
+            $pendingGeocoding += Segment::query()
+                ->whereNull('geocoded_at')
+                ->count();
+        }
+
         return [
             'streams' => $awaitingStreams,
             'weather' => $missingWeather,
             'routes' => $unfingerprintedRoutes,
+            'segments' => $unscannedSegments,
             'geocoding' => $pendingGeocoding,
         ];
     }

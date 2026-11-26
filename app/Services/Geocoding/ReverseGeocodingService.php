@@ -6,12 +6,14 @@ use App\Models\Activity;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\GeocodedPlace;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use App\Services\Geocoding\Exceptions\GeocodingUnavailableException;
 use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Schema;
 
 /**
- * Resolves privacy-friendly outdoor place names for Matched Routes and activities missing location_name.
+ * Resolves privacy-friendly outdoor place names for Matched Routes, segments, and activities missing location_name.
  */
 class ReverseGeocodingService
 {
@@ -139,11 +141,71 @@ class ReverseGeocodingService
     }
 
     /**
-     * Count matched route clusters and outdoor activities still awaiting geocoding.
+     * Enrich a personal Segment or auto-detected Climb with a feature-tier OSM place_label
+     * and cleanly upgrade fallback auto-names without overwriting user name_override.
+     *
+     * @throws GeocodingUnavailableException
+     */
+    public function enrichSegment(Segment $segment, bool $force = false): bool
+    {
+        if (! $force && $segment->geocoded_at !== null) {
+            return false;
+        }
+
+        [$targetLat, $targetLng] = $this->segmentSampleCoordinate($segment);
+        $feature = $this->resolveFeature($targetLat, $targetLng, $force);
+
+        if ($feature === null) {
+            return false;
+        }
+
+        $placeLabel = $this->formatSubtitle($feature);
+
+        if ($placeLabel === null || trim($placeLabel) === '') {
+            return false;
+        }
+
+        $shortPlace = $feature->display_label ?? $feature->area_label ?? $feature->city;
+
+        $updates = [
+            'place_label' => mb_substr(trim($placeLabel), 0, 160),
+            'geocoded_at' => CarbonImmutable::now('UTC'),
+        ];
+
+        $hasNameOverride = is_string($segment->name_override) && trim($segment->name_override) !== '';
+
+        if (! $hasNameOverride && is_string($shortPlace) && trim($shortPlace) !== '') {
+            $cleanPlace = trim($shortPlace);
+
+            if ($segment->kind === Segment::KIND_CLIMB) {
+                $upgraded = str_ends_with(mb_strtolower($cleanPlace), 'climb')
+                    ? $cleanPlace
+                    : "{$cleanPlace} Climb";
+            } else {
+                $upgraded = str_ends_with(mb_strtolower($cleanPlace), 'segment')
+                    ? $cleanPlace
+                    : "{$cleanPlace} Segment";
+            }
+
+            $updates['name'] = mb_substr($upgraded, 0, 160);
+        }
+
+        $segment->update($updates);
+
+        return true;
+    }
+
+    /**
+     * Count matched route clusters, segments, and outdoor activities still awaiting geocoding.
      */
     public function pendingCount(): int
     {
+        $pendingSegments = Schema::hasTable('segments')
+            ? Segment::query()->whereNull('geocoded_at')->count()
+            : 0;
+
         return RouteCluster::query()->awaitingGeocoding()->count()
+            + $pendingSegments
             + Activity::query()->awaitingGeocoding()->count();
     }
 
@@ -261,6 +323,31 @@ class ReverseGeocodingService
         return [
             ($cluster->start_lat + $cluster->end_lat) / 2.0,
             ($cluster->start_lng + $cluster->end_lng) / 2.0,
+        ];
+    }
+
+    /**
+     * Pick a representative coordinate along a segment (~70% up for climbs, midpoint for custom segments)
+     * so specific roads, trails, and peaks resolve accurately at feature tier (zoom 17).
+     *
+     * @return array{0: float, 1: float}
+     */
+    private function segmentSampleCoordinate(Segment $segment): array
+    {
+        $waypoints = $segment->waypoints;
+        $count = count($waypoints);
+
+        if ($count > 0) {
+            $idx = $segment->kind === Segment::KIND_CLIMB
+                ? min($count - 1, (int) round(($count - 1) * 0.7))
+                : intdiv($count, 2);
+
+            return [$waypoints[$idx][0], $waypoints[$idx][1]];
+        }
+
+        return [
+            ($segment->start_lat + $segment->end_lat) / 2.0,
+            ($segment->start_lng + $segment->end_lng) / 2.0,
         ];
     }
 

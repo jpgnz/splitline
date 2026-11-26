@@ -8,6 +8,7 @@ use App\Http\Controllers\GoalController;
 use App\Http\Controllers\HealthMetricController;
 use App\Http\Controllers\HeatmapController;
 use App\Http\Controllers\RouteController;
+use App\Http\Controllers\SegmentController;
 use App\Http\Controllers\SportsController;
 use App\Http\Controllers\SyncController;
 use Illuminate\Support\Facades\Route;
@@ -42,6 +43,13 @@ Route::post('/routes/scan', [RouteController::class, 'scan'])->name('routes.scan
 Route::get('/routes/{routeCluster}', [RouteController::class, 'show'])->name('routes.show');
 Route::patch('/routes/{routeCluster}', [RouteController::class, 'update'])->name('routes.update');
 Route::delete('/routes/{routeCluster}/activities/{activity}', [RouteController::class, 'unlinkActivity'])->name('routes.activities.unlink');
+
+Route::get('/segments', [SegmentController::class, 'index'])->name('segments.index');
+Route::post('/segments', [SegmentController::class, 'store'])->name('segments.store');
+Route::post('/segments/scan', [SegmentController::class, 'scan'])->name('segments.scan');
+Route::get('/segments/{segment}', [SegmentController::class, 'show'])->name('segments.show');
+Route::patch('/segments/{segment}', [SegmentController::class, 'update'])->name('segments.update');
+Route::delete('/segments/{segment}', [SegmentController::class, 'destroy'])->name('segments.destroy');
 
 Route::get('/goals', [GoalController::class, 'index'])->name('goals.index');
 Route::post('/goals', [GoalController::class, 'store'])->name('goals.store');

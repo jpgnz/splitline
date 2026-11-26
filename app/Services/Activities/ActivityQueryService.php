@@ -7,6 +7,7 @@ use App\Models\BestEffort;
 use App\Models\HeartRateZone;
 use App\Services\Gear\GearService;
 use App\Services\Routes\MatchedRouteService;
+use App\Services\Segments\SegmentQueryService;
 use App\Support\DateWindowResolver;
 use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
@@ -23,6 +24,7 @@ class ActivityQueryService
         private readonly ?SportRegistry $sports = null,
         private readonly ?DateWindowResolver $dateWindows = null,
         private readonly ?MatchedRouteService $matchedRoutes = null,
+        private readonly ?SegmentQueryService $segments = null,
         private readonly ?HealthSourceRegistry $healthSources = null,
     ) {}
 
@@ -34,6 +36,11 @@ class ActivityQueryService
     private function matchedRouteService(): MatchedRouteService
     {
         return $this->matchedRoutes ?? app(MatchedRouteService::class);
+    }
+
+    private function segmentQueryService(): SegmentQueryService
+    {
+        return $this->segments ?? app(SegmentQueryService::class);
     }
 
     private function sportRegistry(): SportRegistry
@@ -308,6 +315,7 @@ class ActivityQueryService
      *     nextActivity: ?array{id: int, name: string},
      *     gear: array<string, mixed>,
      *     matchedRoute: ?array<string, mixed>,
+     *     segmentEfforts: list<array<string, mixed>>,
      *     discipline_options: list<array{value: string, label: string}>
      * }
      */
@@ -496,6 +504,7 @@ class ActivityQueryService
             'nextActivity' => $next !== null ? ['id' => $next->id, 'name' => $next->name] : null,
             'gear' => $this->gearService->forActivity($activity),
             'matchedRoute' => $this->matchedRouteService()->forActivity($activity),
+            'segmentEfforts' => $this->segmentQueryService()->forActivity($activity),
             'discipline_options' => $this->sportRegistry()->disciplinesForCategory($activity->sport_category),
         ];
     }
