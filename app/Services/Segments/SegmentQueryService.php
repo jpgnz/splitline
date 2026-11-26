@@ -7,6 +7,7 @@ use App\Models\ActivityWeather;
 use App\Models\Segment;
 use App\Models\SegmentEffort;
 use App\Services\Heatmap\HeatmapService;
+use App\Support\AppSettings;
 use App\Support\SportRegistry;
 use Illuminate\Database\Eloquent\Builder;
 
@@ -84,11 +85,17 @@ class SegmentQueryService
     public function __construct(
         private readonly ?SportRegistry $sports = null,
         private readonly SegmentMatchingService $matcher = new SegmentMatchingService,
+        private readonly ?AppSettings $appSettings = null,
     ) {}
 
     private function sportRegistry(): SportRegistry
     {
         return $this->sports ?? app(SportRegistry::class);
+    }
+
+    private function appSettings(): AppSettings
+    {
+        return $this->appSettings ?? app(AppSettings::class);
     }
 
     /**
@@ -105,7 +112,11 @@ class SegmentQueryService
         $search = $this->normalizeSearch($filters['search'] ?? null);
         $sort = $this->normalizeChoice($filters['sort'] ?? null, self::VALID_SORTS, 'efforts');
 
-        $query = Segment::query()->with(['sourceActivity', 'bestEffort']);
+        $minEfforts = $this->appSettings()->segmentsMinEfforts();
+
+        $query = Segment::query()
+            ->visible($minEfforts)
+            ->with(['sourceActivity', 'bestEffort']);
 
         if ($kind === 'climb') {
             $query->climbs();
@@ -210,11 +221,15 @@ class SegmentQueryService
             ];
         }
 
-        $totalSegments = Segment::query()->count();
-        $climbsCount = Segment::query()->climbs()->count();
-        $customCount = Segment::query()->custom()->count();
-        $starredCount = Segment::query()->starred()->count();
-        $totalEfforts = SegmentEffort::query()->count();
+        $totalSegments = Segment::query()->visible($minEfforts)->count();
+        $climbsCount = Segment::query()->visible($minEfforts)->climbs()->count();
+        $customCount = Segment::query()->visible($minEfforts)->custom()->count();
+        $starredCount = Segment::query()->visible($minEfforts)->starred()->count();
+        $totalEfforts = SegmentEffort::query()
+            ->whereHas('segment', static function (Builder $segQuery) use ($minEfforts): void {
+                $segQuery->visible($minEfforts);
+            })
+            ->count();
 
         return [
             'filters' => [
@@ -232,6 +247,7 @@ class SegmentQueryService
                 'starred_count' => $starredCount,
                 'total_efforts' => $totalEfforts,
                 'unscanned_count' => $this->matcher->unscannedCount(),
+                'min_efforts' => $minEfforts,
             ],
             'segments' => $segments,
         ];
@@ -429,9 +445,14 @@ class SegmentQueryService
      */
     public function forActivity(Activity $activity): array
     {
+        $minEfforts = $this->appSettings()->segmentsMinEfforts();
+
         $efforts = SegmentEffort::query()
             ->with('segment')
             ->where('activity_id', $activity->id)
+            ->whereHas('segment', static function (Builder $segQuery) use ($minEfforts): void {
+                $segQuery->visible($minEfforts);
+            })
             ->orderBy('start_distance_meters')
             ->orderBy('start_index')
             ->get();

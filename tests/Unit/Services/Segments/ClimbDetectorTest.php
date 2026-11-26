@@ -144,3 +144,27 @@ it('categorizes climb scores accurately across all thresholds', function () {
         ->and(ClimbDetector::categorizeClimb(1000.0, 8.0))->toBe('cat4')
         ->and(ClimbDetector::categorizeClimb(800.0, 5.0))->toBe('uncategorized');
 });
+
+it('rejects physically impossible average grades caused by barometer or lift spikes', function () {
+    $detector = new ClimbDetector;
+
+    // 500m gaining 250m (50% average grade) -> rejected for biking (cap 25%) and hiking (cap 40%)
+    $verticalSpike = buildSyntheticElevationSeries([
+        ['distance' => 200.0, 'gain' => 0.0],
+        ['distance' => 500.0, 'gain' => 250.0],
+        ['distance' => 200.0, 'gain' => 0.0],
+    ]);
+
+    expect($detector->detectFromSeries($verticalSpike, 'biking'))->toBeEmpty()
+        ->and($detector->detectFromSeries($verticalSpike, 'hiking'))->toBeEmpty();
+
+    // 1000m gaining 300m (30% average grade) -> rejected for biking (>25%), allowed for steep alpine hiking (<=40%)
+    $steepRidge = buildSyntheticElevationSeries([
+        ['distance' => 100.0, 'gain' => 0.0],
+        ['distance' => 1000.0, 'gain' => 300.0],
+        ['distance' => 100.0, 'gain' => 0.0],
+    ]);
+
+    expect($detector->detectFromSeries($steepRidge, 'biking'))->toBeEmpty()
+        ->and($detector->detectFromSeries($steepRidge, 'hiking'))->toHaveCount(1);
+});

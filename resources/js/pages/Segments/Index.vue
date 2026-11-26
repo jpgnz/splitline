@@ -125,7 +125,10 @@ const summaryKpis = computed<
     {
         label: 'Detected Climbs',
         value: formatNumber(props.summary.climbs_count, 0),
-        sub: 'Cat 4 through HC',
+        sub:
+            props.summary.min_efforts > 1
+                ? `min ${props.summary.min_efforts} efforts · Cat 4–HC`
+                : 'Cat 4 through HC',
         accentClass: 'bg-amber-500',
     },
     {

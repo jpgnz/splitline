@@ -112,6 +112,15 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
     ]);
 
     Segment::factory()->create([
+        'effort_count' => 5,
+        'detection_count' => 5,
+        'geocoded_at' => null,
+    ]);
+
+    // Hidden climb candidate (< 5 efforts) should NOT count toward pending geocoding
+    Segment::factory()->create([
+        'effort_count' => 1,
+        'detection_count' => 1,
         'geocoded_at' => null,
     ]);
 

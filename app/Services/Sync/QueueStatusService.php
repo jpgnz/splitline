@@ -159,6 +159,7 @@ class QueueStatusService
 
         if (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocoded_at')) {
             $pendingGeocoding += Segment::query()
+                ->visible()
                 ->whereNull('geocoded_at')
                 ->count();
         }
