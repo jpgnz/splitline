@@ -121,6 +121,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property CarbonImmutable|null $updated_at
  * @property-read ActivityStream|null $stream
  * @property-read ActivityWeather|null $weather
+ * @property-read ActivityRouteFingerprint|null $routeFingerprint
  * @property-read Collection<int, BestEffort> $bestEfforts
  */
 class Activity extends Model
@@ -354,6 +355,14 @@ class Activity extends Model
     public function weather(): HasOne
     {
         return $this->hasOne(ActivityWeather::class);
+    }
+
+    /**
+     * @return HasOne<ActivityRouteFingerprint, $this>
+     */
+    public function routeFingerprint(): HasOne
+    {
+        return $this->hasOne(ActivityRouteFingerprint::class);
     }
 
     /**

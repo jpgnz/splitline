@@ -23,6 +23,7 @@ import { assignToActivity } from '@/actions/App/Http/Controllers/GearController'
 import ActivityAllStats from '@/components/activities/ActivityAllStats.vue';
 import ActivityBestEfforts from '@/components/activities/ActivityBestEfforts.vue';
 import ActivityEffortContext from '@/components/activities/ActivityEffortContext.vue';
+import ActivityMatchedRoute from '@/components/activities/ActivityMatchedRoute.vue';
 import ActivityPaceAnalysis from '@/components/activities/ActivityPaceAnalysis.vue';
 import ActivityPaceDistribution from '@/components/activities/ActivityPaceDistribution.vue';
 import ActivityWeatherCard from '@/components/activities/ActivityWeatherCard.vue';
@@ -73,6 +74,7 @@ import type {
     SplitItem,
     StreamPoint,
 } from '@/types/activity';
+import type { ActivityMatchedRoutePayload } from '@/types/routes';
 
 interface AdjacentActivity {
     id: number;
@@ -110,10 +112,11 @@ interface ActivityShowProps {
     prevActivity: AdjacentActivity | null;
     nextActivity: AdjacentActivity | null;
     gear?: ActivityGearPayload;
+    matchedRoute?: ActivityMatchedRoutePayload | null;
     discipline_options?: DisciplineOption[];
 }
 
-type DetailTab = 'overview' | 'pace' | 'efforts' | 'effort' | 'stats';
+type DetailTab = 'overview' | 'pace' | 'efforts' | 'effort' | 'route' | 'stats';
 
 const props = defineProps<ActivityShowProps>();
 const theme = useChartTheme();
@@ -3033,6 +3036,14 @@ const tabs = computed<
         });
     }
 
+    if (props.matchedRoute) {
+        list.push({
+            key: 'route',
+            label: 'Matched Route',
+            badge: props.matchedRoute.route.activity_count,
+        });
+    }
+
     list.push(
         {
             key: 'effort',
@@ -4467,7 +4478,13 @@ const tabs = computed<
             @select-range="highlightedRange = $event"
         />
 
-        <!-- TAB 4: Effort Context -->
+        <!-- TAB 4: Matched Route -->
+        <ActivityMatchedRoute
+            v-else-if="activeTab === 'route' && matchedRoute"
+            :matched-route="matchedRoute"
+        />
+
+        <!-- TAB 5: Effort Context -->
         <ActivityEffortContext
             v-else-if="activeTab === 'effort'"
             :effort-context="effortContext"

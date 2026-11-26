@@ -7,6 +7,7 @@ use App\Http\Controllers\GearController;
 use App\Http\Controllers\GoalController;
 use App\Http\Controllers\HealthMetricController;
 use App\Http\Controllers\HeatmapController;
+use App\Http\Controllers\RouteController;
 use App\Http\Controllers\SportsController;
 use App\Http\Controllers\SyncController;
 use Illuminate\Support\Facades\Route;
@@ -34,6 +35,12 @@ Route::patch('/best-efforts/{bestEffort}', [BestEffortController::class, 'update
 
 Route::get('/heatmap', [HeatmapController::class, 'index'])->name('heatmap.index');
 Route::post('/heatmap/sync-streams', [HeatmapController::class, 'syncStreams'])->name('heatmap.streams.sync');
+
+Route::get('/routes', [RouteController::class, 'index'])->name('routes.index');
+Route::post('/routes/scan', [RouteController::class, 'scan'])->name('routes.scan');
+Route::get('/routes/{routeCluster}', [RouteController::class, 'show'])->name('routes.show');
+Route::patch('/routes/{routeCluster}', [RouteController::class, 'update'])->name('routes.update');
+Route::delete('/routes/{routeCluster}/activities/{activity}', [RouteController::class, 'unlinkActivity'])->name('routes.activities.unlink');
 
 Route::get('/goals', [GoalController::class, 'index'])->name('goals.index');
 Route::post('/goals', [GoalController::class, 'store'])->name('goals.store');
