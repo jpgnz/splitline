@@ -132,6 +132,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property CarbonImmutable|null $updated_at
  * @property-read ActivityStream|null $stream
  * @property-read ActivityWeather|null $weather
+ * @property-read ActivityDerivedMetric|null $derivedMetrics
  * @property-read ActivityRouteFingerprint|null $routeFingerprint
  * @property-read Collection<int, BestEffort> $bestEfforts
  * @property-read Collection<int, SegmentEffort> $segmentEfforts
@@ -384,6 +385,14 @@ class Activity extends Model
     public function weather(): HasOne
     {
         return $this->hasOne(ActivityWeather::class);
+    }
+
+    /**
+     * @return HasOne<ActivityDerivedMetric, $this>
+     */
+    public function derivedMetrics(): HasOne
+    {
+        return $this->hasOne(ActivityDerivedMetric::class);
     }
 
     /**

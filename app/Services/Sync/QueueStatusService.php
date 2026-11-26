@@ -8,6 +8,7 @@ use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\RouteCluster;
 use App\Models\Segment;
+use App\Services\Activities\ActivityDerivedMetricsService;
 use App\Services\Routes\RouteMatchingService;
 use App\Services\Segments\SegmentMatchingService;
 use Illuminate\Support\Facades\DB;
@@ -22,7 +23,7 @@ use Illuminate\Support\Facades\Schema;
  * }
  * @phpstan-type EnrichmentQueueSummary array{
  *     jobs: array{default: int, streams: int, weather: int, geocode: int, total: int},
- *     pending: array{streams: int, weather: int, routes: int, segments: int, geocoding: int},
+ *     pending: array{streams: int, weather: int, routes: int, segments: int, derived_metrics: int, geocoding: int},
  *     has_active_work: bool
  * }
  */
@@ -31,6 +32,7 @@ class QueueStatusService
     public function __construct(
         private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
         private readonly SegmentMatchingService $segmentMatchingService = new SegmentMatchingService,
+        private readonly ActivityDerivedMetricsService $derivedMetricsService = new ActivityDerivedMetricsService,
     ) {}
 
     /**
@@ -114,7 +116,7 @@ class QueueStatusService
     }
 
     /**
-     * @return array{streams: int, weather: int, routes: int, segments: int, geocoding: int}
+     * @return array{streams: int, weather: int, routes: int, segments: int, derived_metrics: int, geocoding: int}
      */
     private function pendingEnrichmentCounts(): array
     {
@@ -124,6 +126,7 @@ class QueueStatusService
                 'weather' => 0,
                 'routes' => 0,
                 'segments' => 0,
+                'derived_metrics' => 0,
                 'geocoding' => 0,
             ];
         }
@@ -147,6 +150,10 @@ class QueueStatusService
             ? $this->segmentMatchingService->unscannedCount()
             : 0;
 
+        $missingDerivedMetrics = ($hasEnrichmentTables && Schema::hasTable('activity_derived_metrics'))
+            ? $this->derivedMetricsService->missingCount()
+            : 0;
+
         $pendingGeocoding = 0;
 
         if (Schema::hasColumn('activities', 'geocode_attempted_at')) {
@@ -166,6 +173,7 @@ class QueueStatusService
             'weather' => $missingWeather,
             'routes' => $unfingerprintedRoutes,
             'segments' => $unscannedSegments,
+            'derived_metrics' => $missingDerivedMetrics,
             'geocoding' => $pendingGeocoding,
         ];
     }

@@ -14,6 +14,7 @@ import { computed, ref, watch } from 'vue';
 import { syncWeather } from '@/actions/App/Http/Controllers/ActivityController';
 import ActivityAllStats from '@/components/activities/ActivityAllStats.vue';
 import ActivityBestEfforts from '@/components/activities/ActivityBestEfforts.vue';
+import ActivityDerivedMetricsCard from '@/components/activities/ActivityDerivedMetricsCard.vue';
 import ActivityEffortContext from '@/components/activities/ActivityEffortContext.vue';
 import ActivityHeaderActions, {
     type ActivityGearPayload,
@@ -50,6 +51,7 @@ import {
 } from '@/routes/activities';
 import type {
     ActivityBestEffortItem,
+    ActivityDerivedMetricsPayload,
     ActivityDetail,
     ActivityStreamPayload,
     ActivityWeatherPayload,
@@ -80,6 +82,7 @@ interface ActivityShowProps {
     effortContext: EffortContextPayload;
     stream: ActivityStreamPayload | null;
     weather: ActivityWeatherPayload | null;
+    derivedMetrics?: ActivityDerivedMetricsPayload | null;
     bestEfforts: ActivityBestEffortItem[];
     prevActivity: AdjacentActivity | null;
     nextActivity: AdjacentActivity | null;
@@ -1462,6 +1465,11 @@ const tabs = computed<
 
         <!-- TAB 1: Overview & Streams -->
         <div v-if="activeTab === 'overview'" class="space-y-6">
+            <!-- Aerobic Efficiency, Decoupling & Pacing -->
+            <ActivityDerivedMetricsCard
+                :derived-metrics="derivedMetrics ?? null"
+            />
+
             <!-- Historical Weather & Directional Wind Summary -->
             <ActivityWeatherCard
                 :weather="weather"

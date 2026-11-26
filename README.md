@@ -102,16 +102,17 @@ Back up `splitline_fits` as well to keep cached FIT archives without re-download
 
 Prefix commands with `docker exec -it splitline` when running in Docker.
 
-| Command                                                                                          | Description                                                                   |
-| :----------------------------------------------------------------------------------------------- | :---------------------------------------------------------------------------- |
-| `php artisan garmin:check [--refresh]`                                                           | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.             |
-| `php artisan garmin:sync [--days=7]`                                                             | Incremental sync of health summaries and activities (runs every 30 minutes).  |
-| `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                         | Resumable all-time history backfill from Garmin.                              |
-| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]` | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.        |
-| `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`      | Fetch and store historical Open-Meteo weather for outdoor activities.         |
-| `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                   | Fingerprint outdoor GNSS polylines and cluster repeated matched routes.       |
-| `php artisan segments:scan [--rebuild] [--queue] [--chunk=50]`                                   | Auto-detect climbs and match personal segments across outdoor streams.        |
-| `php artisan geocode:sync [--queue] [--limit=50] [--force]`                                      | Reverse-geocode matched routes, segments, and activities missing place names. |
+| Command                                                                                            | Description                                                                           |
+| :------------------------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------ |
+| `php artisan garmin:check [--refresh]`                                                             | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.                     |
+| `php artisan garmin:sync [--days=7]`                                                               | Incremental sync of health summaries and activities (runs every 30 minutes).          |
+| `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                           | Resumable all-time history backfill from Garmin.                                      |
+| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]`   | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.                |
+| `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`        | Fetch and store historical Open-Meteo weather for outdoor activities.                 |
+| `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                     | Fingerprint outdoor GNSS polylines and cluster repeated matched routes.               |
+| `php artisan segments:scan [--rebuild] [--queue] [--chunk=50]`                                     | Auto-detect climbs and match personal segments across outdoor streams.                |
+| `php artisan activities:compute-derived-metrics [--activity=ID] [--force] [--queue] [--chunk=100]` | Compute aerobic decoupling (Pa:Hr / Pw:Hr), EF, pacing, HR split, and route geometry. |
+| `php artisan geocode:sync [--queue] [--limit=50] [--force]`                                        | Reverse-geocode matched routes, segments, and activities missing place names.         |
 
 ## Configuration
 

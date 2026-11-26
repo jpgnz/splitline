@@ -73,4 +73,5 @@ run_artisan route:cache --no-interaction
 run_artisan view:cache --no-interaction
 run_artisan routes:match --queue --no-interaction
 run_artisan segments:scan --queue --no-interaction
+run_artisan activities:compute-derived-metrics --queue --no-interaction
 run_artisan geocode:sync --queue --no-interaction

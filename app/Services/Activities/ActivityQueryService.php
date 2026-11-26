@@ -310,6 +310,7 @@ class ActivityQueryService
      *         jumps: array<int|string, mixed>
      *     },
      *     weather: ?array<string, mixed>,
+     *     derivedMetrics: ?array<string, mixed>,
      *     bestEfforts: list<array<string, mixed>>,
      *     prevActivity: ?array{id: int, name: string},
      *     nextActivity: ?array{id: int, name: string},
@@ -321,7 +322,7 @@ class ActivityQueryService
      */
     public function detail(Activity $activity): array
     {
-        $activity->load(['stream', 'weather', 'bestEfforts', 'routeFingerprint.cluster.representativeActivity']);
+        $activity->load(['stream', 'weather', 'derivedMetrics', 'bestEfforts', 'routeFingerprint.cluster.representativeActivity']);
 
         $startedAtLocal = $activity->started_at_local->format('Y-m-d H:i:s');
 
@@ -355,6 +356,7 @@ class ActivityQueryService
 
         $stream = $activity->stream;
         $weather = $activity->weather;
+        $derivedMetrics = $activity->derivedMetrics;
         $zoneConfig = $this->resolveHrZoneConfig($activity);
         $series = is_array($stream?->series) ? array_values($stream->series) : [];
 
@@ -498,6 +500,25 @@ class ActivityQueryService
                 'avg_effective_wind_kmh' => $weather->avg_effective_wind_kmh,
                 'samples' => $weather->samples,
                 'fetched_at' => $weather->fetched_at->toIso8601String(),
+            ] : null,
+            'derivedMetrics' => $derivedMetrics !== null ? [
+                'decoupling_pct' => $derivedMetrics->decoupling_pct,
+                'decoupling_metric' => $derivedMetrics->decoupling_metric,
+                'decoupling_rating' => $derivedMetrics->decoupling_rating,
+                'efficiency_factor' => $derivedMetrics->efficiency_factor,
+                'first_half_ef' => $derivedMetrics->first_half_ef,
+                'second_half_ef' => $derivedMetrics->second_half_ef,
+                'pacing_strategy' => $derivedMetrics->pacing_strategy,
+                'split_ratio' => $derivedMetrics->split_ratio,
+                'pace_cv_pct' => $derivedMetrics->pace_cv_pct,
+                'hr_low_pct' => $derivedMetrics->hr_low_pct,
+                'hr_moderate_pct' => $derivedMetrics->hr_moderate_pct,
+                'hr_high_pct' => $derivedMetrics->hr_high_pct,
+                'end_lat' => $derivedMetrics->end_lat,
+                'end_lng' => $derivedMetrics->end_lng,
+                'start_to_end_meters' => $derivedMetrics->start_to_end_meters,
+                'is_loop' => $derivedMetrics->is_loop,
+                'computed_at' => $derivedMetrics->computed_at->toIso8601String(),
             ] : null,
             'bestEfforts' => $bestEfforts,
             'prevActivity' => $prev !== null ? ['id' => $prev->id, 'name' => $prev->name] : null,
