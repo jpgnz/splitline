@@ -3,7 +3,8 @@ import { Head, Link, router } from '@inertiajs/vue3';
 import {
     ArrowUpRight,
     Crosshair,
-    Map,
+    Layers,
+    Map as MapIcon,
     RefreshCw,
     RotateCcw,
     X,
@@ -26,6 +27,10 @@ import {
     ref,
     watch,
 } from 'vue';
+import DateRangeControl, {
+    type DateRangePreset,
+    type DateWindowMeta,
+} from '@/components/DateRangeControl.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
     formatDurationClock,
@@ -53,7 +58,15 @@ import { index as heatmapIndex } from '@/routes/heatmap';
 import { sync as syncStreams } from '@/routes/heatmap/streams';
 
 type HeatmapSport = string;
-type HeatmapTimeframe = '30d' | 'this_year' | 'all';
+type HeatmapTimeframe =
+    | '30d'
+    | '12w'
+    | '6m'
+    | '1y'
+    | 'this_year'
+    | 'all'
+    | 'custom';
+type HeatmapOrder = 'newest_on_top' | 'oldest_on_top' | 'activity_type';
 
 interface HeatmapAvailableSport {
     key: string;
@@ -86,6 +99,8 @@ interface HeatmapProps {
         sport: HeatmapSport;
         timeframe: HeatmapTimeframe;
     };
+    order: HeatmapOrder;
+    dateWindow: DateWindowMeta;
     available_sports?: HeatmapAvailableSport[];
     summary: {
         track_count: number;
@@ -126,10 +141,34 @@ const HOVER_TRACK_LAYER_ID = 'heatmap-hover-track-line';
 const CLICK_MARKER_SOURCE_ID = 'heatmap-click-marker';
 const CLICK_MARKER_LAYER_ID = 'heatmap-click-marker-circle';
 
-const TIMEFRAME_PILLS: Array<{ value: HeatmapTimeframe; label: string }> = [
+const TIMEFRAME_PRESETS: DateRangePreset[] = [
     { value: '30d', label: '30d' },
-    { value: 'this_year', label: 'This Year' },
-    { value: 'all', label: 'All Time' },
+    { value: '12w', label: '12w' },
+    { value: '6m', label: '6m' },
+    { value: '1y', label: '1y' },
+    { value: 'all', label: 'All' },
+];
+
+const ORDER_OPTIONS: Array<{
+    value: HeatmapOrder;
+    label: string;
+    title: string;
+}> = [
+    {
+        value: 'newest_on_top',
+        label: 'Newest on top',
+        title: 'Draw oldest activities first so newest routes render on top',
+    },
+    {
+        value: 'oldest_on_top',
+        label: 'Oldest on top',
+        title: 'Draw newest activities first so earliest routes render on top',
+    },
+    {
+        value: 'activity_type',
+        label: 'Activity type',
+        title: 'Group layers by activity type (click a sport in the legend to bring it to the front)',
+    },
 ];
 
 const { isDark } = useChartTheme();
@@ -139,6 +178,8 @@ const inspectedTracks = ref<DecodedHeatmapTrack[]>([]);
 const inspectedLatLng = ref<[number, number] | null>(null);
 const hoveredTrackId = ref<number | null>(null);
 const isQueueingSync = ref<boolean>(false);
+const activeOrder = ref<HeatmapOrder>(props.order ?? 'newest_on_top');
+const prioritySportKey = ref<string | null>(null);
 
 let map: MapLibreMap | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -197,8 +238,89 @@ const isInspectorOpen = computed<boolean>(
     () => inspectedTracks.value.length > 0,
 );
 
+/**
+ * Tracks ordered bottom → top for MapLibre GL rendering (last item draws on top).
+ */
+const orderedTracksForRender = computed<DecodedHeatmapTrack[]>(() => {
+    const tracks = decodedTracks.value;
+
+    if (tracks.length <= 1) {
+        return tracks;
+    }
+
+    if (activeOrder.value === 'newest_on_top') {
+        return [...tracks].reverse();
+    }
+
+    if (activeOrder.value === 'oldest_on_top') {
+        return tracks;
+    }
+
+    // Group by sport key; draw higher-volume sports underneath so lower-volume sports stay visible,
+    // and move any user-selected priority sport to the very top.
+    const groups = new Map<string, DecodedHeatmapTrack[]>();
+
+    for (const track of tracks) {
+        const key = resolveTrackSportKey(track);
+        const list = groups.get(key);
+
+        if (list) {
+            list.push(track);
+        } else {
+            groups.set(key, [track]);
+        }
+    }
+
+    const sortedKeys = [...groups.keys()].sort((a, b) => {
+        if (prioritySportKey.value !== null) {
+            if (a === prioritySportKey.value) {
+                return 1;
+            }
+
+            if (b === prioritySportKey.value) {
+                return -1;
+            }
+        }
+
+        const countDiff =
+            (groups.get(b)?.length ?? 0) - (groups.get(a)?.length ?? 0);
+
+        if (countDiff !== 0) {
+            return countDiff;
+        }
+
+        return sportShortLabel(a).localeCompare(sportShortLabel(b));
+    });
+
+    const ordered: DecodedHeatmapTrack[] = [];
+
+    for (const key of sortedKeys) {
+        const groupTracks = groups.get(key) ?? [];
+
+        // Within each sport group, draw oldest first so newer activities of that sport sit on top.
+        for (let i = groupTracks.length - 1; i >= 0; i -= 1) {
+            ordered.push(groupTracks[i]);
+        }
+    }
+
+    return ordered;
+});
+
+const topRenderedSportKey = computed<string | null>(() => {
+    if (
+        activeOrder.value !== 'activity_type' ||
+        orderedTracksForRender.value.length === 0
+    ) {
+        return null;
+    }
+
+    return resolveTrackSportKey(
+        orderedTracksForRender.value[orderedTracksForRender.value.length - 1],
+    );
+});
+
 const indexedTracks = computed<IndexedTrack[]>(() =>
-    decodedTracks.value.map((track) => {
+    [...orderedTracksForRender.value].reverse().map((track) => {
         let minLat = Number.POSITIVE_INFINITY;
         let maxLat = Number.NEGATIVE_INFINITY;
         let minLng = Number.POSITIVE_INFINITY;
@@ -292,14 +414,29 @@ function formatTrackDate(dateStr: string): string {
     return year !== currentYear ? `${short} ${year}` : short;
 }
 
-function navigateFilters(
+function buildFilterQuery(
     overrides: Partial<{
         sport: HeatmapSport;
         timeframe: HeatmapTimeframe;
-    }>,
-): void {
+        end: string | null;
+        from: string | null;
+        to: string | null;
+        order: HeatmapOrder;
+    }> = {},
+): Record<string, string> {
     const nextSport = overrides.sport ?? props.filters.sport;
     const nextTimeframe = overrides.timeframe ?? props.filters.timeframe;
+    const nextEnd =
+        overrides.end !== undefined
+            ? overrides.end
+            : props.dateWindow.isLatest
+              ? null
+              : props.dateWindow.end;
+    const nextFrom =
+        overrides.from !== undefined ? overrides.from : props.dateWindow.from;
+    const nextTo =
+        overrides.to !== undefined ? overrides.to : props.dateWindow.to;
+    const nextOrder = overrides.order ?? activeOrder.value;
 
     const query: Record<string, string> = {};
 
@@ -311,10 +448,57 @@ function navigateFilters(
         query.timeframe = nextTimeframe;
     }
 
+    if (nextTimeframe === 'custom') {
+        if (nextFrom) {
+            query.from = nextFrom;
+        }
+
+        if (nextTo) {
+            query.to = nextTo;
+        }
+    } else if (nextTimeframe !== 'all' && nextEnd) {
+        query.end = nextEnd;
+    }
+
+    if (nextOrder !== 'newest_on_top') {
+        query.order = nextOrder;
+    }
+
+    return query;
+}
+
+function navigateFilters(
+    overrides: Partial<{
+        sport: HeatmapSport;
+        timeframe: HeatmapTimeframe;
+        end: string | null;
+        from: string | null;
+        to: string | null;
+        order: HeatmapOrder;
+    }>,
+): void {
+    const query = buildFilterQuery(overrides);
+
     router.get(heatmapIndex(), query, {
         preserveState: true,
         preserveScroll: true,
     });
+}
+
+function syncOrderUrlParam(): void {
+    if (typeof window === 'undefined') {
+        return;
+    }
+
+    const url = new URL(window.location.href);
+
+    if (activeOrder.value === 'newest_on_top') {
+        url.searchParams.delete('order');
+    } else {
+        url.searchParams.set('order', activeOrder.value);
+    }
+
+    window.history.replaceState(window.history.state, '', url.toString());
 }
 
 function selectSport(sport: HeatmapSport): void {
@@ -325,16 +509,66 @@ function selectSport(sport: HeatmapSport): void {
     navigateFilters({ sport });
 }
 
-function selectTimeframe(timeframe: HeatmapTimeframe): void {
-    if (timeframe === props.filters.timeframe) {
+function selectTimeframe(timeframe: string): void {
+    navigateFilters({
+        timeframe: timeframe as HeatmapTimeframe,
+        end: null,
+        from: null,
+        to: null,
+    });
+}
+
+function stepTimeframe(end: string | null): void {
+    navigateFilters({
+        timeframe: props.filters.timeframe,
+        end,
+        from: null,
+        to: null,
+    });
+}
+
+function applyCustomTimeframe(payload: {
+    from: string | null;
+    to: string | null;
+}): void {
+    navigateFilters({
+        timeframe: 'custom',
+        end: null,
+        from: payload.from,
+        to: payload.to,
+    });
+}
+
+function selectOrder(order: HeatmapOrder): void {
+    if (order === activeOrder.value) {
         return;
     }
 
-    navigateFilters({ timeframe });
+    activeOrder.value = order;
+
+    if (order !== 'activity_type') {
+        prioritySportKey.value = null;
+    }
+
+    syncOrderUrlParam();
+}
+
+function bringSportToFront(sportKey: string): void {
+    if (activeOrder.value !== 'activity_type') {
+        return;
+    }
+
+    prioritySportKey.value = sportKey;
 }
 
 function resetFilters(): void {
-    navigateFilters({ sport: 'all', timeframe: 'all' });
+    navigateFilters({
+        sport: 'all',
+        timeframe: 'all',
+        end: null,
+        from: null,
+        to: null,
+    });
 }
 
 function queueGnssSync(): void {
@@ -683,7 +917,9 @@ function renderBaseTracks(): void {
     const baseSource = map.getSource(BASE_TRACKS_SOURCE_ID) as
         | GeoJSONSource
         | undefined;
-    baseSource?.setData(buildTracksFeatureCollection(decodedTracks.value));
+    baseSource?.setData(
+        buildTracksFeatureCollection(orderedTracksForRender.value),
+    );
     updateBaseTrackStyle();
 }
 
@@ -923,6 +1159,34 @@ watch(isDark, (dark) => {
 });
 
 watch(
+    () => props.order,
+    (nextOrder) => {
+        if (nextOrder && nextOrder !== activeOrder.value) {
+            activeOrder.value = nextOrder;
+        }
+    },
+);
+
+watch(orderedTracksForRender, () => {
+    renderBaseTracks();
+
+    if (inspectedTracks.value.length > 1) {
+        const rankById = new Map<number, number>();
+        const topDown = [...orderedTracksForRender.value].reverse();
+
+        topDown.forEach((track, index) => {
+            rankById.set(track.activity_id, index);
+        });
+
+        inspectedTracks.value = [...inspectedTracks.value].sort(
+            (a, b) =>
+                (rankById.get(a.activity_id) ?? 0) -
+                (rankById.get(b.activity_id) ?? 0),
+        );
+    }
+});
+
+watch(
     () => props.tracks,
     async () => {
         inspectedTracks.value = [];
@@ -974,12 +1238,10 @@ onBeforeUnmount(() => {
 
         <!-- Compact Filter Bar + Summary Strip -->
         <section
-            class="rounded-xl border border-zinc-200/90 bg-white p-3.5 dark:border-zinc-800/90 dark:bg-[#141417]"
+            class="space-y-3 rounded-xl border border-zinc-200/90 bg-white p-3.5 dark:border-zinc-800/90 dark:bg-[#141417]"
         >
-            <div
-                class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"
-            >
-                <!-- Sport Filter Pills -->
+            <!-- Row 1: Sport Filter Pills + Reset -->
+            <div class="flex flex-wrap items-center justify-between gap-2">
                 <div class="flex flex-wrap items-center gap-1.5">
                     <button
                         v-for="pill in sportFilterChips"
@@ -1010,44 +1272,77 @@ onBeforeUnmount(() => {
                     </button>
                 </div>
 
-                <!-- Timeframe Filter Pills -->
-                <div
-                    class="ml-auto flex flex-wrap items-center justify-end gap-2"
+                <button
+                    type="button"
+                    :disabled="!hasActiveFilters"
+                    :class="[
+                        'inline-flex items-center gap-1 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-[11px] font-medium transition-colors dark:border-zinc-800/90 dark:bg-zinc-900/50',
+                        hasActiveFilters
+                            ? 'cursor-pointer text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
+                            : 'pointer-events-none opacity-0',
+                    ]"
+                    :tabindex="hasActiveFilters ? 0 : -1"
+                    :aria-hidden="!hasActiveFilters"
+                    @click="resetFilters"
                 >
-                    <button
-                        v-if="hasActiveFilters"
-                        type="button"
-                        class="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-[11px] font-medium text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-zinc-900/50 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
-                        @click="resetFilters"
-                    >
-                        <RotateCcw class="size-3" />
-                        <span>Reset</span>
-                    </button>
+                    <RotateCcw class="size-3" />
+                    <span>Reset</span>
+                </button>
+            </div>
 
+            <!-- Row 2: Date Range Controls + Layer Order -->
+            <div
+                class="flex flex-wrap items-center justify-between gap-2.5 border-t border-zinc-100 pt-3 dark:border-zinc-800/80"
+            >
+                <DateRangeControl
+                    :presets="TIMEFRAME_PRESETS"
+                    :window="dateWindow"
+                    popover-align="left"
+                    aria-label="Heatmap date range"
+                    @select-preset="selectTimeframe"
+                    @step="stepTimeframe"
+                    @apply-custom="applyCustomTimeframe"
+                />
+
+                <!-- Layer Render Order -->
+                <div
+                    class="flex flex-wrap items-center gap-1.5"
+                    :class="!hasTracks ? 'opacity-50' : ''"
+                >
+                    <span
+                        class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                    >
+                        <Layers class="size-3" />
+                        <span>Order</span>
+                    </span>
                     <div
                         class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                        role="group"
+                        aria-label="Route layer order"
                     >
                         <button
-                            v-for="pill in TIMEFRAME_PILLS"
-                            :key="pill.value"
+                            v-for="opt in ORDER_OPTIONS"
+                            :key="opt.value"
                             type="button"
-                            class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
+                            :title="opt.title"
+                            :disabled="!hasTracks"
+                            class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
                             :class="
-                                filters.timeframe === pill.value
+                                activeOrder === opt.value
                                     ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                    : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                             "
-                            @click="selectTimeframe(pill.value)"
+                            @click="selectOrder(opt.value)"
                         >
-                            {{ pill.label }}
+                            {{ opt.label }}
                         </button>
                     </div>
                 </div>
             </div>
 
-            <!-- Summary Stats Strip -->
+            <!-- Row 3: Summary Stats Strip -->
             <div
-                class="mt-3 flex flex-col gap-2.5 border-t border-zinc-100 pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between dark:border-zinc-800/80"
+                class="flex flex-col gap-2.5 border-t border-zinc-100 pt-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between dark:border-zinc-800/80"
             >
                 <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
                     <div class="flex items-baseline gap-2">
@@ -1160,19 +1455,59 @@ onBeforeUnmount(() => {
                 <!-- Bottom-Left Sport Legend -->
                 <div
                     v-if="legendItems.length > 0"
-                    class="pointer-events-none absolute bottom-3 left-3 z-[500] flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-zinc-200/90 bg-white/95 px-3 py-1.5 font-mono text-[11px] text-zinc-600 backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-300"
+                    :class="[
+                        'absolute bottom-3 left-3 z-[500] flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1.5 font-mono text-[11px] text-zinc-600 backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-300',
+                        activeOrder === 'activity_type' &&
+                        legendItems.length > 1
+                            ? 'pointer-events-auto'
+                            : 'pointer-events-none',
+                    ]"
                 >
-                    <span
-                        v-for="item in legendItems"
-                        :key="item.key"
-                        class="inline-flex items-center gap-1.5"
+                    <template
+                        v-if="
+                            activeOrder === 'activity_type' &&
+                            legendItems.length > 1
+                        "
                     >
+                        <button
+                            v-for="item in legendItems"
+                            :key="item.key"
+                            type="button"
+                            :title="`Bring ${item.label} to front`"
+                            class="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-colors"
+                            :class="
+                                topRenderedSportKey === item.key
+                                    ? 'bg-zinc-900/8 font-semibold text-zinc-950 dark:bg-zinc-100/12 dark:text-white'
+                                    : 'hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-800/70 dark:hover:text-white'
+                            "
+                            @click="bringSportToFront(item.key)"
+                        >
+                            <span
+                                class="size-2 rounded-full"
+                                :style="{ backgroundColor: item.color }"
+                            />
+                            <span>{{ item.label }}</span>
+                            <span
+                                v-if="topRenderedSportKey === item.key"
+                                class="text-[9px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            >
+                                top
+                            </span>
+                        </button>
+                    </template>
+                    <template v-else>
                         <span
-                            class="size-2 rounded-full"
-                            :style="{ backgroundColor: item.color }"
-                        />
-                        <span>{{ item.label }}</span>
-                    </span>
+                            v-for="item in legendItems"
+                            :key="item.key"
+                            class="inline-flex items-center gap-1.5 px-0.5"
+                        >
+                            <span
+                                class="size-2 rounded-full"
+                                :style="{ backgroundColor: item.color }"
+                            />
+                            <span>{{ item.label }}</span>
+                        </span>
+                    </template>
                 </div>
 
                 <!-- Floating Corridor Inspector Panel -->
@@ -1297,15 +1632,15 @@ onBeforeUnmount(() => {
             </div>
         </section>
 
-        <!-- Empty State -->
+        <!-- Empty State (matches map canvas height so toggling empty windows never jumps the page) -->
         <section
             v-else
-            class="flex flex-col items-center justify-center rounded-xl border border-zinc-200/90 bg-white px-6 py-20 text-center dark:border-zinc-800/90 dark:bg-[#141417]"
+            class="flex h-[calc(100vh-19rem)] max-h-[820px] min-h-[520px] flex-col items-center justify-center rounded-xl border border-zinc-200/90 bg-white px-6 text-center dark:border-zinc-800/90 dark:bg-[#141417]"
         >
             <div
                 class="flex size-11 items-center justify-center rounded-xl border border-zinc-200/90 bg-[#f7f7f5] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-400"
             >
-                <Map class="size-5" />
+                <MapIcon class="size-5" />
             </div>
 
             <h2
