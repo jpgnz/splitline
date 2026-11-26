@@ -20,7 +20,13 @@ import {
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed, ref, watch } from 'vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
+import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
+import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
 import type { ChartPointClickPayload } from '@/components/charts/BaseChart.vue';
+import DateRangeControl, {
+    type DateRangePreset,
+    type DateWindowMeta,
+} from '@/components/DateRangeControl.vue';
 import type { CompactGoalProgress } from '@/components/goals/GoalProgressStrip.vue';
 import GoalProgressStrip from '@/components/goals/GoalProgressStrip.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
@@ -41,8 +47,8 @@ import { update as updateBestEffort } from '@/routes/best-efforts';
 
 type EnvironmentFilter = 'all' | 'outdoor' | 'indoor';
 type TerrainFilter = 'all' | 'flat' | 'rolling' | 'steep';
-type VolumeRange = '12w' | '6m' | '1y' | 'all';
-type ZoneRange = '30d' | '90d' | 'all';
+type VolumeRange = '12w' | '6m' | '1y' | 'all' | 'custom';
+type ZoneRange = '30d' | '90d' | 'all' | 'custom';
 type VolumeMetric = 'distance' | 'vertical' | 'load';
 type OffroadLeaderboardTab = 'hardest' | 'smoothest' | 'jumps';
 
@@ -328,8 +334,10 @@ interface SportsEnduranceProps {
         environment: EnvironmentFilter;
         terrain: TerrainFilter;
         volumeRange: VolumeRange;
+        volumeWindow: DateWindowMeta;
         year: number;
         zoneRange: ZoneRange;
+        zoneWindow: DateWindowMeta;
         availableYears: number[];
         showEnvironmentFilter: boolean;
         showTerrainFilter: boolean;
@@ -356,6 +364,7 @@ interface SportsEnduranceProps {
         latest_tsb: number;
     };
     weeklyVolume: WeeklyVolumePoint[];
+    annualSummary: AnnualActivitySummaryPayload | null;
     hrZones: {
         range: string;
         total_seconds: number;
@@ -566,16 +575,17 @@ const terrainOptions = computed<
     ];
 });
 
-const VOLUME_RANGE_OPTIONS: Array<{ value: VolumeRange; label: string }> = [
+const VOLUME_RANGE_OPTIONS: DateRangePreset[] = [
     { value: '12w', label: '12w' },
     { value: '6m', label: '6m' },
     { value: '1y', label: '1y' },
     { value: 'all', label: 'All' },
 ];
 
-const ZONE_RANGE_OPTIONS: Array<{ value: '30d' | '90d'; label: string }> = [
+const ZONE_RANGE_OPTIONS: DateRangePreset[] = [
     { value: '30d', label: '30d' },
     { value: '90d', label: '90d' },
+    { value: 'all', label: 'All' },
 ];
 
 const VOLUME_METRIC_OPTIONS: Array<{ value: VolumeMetric; label: string }> = [
@@ -589,15 +599,77 @@ function applyFilters(
         environment: EnvironmentFilter;
         terrain: TerrainFilter;
         volumeRange: VolumeRange;
+        volumeEnd: string | null;
+        volumeFrom: string | null;
+        volumeTo: string | null;
         year: number;
         zoneRange: ZoneRange;
+        zoneEnd: string | null;
+        zoneFrom: string | null;
+        zoneTo: string | null;
     }>,
 ): void {
+    const nextVolumeRange = overrides.volumeRange ?? props.filters.volumeRange;
+    const nextVolumeEnd =
+        overrides.volumeEnd !== undefined
+            ? overrides.volumeEnd
+            : props.filters.volumeWindow.isLatest
+              ? null
+              : props.filters.volumeWindow.end;
+    const nextVolumeFrom =
+        overrides.volumeFrom !== undefined
+            ? overrides.volumeFrom
+            : props.filters.volumeWindow.from;
+    const nextVolumeTo =
+        overrides.volumeTo !== undefined
+            ? overrides.volumeTo
+            : props.filters.volumeWindow.to;
+
+    const nextZoneRange = overrides.zoneRange ?? props.filters.zoneRange;
+    const nextZoneEnd =
+        overrides.zoneEnd !== undefined
+            ? overrides.zoneEnd
+            : props.filters.zoneWindow.isLatest
+              ? null
+              : props.filters.zoneWindow.end;
+    const nextZoneFrom =
+        overrides.zoneFrom !== undefined
+            ? overrides.zoneFrom
+            : props.filters.zoneWindow.from;
+    const nextZoneTo =
+        overrides.zoneTo !== undefined
+            ? overrides.zoneTo
+            : props.filters.zoneWindow.to;
+
     const params: Record<string, string | number> = {
-        volumeRange: overrides.volumeRange ?? props.filters.volumeRange,
-        zoneRange: overrides.zoneRange ?? props.filters.zoneRange,
+        volumeRange: nextVolumeRange,
+        zoneRange: nextZoneRange,
         year: overrides.year ?? props.filters.year,
     };
+
+    if (nextVolumeRange === 'custom') {
+        if (nextVolumeFrom) {
+            params.volumeFrom = nextVolumeFrom;
+        }
+
+        if (nextVolumeTo) {
+            params.volumeTo = nextVolumeTo;
+        }
+    } else if (nextVolumeRange !== 'all' && nextVolumeEnd) {
+        params.volumeEnd = nextVolumeEnd;
+    }
+
+    if (nextZoneRange === 'custom') {
+        if (nextZoneFrom) {
+            params.zoneFrom = nextZoneFrom;
+        }
+
+        if (nextZoneTo) {
+            params.zoneTo = nextZoneTo;
+        }
+    } else if (nextZoneRange !== 'all' && nextZoneEnd) {
+        params.zoneEnd = nextZoneEnd;
+    }
 
     if (props.filters.showEnvironmentFilter) {
         params.environment = overrides.environment ?? props.filters.environment;
@@ -629,20 +701,64 @@ function selectTerrain(terrain: TerrainFilter): void {
     applyFilters({ terrain });
 }
 
-function selectVolumeRange(volumeRange: VolumeRange): void {
-    if (volumeRange === props.filters.volumeRange) {
-        return;
-    }
-
-    applyFilters({ volumeRange });
+function selectVolumeRange(volumeRange: string): void {
+    applyFilters({
+        volumeRange: volumeRange as VolumeRange,
+        volumeEnd: null,
+        volumeFrom: null,
+        volumeTo: null,
+    });
 }
 
-function selectZoneRange(zoneRange: '30d' | '90d'): void {
-    if (zoneRange === props.filters.zoneRange) {
-        return;
-    }
+function stepVolumeRange(end: string | null): void {
+    applyFilters({
+        volumeRange: props.filters.volumeRange,
+        volumeEnd: end,
+        volumeFrom: null,
+        volumeTo: null,
+    });
+}
 
-    applyFilters({ zoneRange });
+function applyCustomVolumeRange(payload: {
+    from: string | null;
+    to: string | null;
+}): void {
+    applyFilters({
+        volumeRange: 'custom',
+        volumeEnd: null,
+        volumeFrom: payload.from,
+        volumeTo: payload.to,
+    });
+}
+
+function selectZoneRange(zoneRange: string): void {
+    applyFilters({
+        zoneRange: zoneRange as ZoneRange,
+        zoneEnd: null,
+        zoneFrom: null,
+        zoneTo: null,
+    });
+}
+
+function stepZoneRange(end: string | null): void {
+    applyFilters({
+        zoneRange: props.filters.zoneRange,
+        zoneEnd: end,
+        zoneFrom: null,
+        zoneTo: null,
+    });
+}
+
+function applyCustomZoneRange(payload: {
+    from: string | null;
+    to: string | null;
+}): void {
+    applyFilters({
+        zoneRange: 'custom',
+        zoneEnd: null,
+        zoneFrom: payload.from,
+        zoneTo: payload.to,
+    });
 }
 
 function onYearChange(event: Event): void {
@@ -3136,26 +3252,15 @@ const recentHasOffroad = computed<boolean>(() =>
                     </div>
 
                     <!-- Volume Range Switcher -->
-                    <div
-                        class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-                        role="group"
+                    <DateRangeControl
+                        :presets="VOLUME_RANGE_OPTIONS"
+                        :window="filters.volumeWindow"
+                        popover-align="right"
                         aria-label="Volume time range"
-                    >
-                        <button
-                            v-for="opt in VOLUME_RANGE_OPTIONS"
-                            :key="opt.value"
-                            type="button"
-                            class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                            :class="
-                                filters.volumeRange === opt.value
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                    : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                            "
-                            @click="selectVolumeRange(opt.value)"
-                        >
-                            {{ opt.label }}
-                        </button>
-                    </div>
+                        @select-preset="selectVolumeRange"
+                        @step="stepVolumeRange"
+                        @apply-custom="applyCustomVolumeRange"
+                    />
                 </div>
             </div>
 
@@ -3166,11 +3271,20 @@ const recentHasOffroad = computed<boolean>(() =>
             />
             <div
                 v-else
-                class="flex h-[240px] items-center justify-center rounded-lg border border-dashed border-zinc-200/80 font-mono text-xs text-zinc-400 dark:border-zinc-800/80 dark:text-zinc-500"
+                class="flex h-[280px] items-center justify-center rounded-lg border border-dashed border-zinc-200/80 font-mono text-xs text-zinc-400 dark:border-zinc-800/80 dark:text-zinc-500"
             >
                 No weekly volume matches the current filter.
             </div>
         </section>
+
+        <!-- Multi-Year Cumulative & Activity Calendar Summary -->
+        <ActivitySummaryCharts
+            v-if="annualSummary"
+            :summary="annualSummary"
+            mode="sport"
+            :sport-key="sport.key"
+            :title="`${sport.label} Annual Summary`"
+        />
 
         <!-- ALWAYS-ON BALANCED CORE: HR Zone Distribution & Milestones -->
         <section class="grid gap-4 lg:grid-cols-12">
@@ -3179,33 +3293,22 @@ const recentHasOffroad = computed<boolean>(() =>
                 class="flex flex-col justify-between rounded-xl border border-zinc-200/90 bg-white p-5 lg:col-span-7 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
                 <div>
-                    <div class="flex items-center justify-between gap-3">
+                    <div class="space-y-2.5">
                         <h2
                             class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
                             HR Zone Distribution &amp; Polarization
                         </h2>
 
-                        <div
-                            class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-                            role="group"
+                        <DateRangeControl
+                            :presets="ZONE_RANGE_OPTIONS"
+                            :window="filters.zoneWindow"
+                            popover-align="left"
                             aria-label="HR zone time window"
-                        >
-                            <button
-                                v-for="opt in ZONE_RANGE_OPTIONS"
-                                :key="opt.value"
-                                type="button"
-                                class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                                :class="
-                                    filters.zoneRange === opt.value
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                                "
-                                @click="selectZoneRange(opt.value)"
-                            >
-                                {{ opt.label }}
-                            </button>
-                        </div>
+                            @select-preset="selectZoneRange"
+                            @step="stepZoneRange"
+                            @apply-custom="applyCustomZoneRange"
+                        />
                     </div>
 
                     <div v-if="hasHrZoneData" class="mt-4 space-y-4">
@@ -3352,7 +3455,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         v-else
                         class="mt-4 flex h-48 items-center justify-center rounded-lg border border-dashed border-zinc-200/80 font-mono text-xs text-zinc-400 dark:border-zinc-800/80 dark:text-zinc-500"
                     >
-                        No HR zone data in the last {{ filters.zoneRange }}
+                        No HR zone data for {{ filters.zoneWindow.label }}
                     </div>
                 </div>
 
@@ -3360,7 +3463,7 @@ const recentHasOffroad = computed<boolean>(() =>
                     v-if="hasHrZoneData"
                     class="mt-3 border-t border-zinc-100 pt-2.5 font-mono text-[11px] text-zinc-500 tabular-nums dark:border-zinc-800/80 dark:text-zinc-400"
                 >
-                    Total HR time ({{ filters.zoneRange }}):
+                    Total HR time ({{ filters.zoneWindow.label }}):
                     {{ formatDurationHuman(hrZones.total_seconds) }}
                 </p>
             </div>

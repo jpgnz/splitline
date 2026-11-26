@@ -10,6 +10,8 @@ import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed, ref, watch } from 'vue';
 import { bulkReclassify } from '@/actions/App/Http/Controllers/SportsController';
 import BaseChart from '@/components/charts/BaseChart.vue';
+import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
+import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
 import type { CompactGoalProgress } from '@/components/goals/GoalProgressStrip.vue';
 import GoalProgressStrip from '@/components/goals/GoalProgressStrip.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
@@ -102,6 +104,7 @@ interface SportsOverviewProps {
     };
     disciplineSummaries: FamilyDisciplineSummary[];
     weeklyVolume: FamilyWeeklyVolumePoint[];
+    annualSummary: AnnualActivitySummaryPayload;
     goals: CompactGoalProgress[];
     reclassifyInbox: ReclassifyActivityItem[];
     reclassifyInboxTotal: number;
@@ -890,6 +893,14 @@ function optionAccentHex(optionValue: string): string {
                 No weekly {{ family.label.toLowerCase() }} volume recorded yet.
             </div>
         </section>
+
+        <!-- Multi-Year Cumulative & Activity Calendar Summary -->
+        <ActivitySummaryCharts
+            :summary="annualSummary"
+            mode="sport"
+            :sport-key="family.key"
+            :title="`${family.label} Annual Summary`"
+        />
 
         <!-- Generalized Reclassification Inbox -->
         <section

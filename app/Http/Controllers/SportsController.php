@@ -102,14 +102,36 @@ class SportsController extends Controller
         }
 
         $rawVolumeRange = $request->query('volumeRange');
+        $rawVolumeEnd = $request->query('volumeEnd');
+        $rawVolumeFrom = $request->query('volumeFrom');
+        $rawVolumeTo = $request->query('volumeTo');
         $rawZoneRange = $request->query('zoneRange');
+        $rawZoneEnd = $request->query('zoneEnd');
+        $rawZoneFrom = $request->query('zoneFrom');
+        $rawZoneTo = $request->query('zoneTo');
 
         $volumeRange = is_string($rawVolumeRange) ? $rawVolumeRange : '12w';
+        $volumeEnd = is_string($rawVolumeEnd) ? $rawVolumeEnd : null;
+        $volumeFrom = is_string($rawVolumeFrom) ? $rawVolumeFrom : null;
+        $volumeTo = is_string($rawVolumeTo) ? $rawVolumeTo : null;
         $zoneRange = is_string($rawZoneRange) ? $rawZoneRange : '30d';
+        $zoneEnd = is_string($rawZoneEnd) ? $rawZoneEnd : null;
+        $zoneFrom = is_string($rawZoneFrom) ? $rawZoneFrom : null;
+        $zoneTo = is_string($rawZoneTo) ? $rawZoneTo : null;
 
         return Inertia::render(
             'Sports/General',
-            $general->hub($normalized, $volumeRange, $zoneRange),
+            $general->hub(
+                $normalized,
+                $volumeRange,
+                $zoneRange,
+                $volumeEnd,
+                $volumeFrom,
+                $volumeTo,
+                $zoneEnd,
+                $zoneFrom,
+                $zoneTo,
+            ),
         );
     }
 
@@ -156,18 +178,43 @@ class SportsController extends Controller
         $rawEnvironment = $request->query('environment');
         $rawTerrain = $request->query('terrain');
         $rawVolumeRange = $request->query('volumeRange');
+        $rawVolumeEnd = $request->query('volumeEnd');
+        $rawVolumeFrom = $request->query('volumeFrom');
+        $rawVolumeTo = $request->query('volumeTo');
         $rawYear = $request->query('year');
         $rawZoneRange = $request->query('zoneRange');
+        $rawZoneEnd = $request->query('zoneEnd');
+        $rawZoneFrom = $request->query('zoneFrom');
+        $rawZoneTo = $request->query('zoneTo');
 
         $environment = is_string($rawEnvironment) ? $rawEnvironment : 'all';
         $terrain = is_string($rawTerrain) ? $rawTerrain : 'all';
         $volumeRange = is_string($rawVolumeRange) ? $rawVolumeRange : '12w';
+        $volumeEnd = is_string($rawVolumeEnd) ? $rawVolumeEnd : null;
+        $volumeFrom = is_string($rawVolumeFrom) ? $rawVolumeFrom : null;
+        $volumeTo = is_string($rawVolumeTo) ? $rawVolumeTo : null;
         $year = is_numeric($rawYear) ? (int) $rawYear : null;
         $zoneRange = is_string($rawZoneRange) ? $rawZoneRange : '30d';
+        $zoneEnd = is_string($rawZoneEnd) ? $rawZoneEnd : null;
+        $zoneFrom = is_string($rawZoneFrom) ? $rawZoneFrom : null;
+        $zoneTo = is_string($rawZoneTo) ? $rawZoneTo : null;
 
         return Inertia::render(
             'Sports/Endurance',
-            $endurance->hub($sportKey, $environment, $terrain, $volumeRange, $year, $zoneRange),
+            $endurance->hub(
+                $sportKey,
+                $environment,
+                $terrain,
+                $volumeRange,
+                $year,
+                $zoneRange,
+                $volumeEnd,
+                $volumeFrom,
+                $volumeTo,
+                $zoneEnd,
+                $zoneFrom,
+                $zoneTo,
+            ),
         );
     }
 
