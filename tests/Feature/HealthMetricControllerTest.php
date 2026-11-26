@@ -131,3 +131,47 @@ it('switches date ranges accurately between 7d, 28d, and all', function () {
 it('returns 404 for unknown health metric keys', function () {
     $this->get('/health/does-not-exist')->assertNotFound();
 });
+
+it('supports stepped bounded windows and custom date ranges on health metrics', function () {
+    DailyMetric::factory()->create([
+        'calendar_date' => '2026-10-10',
+        'steps' => 9500,
+        'step_goal' => 10000,
+        'moderate_intensity_minutes' => 30,
+        'vigorous_intensity_minutes' => 10,
+    ]);
+
+    DailyMetric::factory()->create([
+        'calendar_date' => '2026-11-20',
+        'steps' => 12500,
+        'step_goal' => 10000,
+        'moderate_intensity_minutes' => 25,
+        'vigorous_intensity_minutes' => 15,
+    ]);
+
+    $this->get('/health/steps?range=28d&end=2026-10-24')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Health/Show')
+            ->where('range', '28d')
+            ->where('startDate', '2026-09-27')
+            ->where('endDate', '2026-10-24')
+            ->where('dateWindow.isLatest', false)
+            ->where('dateWindow.nextEnd', '2026-11-21')
+            ->has('points', 1)
+            ->where('summary.latest', '9,500'),
+        );
+
+    $this->get('/health/intensity-minutes?range=custom&from=2026-10-01&to=2026-10-31')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Health/Show')
+            ->where('range', 'custom')
+            ->where('startDate', '2026-10-01')
+            ->where('endDate', '2026-10-31')
+            ->where('dateWindow.from', '2026-10-01')
+            ->where('dateWindow.to', '2026-10-31')
+            ->has('points', 1)
+            ->where('points.0.granularity', 'daily'),
+        );
+});

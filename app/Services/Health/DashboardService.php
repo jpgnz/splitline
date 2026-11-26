@@ -10,6 +10,7 @@ use App\Models\SleepRecord;
 use App\Models\Vo2MaxRecord;
 use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
+use App\Services\Activities\AnnualActivitySummaryService;
 use App\Services\Goals\GoalProgressService;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
@@ -22,6 +23,7 @@ class DashboardService
         private readonly TrainingReadinessService $trainingReadinessService = new TrainingReadinessService,
         private readonly HealthStatusService $healthStatusService = new HealthStatusService,
         private readonly ?SportRegistry $sports = null,
+        private readonly AnnualActivitySummaryService $annualActivitySummaryService = new AnnualActivitySummaryService,
     ) {}
 
     private function sportRegistry(): SportRegistry
@@ -224,6 +226,19 @@ class DashboardService
      *             latestSpo2: ?float
      *         },
      *         hydration: array{ml: ?int}
+     *     },
+     *     annualActivitySummary: array{
+     *         today: string,
+     *         years: list<int>,
+     *         daily: list<array{
+     *             date: string,
+     *             activities: int,
+     *             distance_meters: float,
+     *             elevation_gain: float,
+     *             duration_seconds: float,
+     *             calories: int,
+     *             training_load: float
+     *         }>
      *     }
      * }
      */
@@ -277,6 +292,7 @@ class DashboardService
             'weeklyActivity' => $this->buildWeeklyActivity($selectedDate, $today),
             'training7d' => $this->buildTraining7d($selectedDate),
             'atAGlance' => $this->buildAtAGlance($dailyMetric, $hrvRecord, $selectedDate, $todayStr, $timezone),
+            'annualActivitySummary' => $this->annualActivitySummaryService->forQuery(Activity::query(), $today),
         ];
     }
 

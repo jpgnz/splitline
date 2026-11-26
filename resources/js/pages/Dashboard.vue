@@ -13,6 +13,8 @@ import {
 import type { EChartsOption } from 'echarts';
 import { computed, ref } from 'vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
+import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
+import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
     formatDurationClock,
@@ -306,6 +308,7 @@ interface DashboardProps {
             ml: number | null;
         };
     };
+    annualActivitySummary: AnnualActivitySummaryPayload;
 }
 
 const props = defineProps<DashboardProps>();
@@ -3087,5 +3090,12 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                 </Link>
             </div>
         </section>
+
+        <!-- Multi-Year Cumulative & Activity Calendar Summary -->
+        <ActivitySummaryCharts
+            :summary="annualActivitySummary"
+            mode="health"
+            title="Annual Activity Summary"
+        />
     </div>
 </template>

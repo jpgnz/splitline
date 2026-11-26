@@ -56,6 +56,7 @@ type StudioNavItem = {
     icon: Component;
     accentHex?: string;
     exact?: boolean;
+    activePrefixes?: string[];
     children?: StudioNavChild[];
 };
 
@@ -106,10 +107,11 @@ const navGroups = computed<StudioNavGroup[]>(() => {
             items: [
                 {
                     key: 'dashboard',
-                    label: 'Dashboard',
+                    label: 'Health Overview',
                     href: dashboardHref,
                     icon: LayoutGrid,
                     exact: true,
+                    activePrefixes: ['/health/'],
                 },
                 {
                     key: 'activities',
@@ -251,7 +253,17 @@ const lastSyncedLabel = computed<string>(() =>
 
 const isDarkMode = computed<boolean>(() => resolvedAppearance.value === 'dark');
 
-function isNavActive(item: Pick<StudioNavItem, 'href' | 'exact'>): boolean {
+function isNavActive(
+    item: Pick<StudioNavItem, 'href' | 'exact' | 'activePrefixes'>,
+): boolean {
+    if (
+        item.activePrefixes?.some((prefix) =>
+            currentPath.value.startsWith(prefix),
+        )
+    ) {
+        return true;
+    }
+
     if (item.exact) {
         return currentPath.value === item.href;
     }

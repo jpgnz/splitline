@@ -4,6 +4,10 @@ import { ArrowLeft } from '@lucide/vue';
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed } from 'vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
+import DateRangeControl, {
+    type DateRangePreset,
+    type DateWindowMeta,
+} from '@/components/DateRangeControl.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { useUnits } from '@/lib/units';
 import { dashboard } from '@/routes';
@@ -19,6 +23,7 @@ interface HealthMetricProps {
     range: string;
     startDate: string | null;
     endDate: string;
+    dateWindow: DateWindowMeta;
     summary: {
         latest: string | null;
         average: string | null;
@@ -38,7 +43,7 @@ const props = defineProps<HealthMetricProps>();
 const theme = useChartTheme();
 const units = useUnits();
 
-const RANGES: Array<{ value: string; label: string }> = [
+const RANGES: DateRangePreset[] = [
     { value: '7d', label: '7d' },
     { value: '28d', label: '28d' },
     { value: '90d', label: '90d' },
@@ -145,6 +150,10 @@ const resolvedAccent = computed<AccentPalette>(() => {
 });
 
 const activeRangeLabel = computed(() => {
+    if (props.range === 'custom' || !props.dateWindow.isLatest) {
+        return props.dateWindow.label;
+    }
+
     const match = RANGES.find(
         (item) => item.value.toLowerCase() === props.range.toLowerCase(),
     );
@@ -152,19 +161,64 @@ const activeRangeLabel = computed(() => {
     return match ? match.label : props.range;
 });
 
-function selectRange(nextRange: string): void {
-    if (nextRange === props.range) {
-        return;
+const currentRangeQuery = computed<Record<string, string>>(() => {
+    const query: Record<string, string> = { range: props.range };
+
+    if (props.range === 'custom') {
+        if (props.dateWindow.from) {
+            query.from = props.dateWindow.from;
+        }
+
+        if (props.dateWindow.to) {
+            query.to = props.dateWindow.to;
+        }
+    } else if (!props.dateWindow.isLatest && props.dateWindow.end) {
+        query.end = props.dateWindow.end;
     }
 
+    return query;
+});
+
+function navigateWindow(query: Record<string, string>): void {
     router.get(
-        healthShow.url(props.metric, { query: { range: nextRange } }),
+        healthShow.url(props.metric, { query }),
         {},
         {
             preserveState: true,
             preserveScroll: true,
         },
     );
+}
+
+function selectRange(nextRange: string): void {
+    navigateWindow({ range: nextRange });
+}
+
+function stepRange(end: string | null): void {
+    const query: Record<string, string> = { range: props.range };
+
+    if (end) {
+        query.end = end;
+    }
+
+    navigateWindow(query);
+}
+
+function applyCustomRange(payload: {
+    from: string | null;
+    to: string | null;
+}): void {
+    const query: Record<string, string> = { range: 'custom' };
+
+    if (payload.from) {
+        query.from = payload.from;
+    }
+
+    if (payload.to) {
+        query.to = payload.to;
+    }
+
+    navigateWindow(query);
 }
 
 function pickNumber(
@@ -3132,24 +3186,17 @@ const chartOption = computed<EChartsOption>(() => {
             </div>
 
             <!-- Range Selector -->
-            <div
-                class="inline-flex self-start rounded-lg border border-zinc-200/90 bg-white p-1 lg:self-auto dark:border-zinc-800/90 dark:bg-[#141417]"
-            >
-                <button
-                    v-for="item in RANGES"
-                    :key="item.value"
-                    type="button"
-                    class="cursor-pointer rounded-md px-3 py-1.5 font-mono text-xs font-medium transition-colors"
-                    :class="
-                        range.toLowerCase() === item.value
-                            ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                            : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    "
-                    @click="selectRange(item.value)"
-                >
-                    {{ item.label }}
-                </button>
-            </div>
+            <DateRangeControl
+                :presets="RANGES"
+                :window="dateWindow"
+                surface="page"
+                popover-align="right"
+                aria-label="Health metric date range"
+                class="self-start lg:self-auto"
+                @select-preset="selectRange"
+                @step="stepRange"
+                @apply-custom="applyCustomRange"
+            />
         </div>
 
         <!-- Quick Metric Switcher Pills -->
@@ -3157,7 +3204,7 @@ const chartOption = computed<EChartsOption>(() => {
             <Link
                 v-for="item in METRIC_SWITCHER"
                 :key="item.key"
-                :href="healthShow.url(item.key, { query: { range } })"
+                :href="healthShow.url(item.key, { query: currentRangeQuery })"
                 preserve-scroll
                 class="inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] transition-colors"
                 :class="
