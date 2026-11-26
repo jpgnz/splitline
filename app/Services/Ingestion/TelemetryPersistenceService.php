@@ -18,6 +18,7 @@ use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Gear\GearService;
+use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
 use Splitline\Core\Data\ActivityStreamData;
 use Splitline\Core\Data\ActivityWeatherData;
@@ -113,6 +114,7 @@ class TelemetryPersistenceService
     public function __construct(
         private readonly BestEffortCalculator $bestEffortCalculator,
         private readonly GearService $gearService = new GearService,
+        private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
     ) {}
 
     /**
@@ -332,6 +334,8 @@ class TelemetryPersistenceService
         }
 
         $activity->update($activityUpdates);
+
+        $this->routeMatchingService->matchActivity($activity, $activityStream);
 
         if (
             ! $activity->is_indoor
