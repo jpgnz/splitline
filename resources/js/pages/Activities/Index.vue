@@ -2,6 +2,8 @@
 import { Head, Link, router } from '@inertiajs/vue3';
 import {
     ArrowDown,
+    ArrowLeftRight,
+    ArrowRight,
     ArrowUp,
     ArrowUpDown,
     Calendar,
@@ -29,6 +31,7 @@ import {
 import { DEFAULT_SPORT_CATALOG, useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
 import {
+    compare as activitiesCompare,
     index as activitiesIndex,
     show as showActivity,
 } from '@/routes/activities';
@@ -236,6 +239,39 @@ const DATE_RANGES: DateRangePreset[] = [
 const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const searchInput = ref<string>(props.filters.search ?? '');
+const selectedCompareIds = ref<number[]>([]);
+
+const compareUrl = computed<string>(() =>
+    activitiesCompare.url({
+        query: { ids: selectedCompareIds.value.join(',') },
+    }),
+);
+
+function isSelectedForCompare(id: number): boolean {
+    return selectedCompareIds.value.includes(id);
+}
+
+function toggleCompareSelection(id: number): void {
+    const idx = selectedCompareIds.value.indexOf(id);
+
+    if (idx !== -1) {
+        selectedCompareIds.value = selectedCompareIds.value.filter(
+            (item) => item !== id,
+        );
+
+        return;
+    }
+
+    if (selectedCompareIds.value.length >= 3) {
+        return;
+    }
+
+    selectedCompareIds.value = [...selectedCompareIds.value, id];
+}
+
+function clearCompareSelection(): void {
+    selectedCompareIds.value = [];
+}
 
 let searchTimer: number | null = null;
 
@@ -852,6 +888,15 @@ const summaryKpis = computed<
                     >
                         <tr>
                             <th
+                                class="w-10 py-2.5 pr-1 pl-4 font-medium whitespace-nowrap"
+                                title="Select 2–3 activities to compare"
+                            >
+                                <ArrowLeftRight
+                                    class="size-3.5 text-zinc-400 dark:text-zinc-500"
+                                    aria-label="Compare"
+                                />
+                            </th>
+                            <th
                                 class="px-4 py-2.5 font-medium whitespace-nowrap"
                             >
                                 <button
@@ -1027,7 +1072,29 @@ const summaryKpis = computed<
                             v-for="activity in activities.data"
                             :key="activity.id"
                             class="transition-colors hover:bg-zinc-50/80 dark:hover:bg-zinc-900/40"
+                            :class="
+                                isSelectedForCompare(activity.id)
+                                    ? 'bg-emerald-500/[0.04] dark:bg-emerald-500/[0.07]'
+                                    : undefined
+                            "
                         >
+                            <!-- Compare Checkbox -->
+                            <td class="w-10 py-3 pr-1 pl-4">
+                                <input
+                                    type="checkbox"
+                                    :checked="isSelectedForCompare(activity.id)"
+                                    :disabled="
+                                        !isSelectedForCompare(activity.id) &&
+                                        selectedCompareIds.length >= 3
+                                    "
+                                    :aria-label="`Select ${activity.name} for comparison`"
+                                    class="size-3.5 cursor-pointer rounded border-zinc-300 text-emerald-600 accent-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900"
+                                    @change="
+                                        toggleCompareSelection(activity.id)
+                                    "
+                                />
+                            </td>
+
                             <!-- Date & Time -->
                             <td class="px-4 py-3 whitespace-nowrap">
                                 <div
@@ -1470,5 +1537,43 @@ const summaryKpis = computed<
                 </div>
             </div>
         </section>
+
+        <!-- Floating Compare Action Bar -->
+        <div
+            v-if="selectedCompareIds.length > 0"
+            class="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-full border border-zinc-200/90 bg-white/95 px-4 py-2 shadow-lg backdrop-blur-md dark:border-zinc-700/90 dark:bg-[#18181b]/95"
+        >
+            <span
+                class="font-mono text-xs text-zinc-600 tabular-nums dark:text-zinc-300"
+            >
+                {{ selectedCompareIds.length }}/3 selected
+            </span>
+
+            <Link
+                v-if="selectedCompareIds.length >= 2"
+                :href="compareUrl"
+                class="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-1.5 font-mono text-xs font-medium text-white transition-colors hover:bg-emerald-500"
+            >
+                <ArrowLeftRight class="size-3.5" />
+                <span>
+                    Compare {{ selectedCompareIds.length }} Activities
+                </span>
+                <ArrowRight class="size-3.5" />
+            </Link>
+            <span
+                v-else
+                class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+            >
+                Pick 1–2 more to compare
+            </span>
+
+            <button
+                type="button"
+                class="cursor-pointer rounded-full px-2 py-1 font-mono text-[11px] text-zinc-500 transition-colors hover:bg-zinc-100 hover:text-zinc-900 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
+                @click="clearCompareSelection"
+            >
+                Clear
+            </button>
+        </div>
     </div>
 </template>
