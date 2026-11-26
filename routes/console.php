@@ -10,6 +10,10 @@ Schedule::command('routes:match --queue')
     ->hourly()
     ->withoutOverlapping();
 
+Schedule::command('segments:scan --queue')
+    ->hourly()
+    ->withoutOverlapping();
+
 Schedule::command('geocode:sync --queue')
     ->hourly()
     ->withoutOverlapping();

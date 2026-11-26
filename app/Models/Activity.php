@@ -126,6 +126,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property CarbonImmutable|null $streams_synced_at
  * @property CarbonImmutable|null $streams_unavailable_at
  * @property CarbonImmutable|null $route_match_skipped_at
+ * @property CarbonImmutable|null $segments_scanned_at
  * @property array<int|string, mixed>|null $raw_summary
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -133,6 +134,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property-read ActivityWeather|null $weather
  * @property-read ActivityRouteFingerprint|null $routeFingerprint
  * @property-read Collection<int, BestEffort> $bestEfforts
+ * @property-read Collection<int, SegmentEffort> $segmentEfforts
  */
 class Activity extends Model
 {
@@ -254,6 +256,7 @@ class Activity extends Model
         'streams_synced_at',
         'streams_unavailable_at',
         'route_match_skipped_at',
+        'segments_scanned_at',
         'raw_summary',
     ];
 
@@ -361,6 +364,7 @@ class Activity extends Model
             'route_match_skipped_at' => 'immutable_datetime',
             'location_geocoded_at' => 'immutable_datetime',
             'geocode_attempted_at' => 'immutable_datetime',
+            'segments_scanned_at' => 'immutable_datetime',
             'raw_summary' => 'array',
         ];
     }
@@ -395,6 +399,14 @@ class Activity extends Model
     public function bestEfforts(): HasMany
     {
         return $this->hasMany(BestEffort::class);
+    }
+
+    /**
+     * @return HasMany<SegmentEffort, $this>
+     */
+    public function segmentEfforts(): HasMany
+    {
+        return $this->hasMany(SegmentEffort::class);
     }
 
     /**

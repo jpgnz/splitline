@@ -8,6 +8,7 @@ use App\Models\ActivityRouteFingerprint;
 use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use App\Services\Sync\QueueStatusService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -73,7 +74,7 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         'sampling_mode' => 'start_point',
     ]);
 
-    // 4. Fully enriched outdoor activity (route-sampled weather + fingerprinted) — counts in none
+    // 4. Fully enriched outdoor activity (route-sampled weather + fingerprinted + segments scanned) — counts in none
     $fullyEnriched = Activity::factory()->create([
         'is_manual' => false,
         'is_indoor' => false,
@@ -81,6 +82,7 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         'start_lat' => -36.86,
         'start_lng' => 174.77,
         'streams_synced_at' => CarbonImmutable::now(),
+        'segments_scanned_at' => CarbonImmutable::now(),
     ]);
 
     ActivityStream::factory()->create([
@@ -103,9 +105,13 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         'route_cluster_id' => $geocodedCluster->id,
     ]);
 
-    // 5. Matched route cluster awaiting geocoding
+    // 5. Matched route cluster awaiting geocoding + segment awaiting geocoding
     RouteCluster::factory()->create([
         'activity_count' => 2,
+        'geocoded_at' => null,
+    ]);
+
+    Segment::factory()->create([
         'geocoded_at' => null,
     ]);
 
@@ -123,7 +129,8 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
             'streams' => 1,
             'weather' => 2,
             'routes' => 1,
-            'geocoding' => 2,
+            'segments' => 1,
+            'geocoding' => 3,
         ],
         'has_active_work' => true,
     ]);
