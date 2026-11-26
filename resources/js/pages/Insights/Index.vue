@@ -256,14 +256,26 @@ function formatSigned(value: number | null, decimals = 1): string {
     return `${prefix}${formatNumber(value, decimals)}`;
 }
 
-function formatR(stat: CorrelationStat): string {
+function formatCorrelationLabel(stat: CorrelationStat): string {
     if (stat.r === null) {
-        return `n=${stat.n}`;
+        return `n = ${stat.n}`;
+    }
+
+    const abs = Math.abs(stat.r);
+    const strength = abs >= 0.5 ? 'Strong' : abs >= 0.25 ? 'Moderate' : 'Weak';
+    const prefix = stat.r > 0 ? '+' : '';
+
+    return `${strength} (${prefix}${stat.r.toFixed(2)})`;
+}
+
+function correlationTooltip(pairLabel: string, stat: CorrelationStat): string {
+    if (stat.r === null) {
+        return `${pairLabel}: Needs at least 5 paired sessions (currently ${stat.n}).`;
     }
 
     const prefix = stat.r > 0 ? '+' : '';
 
-    return `r = ${prefix}${stat.r.toFixed(2)}`;
+    return `${pairLabel}: Pearson r = ${prefix}${stat.r.toFixed(2)} across ${stat.n} sessions. Near 0 means little linear link; closer to ±1 is stronger.`;
 }
 
 function correlationTone(stat: CorrelationStat, higherIsBetter = true): string {
@@ -273,22 +285,43 @@ function correlationTone(stat: CorrelationStat, higherIsBetter = true): string {
 
     const abs = Math.abs(stat.r);
 
-    if (abs < 0.15) {
+    if (abs < 0.25) {
         return 'border-zinc-200/90 bg-zinc-100/80 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-300';
     }
 
     const favorable = higherIsBetter ? stat.r > 0 : stat.r < 0;
 
     if (favorable) {
-        return abs >= 0.3
+        return abs >= 0.4
             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
             : 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300';
     }
 
-    return abs >= 0.3
+    return abs >= 0.4
         ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
         : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
 }
+
+const formattedWeatherTakeaway = computed<string | null>(() => {
+    const raw = props.weather_impact.takeaway;
+
+    if (!raw || !isImperial.value) {
+        return raw;
+    }
+
+    let converted = raw;
+
+    for (const bucket of props.weather_impact.temperature_buckets) {
+        const imperialLabel = formatTempBand(
+            bucket.min_c,
+            bucket.max_c,
+            bucket.label,
+        );
+        converted = converted.replaceAll(bucket.label, imperialLabel);
+    }
+
+    return converted;
+});
 
 function coveragePct(part: number, total: number): number {
     if (total <= 0) {
@@ -346,8 +379,8 @@ const sleepChartOption = computed<EChartsOption>(() => {
             grid: {
                 left: 16,
                 right: 20,
-                top: 28,
-                bottom: 24,
+                top: 34,
+                bottom: 34,
                 containLabel: true,
             },
             tooltip: {
@@ -434,7 +467,7 @@ const sleepChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 14,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 14,
             containLabel: true,
         },
@@ -562,8 +595,8 @@ const hrvChartOption = computed<EChartsOption>(() => {
             grid: {
                 left: 16,
                 right: 20,
-                top: 28,
-                bottom: 24,
+                top: 34,
+                bottom: 34,
                 containLabel: true,
             },
             tooltip: {
@@ -646,7 +679,7 @@ const hrvChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 14,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 14,
             containLabel: true,
         },
@@ -795,8 +828,8 @@ const weatherChartOption = computed<EChartsOption>(() => {
             grid: {
                 left: 16,
                 right: 20,
-                top: 28,
-                bottom: 24,
+                top: 34,
+                bottom: 34,
                 containLabel: true,
             },
             tooltip: {
@@ -883,7 +916,7 @@ const weatherChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 14,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 14,
             containLabel: true,
         },
@@ -1015,7 +1048,7 @@ const recoveryChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 14,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 14,
             containLabel: true,
         },
@@ -1128,7 +1161,7 @@ const recoveryChartOption = computed<EChartsOption>(() => {
 const recoveryMatrixRows = computed(() => {
     const timeOrder = [
         { key: 'morning', label: 'Morning (<12:00)' },
-        { key: 'afternoon', label: 'Afternoon (12–17:00)' },
+        { key: 'afternoon', label: 'Afternoon (12:00–17:00)' },
         { key: 'evening', label: 'Evening (17:00+)' },
     ];
     const intensityOrder = ['easy', 'moderate', 'hard'];
@@ -1164,7 +1197,7 @@ const dayOfWeekChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 12,
             containLabel: true,
         },
@@ -1268,7 +1301,7 @@ const timeOfDayChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 38,
+            top: 58,
             bottom: 12,
             containLabel: true,
         },
@@ -1387,7 +1420,7 @@ function windBadgeTone(key: string): string {
                     </span>
                 </div>
                 <h1
-                    class="text-2xl font-semibold tracking-tight text-zinc-950 dark:text-zinc-50"
+                    class="text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl dark:text-zinc-50"
                 >
                     Health &amp; Performance Insights
                 </h1>
@@ -1694,6 +1727,7 @@ function windBadgeTone(key: string): string {
                     >
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
+                            title="Activities with computed Efficiency Factor (higher = better aerobic output per heartbeat)"
                         >
                             EF
                             {{
@@ -1716,7 +1750,7 @@ function windBadgeTone(key: string): string {
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
                         >
-                            Wx {{ summary.with_weather }}
+                            Weather {{ summary.with_weather }}
                         </span>
                     </div>
                 </div>
@@ -1737,6 +1771,13 @@ function windBadgeTone(key: string): string {
                             >
                                 Sleep vs. Efficiency &amp; Drift
                             </h2>
+                        </div>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                            Morning sleep duration and quality paired with
+                            same-day aerobic efficiency. Click any scatter dot
+                            to open the session.
+                        </p>
+                        <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
                                 class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
@@ -1746,10 +1787,17 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Sleep Score vs Efficiency Factor',
+                                        sleep_vs_performance.correlations
+                                            .score_vs_ef,
+                                    )
+                                "
                             >
-                                Score↔EF
+                                Score vs EF ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         sleep_vs_performance.correlations
                                             .score_vs_ef,
                                     )
@@ -1764,21 +1812,23 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Sleep Duration vs Cardiac Drift',
+                                        sleep_vs_performance.correlations
+                                            .hours_vs_decoupling,
+                                    )
+                                "
                             >
-                                Hours↔Drift
+                                Hours vs Drift ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         sleep_vs_performance.correlations
                                             .hours_vs_decoupling,
                                     )
                                 }}
                             </span>
                         </div>
-                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                            Morning sleep duration and quality paired with
-                            same-day aerobic efficiency. Click any scatter dot
-                            to open the session.
-                        </p>
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
@@ -1790,7 +1840,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     sleepView === 'scatter'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepView = 'scatter'"
@@ -1802,7 +1852,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     sleepView === 'duration'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepView = 'duration'"
@@ -1814,7 +1864,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     sleepView === 'score'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepView = 'score'"
@@ -1832,7 +1882,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     sleepScatterX === 'sleep_score'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepScatterX = 'sleep_score'"
@@ -1844,7 +1894,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     sleepScatterX === 'sleep_hours'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepScatterX = 'sleep_hours'"
@@ -1862,7 +1912,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     sleepScatterY === 'efficiency_factor'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepScatterY = 'efficiency_factor'"
@@ -1874,7 +1924,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     sleepScatterY === 'decoupling_pct'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="sleepScatterY = 'decoupling_pct'"
@@ -1937,6 +1987,13 @@ function windBadgeTone(key: string): string {
                             >
                                 HRV &amp; Recovery vs. Output
                             </h2>
+                        </div>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                            Compare workout output across overnight HRV baseline
+                            zones, Garmin HRV status bands, and resting heart
+                            rate.
+                        </p>
+                        <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
                                 class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
@@ -1946,10 +2003,17 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Overnight HRV vs Efficiency Factor',
+                                        hrv_vs_performance.correlations
+                                            .hrv_vs_ef,
+                                    )
+                                "
                             >
-                                HRV↔EF
+                                HRV vs EF ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         hrv_vs_performance.correlations
                                             .hrv_vs_ef,
                                     )
@@ -1964,10 +2028,17 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Overnight HRV vs Cardiac Drift',
+                                        hrv_vs_performance.correlations
+                                            .hrv_vs_decoupling,
+                                    )
+                                "
                             >
-                                HRV↔Drift
+                                HRV vs Drift ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         hrv_vs_performance.correlations
                                             .hrv_vs_decoupling,
                                     )
@@ -1982,21 +2053,23 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Resting HR vs Efficiency Factor',
+                                        hrv_vs_performance.correlations
+                                            .rhr_vs_ef,
+                                    )
+                                "
                             >
-                                RHR↔EF
+                                RHR vs EF ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         hrv_vs_performance.correlations
                                             .rhr_vs_ef,
                                     )
                                 }}
                             </span>
                         </div>
-                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                            Compare workout output across overnight HRV baseline
-                            zones, Garmin HRV status bands, and resting heart
-                            rate.
-                        </p>
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
@@ -2008,7 +2081,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     hrvView === 'baseline'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="hrvView = 'baseline'"
@@ -2020,7 +2093,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     hrvView === 'status'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="hrvView = 'status'"
@@ -2032,7 +2105,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     hrvView === 'scatter'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="hrvView = 'scatter'"
@@ -2050,7 +2123,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     hrvScatterY === 'efficiency_factor'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="hrvScatterY = 'efficiency_factor'"
@@ -2062,7 +2135,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     hrvScatterY === 'decoupling_pct'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="hrvScatterY = 'decoupling_pct'"
@@ -2124,6 +2197,13 @@ function windBadgeTone(key: string): string {
                             >
                                 Temperature &amp; Wind Impact
                             </h2>
+                        </div>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                            Heat penalty and wind exposure across outdoor
+                            activities ({{ tempUnit }}). Click any scatter dot
+                            to inspect the session.
+                        </p>
+                        <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
                                 class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
@@ -2132,10 +2212,16 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Temperature vs Efficiency Factor',
+                                        weather_impact.correlations.temp_vs_ef,
+                                    )
+                                "
                             >
-                                Temp↔EF
+                                Temp vs EF ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         weather_impact.correlations.temp_vs_ef,
                                     )
                                 }}
@@ -2149,21 +2235,23 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Temperature vs Cardiac Drift',
+                                        weather_impact.correlations
+                                            .temp_vs_decoupling,
+                                    )
+                                "
                             >
-                                Temp↔Drift
+                                Temp vs Drift ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         weather_impact.correlations
                                             .temp_vs_decoupling,
                                     )
                                 }}
                             </span>
                         </div>
-                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                            Heat penalty and wind exposure across outdoor
-                            activities ({{ tempUnit }}). Click any scatter dot
-                            to inspect the session.
-                        </p>
                     </div>
 
                     <div class="flex flex-wrap items-center gap-2">
@@ -2175,7 +2263,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     weatherView === 'scatter'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="weatherView = 'scatter'"
@@ -2187,7 +2275,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     weatherView === 'buckets'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="weatherView = 'buckets'"
@@ -2205,7 +2293,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     weatherScatterY === 'efficiency_factor'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="weatherScatterY = 'efficiency_factor'"
@@ -2217,7 +2305,7 @@ function windBadgeTone(key: string): string {
                                 class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
                                 :class="
                                     weatherScatterY === 'decoupling_pct'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="weatherScatterY = 'decoupling_pct'"
@@ -2229,13 +2317,13 @@ function windBadgeTone(key: string): string {
                 </div>
 
                 <div
-                    v-if="weather_impact.takeaway"
+                    v-if="formattedWeatherTakeaway"
                     class="mt-4 flex items-start gap-2.5 rounded-lg border border-emerald-500/20 bg-emerald-500/6 px-3.5 py-2.5 text-xs text-zinc-700 dark:text-zinc-300"
                 >
                     <Sparkles
                         class="mt-0.5 size-3.5 shrink-0 text-emerald-500"
                     />
-                    <span>{{ weather_impact.takeaway }}</span>
+                    <span>{{ formattedWeatherTakeaway }}</span>
                 </div>
 
                 <div class="mt-4">
@@ -2368,6 +2456,13 @@ function windBadgeTone(key: string): string {
                                 Workout Timing &amp; Intensity → Overnight
                                 Recovery
                             </h2>
+                        </div>
+                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                            Matches each session against the following night’s
+                            Sleep Score, deep sleep, and HRV delta vs 7-day
+                            baseline.
+                        </p>
+                        <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
                                 class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
@@ -2377,10 +2472,17 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Start Hour vs Next-Night HRV Delta',
+                                        workout_to_recovery.correlations
+                                            .start_hour_vs_hrv_delta,
+                                    )
+                                "
                             >
-                                Hour↔HRV Δ
+                                Start Hour vs HRV Δ ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         workout_to_recovery.correlations
                                             .start_hour_vs_hrv_delta,
                                     )
@@ -2395,21 +2497,23 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
+                                :title="
+                                    correlationTooltip(
+                                        'Start Hour vs Next-Night Sleep Score',
+                                        workout_to_recovery.correlations
+                                            .start_hour_vs_sleep_score,
+                                    )
+                                "
                             >
-                                Hour↔Sleep
+                                Start Hour vs Sleep ·
                                 {{
-                                    formatR(
+                                    formatCorrelationLabel(
                                         workout_to_recovery.correlations
                                             .start_hour_vs_sleep_score,
                                     )
                                 }}
                             </span>
                         </div>
-                        <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                            Matches each session against the following night’s
-                            (date + 1) Sleep Score, deep sleep, and HRV delta vs
-                            7-day baseline.
-                        </p>
                     </div>
 
                     <div
@@ -2420,7 +2524,7 @@ function windBadgeTone(key: string): string {
                             class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                             :class="
                                 recoveryView === 'time'
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                     : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                             "
                             @click="recoveryView = 'time'"
@@ -2432,7 +2536,7 @@ function windBadgeTone(key: string): string {
                             class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                             :class="
                                 recoveryView === 'intensity'
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                     : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                             "
                             @click="recoveryView = 'intensity'"
