@@ -5,6 +5,7 @@ namespace App\Services\Activities;
 use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
+use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Gear\GearService;
 use App\Services\Routes\MatchedRouteService;
 use App\Services\Segments\SegmentQueryService;
@@ -27,7 +28,13 @@ class ActivityQueryService
         private readonly ?SegmentQueryService $segments = null,
         private readonly ?HealthSourceRegistry $healthSources = null,
         private readonly ActivityDerivedMetricsService $derivedMetricsService = new ActivityDerivedMetricsService,
+        private readonly ?ActivityStreamSyncService $streamSync = null,
     ) {}
+
+    private function streamSyncService(): ActivityStreamSyncService
+    {
+        return $this->streamSync ?? app(ActivityStreamSyncService::class);
+    }
 
     private function healthSources(): HealthSourceRegistry
     {
@@ -318,6 +325,7 @@ class ActivityQueryService
      *     gear: array<string, mixed>,
      *     matchedRoute: ?array<string, mixed>,
      *     segmentEfforts: list<array<string, mixed>>,
+     *     hasOriginalArchive: bool,
      *     discipline_options: list<array{value: string, label: string}>
      * }
      */
@@ -521,6 +529,7 @@ class ActivityQueryService
             'gear' => $this->gearService->forActivity($activity),
             'matchedRoute' => $this->matchedRouteService()->forActivity($activity),
             'segmentEfforts' => $this->segmentQueryService()->forActivity($activity),
+            'hasOriginalArchive' => $this->streamSyncService()->hasLocalArchive($activity),
             'discipline_options' => $this->sportRegistry()->disciplinesForCategory($activity->sport_category),
         ];
     }
