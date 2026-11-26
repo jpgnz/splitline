@@ -17,13 +17,21 @@ class HeatmapController extends Controller
     {
         $rawSport = $request->query('sport', 'all');
         $rawTimeframe = $request->query('timeframe', 'all');
+        $rawEnd = $request->query('end');
+        $rawFrom = $request->query('from');
+        $rawTo = $request->query('to');
+        $rawOrder = $request->query('order', 'newest_on_top');
 
         $sport = is_string($rawSport) ? $rawSport : 'all';
         $timeframe = is_string($rawTimeframe) ? $rawTimeframe : 'all';
+        $end = is_string($rawEnd) ? $rawEnd : null;
+        $from = is_string($rawFrom) ? $rawFrom : null;
+        $to = is_string($rawTo) ? $rawTo : null;
+        $order = is_string($rawOrder) ? $rawOrder : 'newest_on_top';
 
         return Inertia::render(
             'Heatmap/Index',
-            $service->tracks($sport, $timeframe),
+            $service->tracks($sport, $timeframe, $end, $from, $to, $order),
         );
     }
 
