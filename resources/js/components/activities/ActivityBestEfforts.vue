@@ -6,7 +6,7 @@ import BaseChart from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { formatDurationClock, formatNumber } from '@/lib/format';
 import {
-    computeAllDurationPeakEfforts,
+    type AllDurationPeakEfforts,
     type BestEffortMode,
     type DurationPeakEffort,
 } from '@/lib/peakEfforts';
@@ -26,21 +26,16 @@ import type {
 const props = withDefaults(
     defineProps<{
         bestEfforts: ActivityBestEffortItem[];
+        durationEfforts: AllDurationPeakEfforts;
         series: StreamPoint[];
         usesPace: boolean;
         isRunning?: boolean;
-        isCycling?: boolean;
-        isIndoor?: boolean;
         athleteWeightKg?: number | null;
-        powerEffortRanks?: Record<string, number> | null;
         highlightedRange?: HighlightRange | null;
     }>(),
     {
         isRunning: false,
-        isCycling: false,
-        isIndoor: false,
         athleteWeightKg: null,
-        powerEffortRanks: null,
         highlightedRange: undefined,
     },
 );
@@ -61,16 +56,6 @@ const {
     formatVam,
 } = useUnits();
 
-const durationEfforts = computed(() =>
-    computeAllDurationPeakEfforts(props.series, {
-        isRunning: props.isRunning,
-        isCycling: props.isCycling,
-        isIndoor: props.isIndoor,
-        athleteWeightKg: props.athleteWeightKg,
-        powerEffortRanks: props.powerEffortRanks,
-    }),
-);
-
 const modeOptions = computed<Array<{ value: BestEffortMode; label: string }>>(
     () => {
         const list: Array<{ value: BestEffortMode; label: string }> = [];
@@ -79,19 +64,19 @@ const modeOptions = computed<Array<{ value: BestEffortMode; label: string }>>(
             list.push({ value: 'distance', label: 'Distance' });
         }
 
-        if (props.isRunning && durationEfforts.value.gap.length > 0) {
+        if (props.isRunning && props.durationEfforts.gap.length > 0) {
             list.push({ value: 'gap', label: 'GAP' });
         }
 
-        if (durationEfforts.value.power.length > 0) {
+        if (props.durationEfforts.power.length > 0) {
             list.push({ value: 'power', label: 'Power' });
         }
 
-        if (durationEfforts.value.hr.length > 0) {
+        if (props.durationEfforts.hr.length > 0) {
             list.push({ value: 'hr', label: 'Heart Rate' });
         }
 
-        if (durationEfforts.value.climbing.length > 0) {
+        if (props.durationEfforts.climbing.length > 0) {
             list.push({ value: 'climbing', label: 'Climbing' });
         }
 
@@ -154,12 +139,12 @@ const activeDurationRows = computed<DurationPeakEffort[]>(() => {
         return [];
     }
 
-    return durationEfforts.value[selectedMode.value];
+    return props.durationEfforts[selectedMode.value];
 });
 
 const hasPowerColumn = computed<boolean>(
     () =>
-        durationEfforts.value.power.length > 0 ||
+        props.durationEfforts.power.length > 0 ||
         props.series.some((p) => p.power !== null && p.power > 0),
 );
 

@@ -54,7 +54,11 @@ import {
     formatNumber,
     formatTimeOfDay,
 } from '@/lib/format';
-import { hasAnyDurationPeakEfforts } from '@/lib/peakEfforts';
+import {
+    computeAllDurationPeakEfforts,
+    hasAnyDurationPeakEfforts,
+    type AllDurationPeakEfforts,
+} from '@/lib/peakEfforts';
 import { useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
 import {
@@ -1093,14 +1097,21 @@ const showSegmentsTab = computed<boolean>(
     () => segmentEffortsList.value.length > 0 || hasGnssStreamForSegments.value,
 );
 
+const durationPeakEfforts = computed<AllDurationPeakEfforts>(() =>
+    computeAllDurationPeakEfforts(series.value, {
+        isRunning: isRunning.value,
+        isCycling: isCycling.value,
+        isIndoor: props.activity.is_indoor,
+        athleteWeightKg: props.athleteWeightKg ?? null,
+        powerEffortRanks: props.powerEffortRanks ?? null,
+        powerCurve: props.activity.power_curve,
+    }),
+);
+
 const hasBestEffortsCard = computed<boolean>(
     () =>
         props.bestEfforts.length > 0 ||
-        hasAnyDurationPeakEfforts(series.value, {
-            isRunning: isRunning.value,
-            isCycling: isCycling.value,
-            isIndoor: props.activity.is_indoor,
-        }),
+        hasAnyDurationPeakEfforts(durationPeakEfforts.value),
 );
 
 const showEffortsSegmentsTab = computed<boolean>(
@@ -1798,10 +1809,15 @@ const tabs = computed<
                     <p
                         class="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                     >
-                        Sync FIT data to view the route map, charts, and splits.
+                        {{
+                            activity.is_excluded
+                                ? 'Restore this activity to sync FIT data.'
+                                : 'Sync FIT data to view the route map, charts, and splits.'
+                        }}
                     </p>
                 </div>
                 <button
+                    v-if="!activity.is_excluded"
                     type="button"
                     :disabled="isSyncingStreams"
                     class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
@@ -2004,13 +2020,11 @@ const tabs = computed<
             <ActivityBestEfforts
                 v-if="hasBestEffortsCard"
                 :best-efforts="bestEfforts"
+                :duration-efforts="durationPeakEfforts"
                 :series="series"
                 :uses-pace="usesPace"
                 :is-running="isRunning"
-                :is-cycling="isCycling"
-                :is-indoor="activity.is_indoor"
                 :athlete-weight-kg="athleteWeightKg ?? null"
-                :power-effort-ranks="powerEffortRanks ?? null"
                 :highlighted-range="highlightedRange"
                 @select-range="highlightedRange = $event"
             />

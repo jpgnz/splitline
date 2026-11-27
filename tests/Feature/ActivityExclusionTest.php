@@ -16,10 +16,12 @@ use App\Models\SegmentEffort;
 use App\Services\Activities\ActivityExclusionService;
 use App\Services\Activities\ActivityQueryService;
 use App\Services\Activities\PaceDistributionService;
+use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Gear\GearService;
 use App\Services\Ingestion\ImportWatchService;
 use App\Services\Ingestion\TelemetryPersistenceService;
 use App\Services\Recap\AnnualRecapService;
+use App\Services\Routes\RouteMatchingService;
 use App\Services\Sports\EnduranceHubService;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
@@ -365,12 +367,12 @@ it('removes excluded activities from gear mileage, sport counts, best effort ran
         ->and($recap['weather']['sample_count'])->toBe(1)
         ->and($recap['weather']['hottest_activity']['activity_id'])->toBe($good->id);
 
-    // 4. RouteCluster was refreshed and bung fingerprint removed
+    // 4. RouteCluster was refreshed and bung fingerprint detached from it
     $refreshedCluster = $cluster->fresh();
     expect($refreshedCluster)->not->toBeNull()
         ->and($refreshedCluster->activity_count)->toBe(1)
         ->and($refreshedCluster->representative_activity_id)->toBe($good->id)
-        ->and(ActivityRouteFingerprint::query()->where('activity_id', $bung->id)->exists())->toBeFalse();
+        ->and(ActivityRouteFingerprint::query()->where('activity_id', $bung->id)->value('route_cluster_id'))->toBeNull();
 
     // 5. Segment efforts & detections removed and rankings recalculated so legit effort is now #1 PR
     $refreshedSegment = $segment->fresh();
@@ -380,3 +382,92 @@ it('removes excluded activities from gear mileage, sport counts, best effort ran
         ->and($goodSegEffort->fresh()?->rank)->toBe(1)
         ->and($goodSegEffort->fresh()?->is_pr)->toBeTrue();
 });
+
+it('refuses to sync streams for an excluded activity and never route-matches it', function () {
+    $this->mock(ActivityStreamSyncService::class)->shouldNotReceive('sync');
+
+    $activity = Activity::factory()->excluded()->create([
+        'sport_category' => 'running',
+        'is_indoor' => false,
+        'distance_meters' => 5000.0,
+    ]);
+    $stream = ActivityStream::factory()->create([
+        'activity_id' => $activity->id,
+        'polyline' => exclusionTestLoopPolyline(),
+    ]);
+
+    $this->from("/activities/{$activity->id}")
+        ->post("/activities/{$activity->id}/sync-streams")
+        ->assertRedirect("/activities/{$activity->id}")
+        ->assertSessionHas('status', 'Restore this activity before syncing its streams.');
+
+    expect(app(RouteMatchingService::class)->matchActivity($activity, $stream))->toBeNull()
+        ->and(ActivityRouteFingerprint::query()->where('activity_id', $activity->id)->exists())->toBeFalse()
+        ->and(RouteCluster::query()->count())->toBe(0);
+});
+
+it('restores a custom route name and a manual unlink after excluding and restoring activities', function () {
+    Queue::fake();
+
+    $matcher = app(RouteMatchingService::class);
+    $exclusions = app(ActivityExclusionService::class);
+
+    $named = Activity::factory()->create([
+        'sport_category' => 'running',
+        'is_indoor' => false,
+        'distance_meters' => 5000.0,
+    ]);
+    $namedStream = ActivityStream::factory()->create([
+        'activity_id' => $named->id,
+        'polyline' => exclusionTestLoopPolyline(),
+    ]);
+    $namedCluster = $matcher->matchActivity($named, $namedStream)->cluster;
+    $namedCluster->update(['name_override' => 'Harbour Bridge Loop']);
+
+    $unlinked = Activity::factory()->create([
+        'sport_category' => 'running',
+        'is_indoor' => false,
+        'distance_meters' => 5000.0,
+    ]);
+    $unlinkedStream = ActivityStream::factory()->create([
+        'activity_id' => $unlinked->id,
+        'polyline' => exclusionTestLoopPolyline(centerLng: 174.9000),
+    ]);
+    $matcher->unlinkActivity($matcher->matchActivity($unlinked, $unlinkedStream)->cluster, $unlinked);
+
+    $exclusions->exclude($named);
+    $exclusions->exclude($unlinked);
+
+    expect($namedCluster->fresh())->toBeNull();
+
+    $exclusions->restore(Activity::withExcluded()->findOrFail($named->id));
+    $exclusions->restore(Activity::withExcluded()->findOrFail($unlinked->id));
+
+    $namedFingerprint = ActivityRouteFingerprint::query()->where('activity_id', $named->id)->firstOrFail();
+    $unlinkedFingerprint = ActivityRouteFingerprint::query()->where('activity_id', $unlinked->id)->firstOrFail();
+
+    expect($namedFingerprint->cluster?->name_override)->toBe('Harbour Bridge Loop')
+        ->and($namedFingerprint->preserved_name_override)->toBeNull()
+        ->and($unlinkedFingerprint->is_unlinked)->toBeTrue()
+        ->and($unlinkedFingerprint->route_cluster_id)->toBeNull();
+});
+
+/**
+ * Closed ~5 km loop polyline for route-matching scenarios.
+ *
+ * @return list<array{0: float, 1: float}>
+ */
+function exclusionTestLoopPolyline(float $centerLat = -36.8500, float $centerLng = 174.7600): array
+{
+    $coords = [];
+
+    for ($i = 0; $i < 40; $i++) {
+        $angle = ($i / 39) * 2.0 * M_PI;
+        $coords[] = [
+            round($centerLat + (0.0072 * sin($angle)), 5),
+            round($centerLng + (0.0072 * cos($angle)), 5),
+        ];
+    }
+
+    return $coords;
+}

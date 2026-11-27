@@ -35,6 +35,7 @@ export interface PeakEffortOptions {
     isIndoor: boolean;
     athleteWeightKg?: number | null;
     powerEffortRanks?: Record<string, number> | null;
+    powerCurve?: Record<string, number> | null;
 }
 
 export interface AllDurationPeakEfforts {
@@ -50,19 +51,25 @@ const ALTITUDE_SMOOTHING_RADIUS = 2;
 const ALTITUDE_NOISE_THRESHOLD_METERS = 0.2;
 const MIN_WINDOW_COVERAGE = 0.85;
 
+/**
+ * Stored streams are downsampled, so a window must span at least this many sample
+ * intervals before its stream-derived average is meaningful.
+ */
+const MIN_WINDOW_SAMPLE_INTERVALS = 3;
+
 const RUNNING_POWER_DURATIONS: readonly number[] = [
-    5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600,
+    5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600,
 ];
 
 const CYCLING_POWER_DURATIONS: readonly number[] = [
-    5, 15, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200,
+    5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, 7200,
 ];
 
 const SUSTAINED_DURATIONS: readonly number[] = [60, 300, 600, 1200, 1800, 3600];
 
 const DURATION_LABELS: Record<number, string> = {
     5: '5s',
-    15: '15s',
+    10: '10s',
     30: '30s',
     60: '1 min',
     120: '2 min',
@@ -128,7 +135,7 @@ function normalizeMonotonicSamples(series: StreamPoint[]): IndexedSample[] {
     return samples;
 }
 
-function resolvePauseThreshold(samples: IndexedSample[]): number {
+function resolveMedianSampleSpacing(samples: IndexedSample[]): number | null {
     const deltas: number[] = [];
 
     for (let i = 1; i < samples.length; i += 1) {
@@ -140,13 +147,53 @@ function resolvePauseThreshold(samples: IndexedSample[]): number {
     }
 
     if (deltas.length === 0) {
-        return PAUSE_MIN_SECONDS;
+        return null;
     }
 
     deltas.sort((a, b) => a - b);
-    const median = deltas[Math.floor(deltas.length / 2)];
 
-    return Math.max(PAUSE_MIN_SECONDS, median * PAUSE_MEDIAN_MULTIPLIER);
+    return deltas[Math.floor(deltas.length / 2)];
+}
+
+function resolvePauseThreshold(medianSpacing: number | null): number {
+    if (medianSpacing === null) {
+        return PAUSE_MIN_SECONDS;
+    }
+
+    return Math.max(PAUSE_MIN_SECONDS, medianSpacing * PAUSE_MEDIAN_MULTIPLIER);
+}
+
+function resolveMinResolvableDuration(medianSpacing: number | null): number {
+    return (medianSpacing ?? 0) * MIN_WINDOW_SAMPLE_INTERVALS;
+}
+
+/**
+ * Device-recorded peak power keyed by whole-second duration, ignoring non-positive or malformed entries.
+ */
+function normalizePowerCurve(
+    curve: Record<string, number> | null | undefined,
+): Map<number, number> {
+    const normalized = new Map<number, number>();
+
+    if (!curve || Array.isArray(curve)) {
+        return normalized;
+    }
+
+    for (const [rawSeconds, rawWatts] of Object.entries(curve)) {
+        const seconds = Number(rawSeconds);
+        const watts = Number(rawWatts);
+
+        if (
+            Number.isInteger(seconds) &&
+            seconds > 0 &&
+            Number.isFinite(watts) &&
+            watts > 0
+        ) {
+            normalized.set(seconds, watts);
+        }
+    }
+
+    return normalized;
 }
 
 function interpolateAtTime(
@@ -545,10 +592,12 @@ function buildPeakEffortRow(
     match: BestWindowMatch,
     athleteWeightKg: number | null,
     allTimeRank: number | null,
+    recordedValue: number | null = null,
 ): DurationPeakEffort {
     const startOrig = samples[match.startSampleIdx].origIndex;
     const endOrig = samples[match.endSampleIdx].origIndex;
     const stats = computeStreamSelectionStats(series, startOrig, endOrig);
+    const value = recordedValue ?? match.score;
 
     const startDist = interpolateDistanceAtTime(
         samples,
@@ -571,7 +620,7 @@ function buildPeakEffortRow(
             : (stats?.endDistanceMeters ?? null);
 
     const avgPower =
-        mode === 'power' ? Math.round(match.score) : (stats?.avgPower ?? null);
+        mode === 'power' ? Math.round(value) : (stats?.avgPower ?? null);
     const wPerKg =
         avgPower !== null &&
         athleteWeightKg !== null &&
@@ -604,7 +653,7 @@ function buildPeakEffortRow(
         endIndex: endOrig,
         startDistanceMeters: resolvedStartDist,
         endDistanceMeters: resolvedEndDist,
-        value: match.score,
+        value,
         avgPower,
         wPerKg,
         avgHr,
@@ -618,12 +667,18 @@ function buildPeakEffortRow(
     };
 }
 
+/**
+ * Peak power per duration. Values come from the device-recorded power curve when available, because the
+ * stored stream is downsampled and under-reads short efforts; the stream is then only used to place each
+ * window on the charts. Without a power curve, only durations the stream can resolve are reported.
+ */
 export function computePowerPeakEfforts(
     series: StreamPoint[],
     options: {
         isCycling: boolean;
         athleteWeightKg?: number | null;
         powerEffortRanks?: Record<string, number> | null;
+        powerCurve?: Record<string, number> | null;
     },
 ): DurationPeakEffort[] {
     const samples = normalizeMonotonicSamples(series);
@@ -640,10 +695,10 @@ export function computePowerPeakEfforts(
         return [];
     }
 
-    const pauseThreshold = resolvePauseThreshold(samples);
+    const medianSpacing = resolveMedianSampleSpacing(samples);
     const { times, prefixArea, prefixValid, validCount } = buildMetricPrefixes(
         samples,
-        pauseThreshold,
+        resolvePauseThreshold(medianSpacing),
         (pt) => (isFiniteNumber(pt.power) && pt.power >= 0 ? pt.power : null),
     );
 
@@ -654,10 +709,23 @@ export function computePowerPeakEfforts(
     const durations = options.isCycling
         ? CYCLING_POWER_DURATIONS
         : RUNNING_POWER_DURATIONS;
+    const powerCurve = normalizePowerCurve(options.powerCurve);
+    const hasPowerCurve = powerCurve.size > 0;
+    const minResolvableDuration = resolveMinResolvableDuration(medianSpacing);
     const weightKg = options.athleteWeightKg ?? null;
     const results: DurationPeakEffort[] = [];
 
     for (const duration of durations) {
+        const recordedWatts = powerCurve.get(duration) ?? null;
+
+        if (
+            hasPowerCurve
+                ? recordedWatts === null
+                : duration < minResolvableDuration
+        ) {
+            continue;
+        }
+
         const match = findBestDurationWindow(
             times,
             prefixArea,
@@ -679,7 +747,10 @@ export function computePowerPeakEfforts(
                 duration,
                 match,
                 weightKg,
-                resolvePowerRank(options.powerEffortRanks, duration),
+                recordedWatts !== null
+                    ? resolvePowerRank(options.powerEffortRanks, duration)
+                    : null,
+                recordedWatts,
             ),
         );
     }
@@ -701,10 +772,10 @@ export function computeGapPeakEfforts(
         return [];
     }
 
-    const pauseThreshold = resolvePauseThreshold(samples);
+    const medianSpacing = resolveMedianSampleSpacing(samples);
     const { times, prefixArea, prefixValid, validCount } = buildMetricPrefixes(
         samples,
-        pauseThreshold,
+        resolvePauseThreshold(medianSpacing),
         (pt) =>
             isFiniteNumber(pt.gap_speed) &&
             pt.gap_speed > 0.5 &&
@@ -717,9 +788,14 @@ export function computeGapPeakEfforts(
         return [];
     }
 
+    const minResolvableDuration = resolveMinResolvableDuration(medianSpacing);
     const results: DurationPeakEffort[] = [];
 
     for (const duration of SUSTAINED_DURATIONS) {
+        if (duration < minResolvableDuration) {
+            continue;
+        }
+
         const match = findBestDurationWindow(
             times,
             prefixArea,
@@ -759,10 +835,10 @@ export function computeHrPeakEfforts(
         return [];
     }
 
-    const pauseThreshold = resolvePauseThreshold(samples);
+    const medianSpacing = resolveMedianSampleSpacing(samples);
     const { times, prefixArea, prefixValid, validCount } = buildMetricPrefixes(
         samples,
-        pauseThreshold,
+        resolvePauseThreshold(medianSpacing),
         (pt) =>
             isFiniteNumber(pt.hr) && pt.hr >= 40 && pt.hr <= 240 ? pt.hr : null,
     );
@@ -771,9 +847,14 @@ export function computeHrPeakEfforts(
         return [];
     }
 
+    const minResolvableDuration = resolveMinResolvableDuration(medianSpacing);
     const results: DurationPeakEffort[] = [];
 
     for (const duration of SUSTAINED_DURATIONS) {
+        if (duration < minResolvableDuration) {
+            continue;
+        }
+
         const match = findBestDurationWindow(
             times,
             prefixArea,
@@ -820,20 +901,25 @@ export function computeClimbingPeakEfforts(
         return [];
     }
 
-    const pauseThreshold = resolvePauseThreshold(samples);
+    const medianSpacing = resolveMedianSampleSpacing(samples);
     const { times, prefixGain, prefixValid, totalGain } = buildClimbingPrefixes(
         samples,
-        pauseThreshold,
+        resolvePauseThreshold(medianSpacing),
     );
 
     if (totalGain < 15) {
         return [];
     }
 
+    const minResolvableDuration = resolveMinResolvableDuration(medianSpacing);
     const weightKg = options.athleteWeightKg ?? null;
     const results: DurationPeakEffort[] = [];
 
     for (const duration of SUSTAINED_DURATIONS) {
+        if (duration < minResolvableDuration) {
+            continue;
+        }
+
         const minGainMeters = duration <= 60 ? 5 : 10;
         const match = findBestDurationWindow(
             times,
@@ -873,6 +959,7 @@ export function computeAllDurationPeakEfforts(
             isCycling: options.isCycling,
             athleteWeightKg: options.athleteWeightKg,
             powerEffortRanks: options.powerEffortRanks,
+            powerCurve: options.powerCurve,
         }),
         gap: computeGapPeakEfforts(series, options.isRunning),
         hr: computeHrPeakEfforts(series, options.athleteWeightKg ?? null),
@@ -884,19 +971,12 @@ export function computeAllDurationPeakEfforts(
 }
 
 export function hasAnyDurationPeakEfforts(
-    series: StreamPoint[],
-    options: {
-        isRunning: boolean;
-        isCycling: boolean;
-        isIndoor: boolean;
-    },
+    efforts: AllDurationPeakEfforts,
 ): boolean {
-    const all = computeAllDurationPeakEfforts(series, options);
-
     return (
-        all.power.length > 0 ||
-        all.gap.length > 0 ||
-        all.hr.length > 0 ||
-        all.climbing.length > 0
+        efforts.power.length > 0 ||
+        efforts.gap.length > 0 ||
+        efforts.hr.length > 0 ||
+        efforts.climbing.length > 0
     );
 }

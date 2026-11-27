@@ -1266,6 +1266,9 @@ class ActivityQueryService
     /**
      * Resolve all-time Top 3 ranks for each duration in the activity's power curve within its sport category.
      *
+     * Ranks come from a single query that counts, per duration, the peers ahead of this activity
+     * (higher watts, ties broken by lower id) in SQL, so peer power curves are never loaded into PHP.
+     *
      * @return array<int, int>
      */
     private function resolvePowerEffortRanks(Activity $activity): array
@@ -1300,63 +1303,35 @@ class ActivityQueryService
             return [];
         }
 
-        $peers = Activity::query()
-            ->select(['id', 'power_curve'])
-            ->where('sport_category', $activity->sport_category)
-            ->whereNotNull('power_curve')
-            ->get();
+        $rankQuery = null;
 
-        /** @var array<int, list<array{id: int, watts: float}>> $buckets */
-        $buckets = [];
+        foreach ($targetDurations as $seconds => $watts) {
+            $wattsPath = '$."'.$seconds.'"';
 
-        foreach ($targetDurations as $seconds => $_watts) {
-            $buckets[$seconds] = [];
-        }
+            $durationQuery = Activity::query()
+                ->where('sport_category', $activity->sport_category)
+                ->whereNotNull('power_curve')
+                ->selectRaw(
+                    'CAST(? AS INTEGER) AS seconds, SUM(CASE WHEN json_extract(power_curve, ?) > CAST(? AS REAL) OR (json_extract(power_curve, ?) = CAST(? AS REAL) AND id < ?) THEN 1 ELSE 0 END) AS ahead',
+                    [$seconds, $wattsPath, $watts, $wattsPath, $watts, $activity->id],
+                )
+                ->toBase();
 
-        foreach ($peers as $peer) {
-            $peerCurve = $peer->power_curve;
-
-            if (! is_array($peerCurve) || $peerCurve === []) {
-                continue;
-            }
-
-            foreach (array_keys($targetDurations) as $seconds) {
-                $rawWatts = $peerCurve[$seconds] ?? $peerCurve[(string) $seconds] ?? null;
-
-                if (! is_numeric($rawWatts)) {
-                    continue;
-                }
-
-                $watts = (float) $rawWatts;
-
-                if ($watts > 0.0) {
-                    $buckets[$seconds][] = [
-                        'id' => $peer->id,
-                        'watts' => $watts,
-                    ];
-                }
-            }
+            $rankQuery = $rankQuery === null ? $durationQuery : $rankQuery->unionAll($durationQuery);
         }
 
         /** @var array<int, int> $ranks */
         $ranks = [];
 
-        foreach ($buckets as $seconds => $entries) {
-            usort($entries, static function (array $a, array $b): int {
-                $cmp = $b['watts'] <=> $a['watts'];
+        foreach ($rankQuery->get() as $row) {
+            if (! is_numeric($row->seconds) || ! is_numeric($row->ahead)) {
+                continue;
+            }
 
-                if ($cmp !== 0) {
-                    return $cmp;
-                }
+            $rank = (int) $row->ahead + 1;
 
-                return $a['id'] <=> $b['id'];
-            });
-
-            foreach (array_slice($entries, 0, 3) as $index => $candidate) {
-                if ($candidate['id'] === $activity->id) {
-                    $ranks[$seconds] = $index + 1;
-                    break;
-                }
+            if ($rank <= 3) {
+                $ranks[(int) $row->seconds] = $rank;
             }
         }
 
