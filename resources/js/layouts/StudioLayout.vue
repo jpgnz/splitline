@@ -38,7 +38,10 @@ import { useAppearance } from '@/composables/useAppearance';
 import { formatRelativeTime } from '@/lib/format';
 import { useSports } from '@/lib/sports';
 import { dashboard } from '@/routes';
-import { index as activitiesIndex } from '@/routes/activities';
+import {
+    compare as activitiesCompare,
+    index as activitiesIndex,
+} from '@/routes/activities';
 import { index as fitnessIndex } from '@/routes/fitness';
 // import { index as gearIndex } from '@/routes/gear';
 import { index as goalsIndex } from '@/routes/goals';
@@ -152,7 +155,7 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                     label: 'All Activities',
                     href: activitiesIndex.url(),
                     icon: ListFilter,
-                    excludePrefixes: ['/activities/compare'],
+                    excludePrefixes: [activitiesCompare.url()],
                 },
                 {
                     key: 'heatmap',
@@ -340,7 +343,7 @@ const syncDotClass = computed<string>(() => {
 
 const syncButtonTooltip = computed<string | undefined>(() => {
     if (!isProviderConfigured.value) {
-        return 'Configure a data provider in Settings to enable syncing.';
+        return 'Add your data provider credentials to the server configuration to enable syncing.';
     }
 
     return undefined;
@@ -487,18 +490,10 @@ async function pollSyncStatus(): Promise<void> {
             lastPolledSyncRunning = null;
 
             if (wasSyncRunning || wasEnriching) {
-                if (currentPath.value === settingsHref) {
-                    router.reload({ only: ['sync'] });
-                } else {
-                    router.reload();
-                }
-            }
-        } else if (wasSyncRunning && !nextSyncRunning) {
-            if (currentPath.value === settingsHref) {
-                router.reload({ only: ['sync'] });
-            } else {
                 router.reload();
             }
+        } else if (wasSyncRunning && !nextSyncRunning) {
+            router.reload();
         }
     } catch {
         // Transient network error while polling; retry on next tick.

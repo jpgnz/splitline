@@ -1684,8 +1684,9 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     v-if="!isProviderConfigured"
                     class="text-sm text-zinc-500 dark:text-zinc-400"
                 >
-                    Connect your data provider in Settings to start syncing
-                    activities and health metrics.
+                    Add your data provider credentials to the server
+                    configuration to start syncing activities and health
+                    metrics.
                 </p>
                 <p v-else class="text-sm text-zinc-500 dark:text-zinc-400">
                     Click
