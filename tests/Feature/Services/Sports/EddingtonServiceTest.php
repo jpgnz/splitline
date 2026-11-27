@@ -85,8 +85,8 @@ it('computes exact metric and imperial Eddington numbers and next targets', func
     //   5 days >= 5 km (10, 9, 8, 6, 5) -> E = 5 km
     //   For E = 6 km: 4 days >= 6 km (10, 9, 8, 6) -> needs 2 more days
     // Imperial (mi): 6.21, 5.59, 4.97, 3.73, 3.11, 2.49, 1.86
-    //   3 days >= 3 mi (6.21, 5.59, 4.97, 3.73, 3.11 -> actually 5 days >= 3 mi! And 3 days >= 4 mi: 6.21, 5.59, 4.97 -> 3 < 4)
-    //   So E = 3 mi; for E = 4 mi: 3 days >= 4 mi -> needs 1 more day!
+    //   5 days >= 3 mi but only 3 days >= 4 mi -> E = 3 mi
+    //   For E = 4 mi: 3 days >= 4 mi -> needs 1 more day
     $payload = app(EddingtonService::class)->fromDailyDistances([
         10000.0,
         9000.0,
@@ -117,6 +117,45 @@ it('computes exact metric and imperial Eddington numbers and next targets', func
             ['target' => 5, 'completed_days' => 2, 'remaining_days' => 3],
             ['target' => 6, 'completed_days' => 1, 'remaining_days' => 5],
         ]);
+});
+
+it('counts a day that exactly equals the target distance in both kilometres and miles', function () {
+    $payload = app(EddingtonService::class)->fromDailyDistances([
+        3000.0,
+        3000.0,
+        3000.0,
+        2.0 * 1609.344,
+        2.0 * 1609.344,
+    ]);
+
+    expect($payload['metric']['number'])->toBe(3)
+        ->and($payload['imperial']['number'])->toBe(2);
+});
+
+it('ignores zero-distance activities and activities outside the scoped query', function () {
+    Activity::factory()->create([
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-11-10 07:00:00'),
+        'distance_meters' => 2000.0,
+    ]);
+    Activity::factory()->create([
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-11-11 07:00:00'),
+        'distance_meters' => 0.0,
+    ]);
+    Activity::factory()->create([
+        'sport_category' => 'biking',
+        'started_at_local' => CarbonImmutable::parse('2026-11-12 07:00:00'),
+        'distance_meters' => 50000.0,
+    ]);
+
+    $payload = app(EddingtonService::class)->forQuery(
+        Activity::query()->where('sport_category', 'running'),
+    );
+
+    expect($payload['active_days'])->toBe(1)
+        ->and($payload['max_single_day_meters'])->toBe(2000.0)
+        ->and($payload['metric']['number'])->toBe(1);
 });
 
 it('includes scoped Eddington numbers in EnduranceHubService payloads for running and cycling hubs', function () {

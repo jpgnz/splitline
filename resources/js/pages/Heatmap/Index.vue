@@ -61,7 +61,10 @@ import {
     index as activitiesIndex,
     show as activitiesShow,
 } from '@/routes/activities';
-import { index as heatmapIndex } from '@/routes/heatmap';
+import {
+    explorer as heatmapExplorer,
+    index as heatmapIndex,
+} from '@/routes/heatmap';
 import { sync as syncStreams } from '@/routes/heatmap/streams';
 
 type HeatmapSport = string;
@@ -111,9 +114,9 @@ interface ExplorerSummary {
     };
     max_cluster: {
         size: number;
-        tiles: [number, number][];
     };
-    tiles: [number, number, number][];
+    /** [x, y, visits, is_max_cluster (0 | 1)] */
+    tiles: [number, number, number, 0 | 1][];
 }
 
 interface HeatmapProps {
@@ -130,7 +133,6 @@ interface HeatmapProps {
         total_elevation_gain: number;
         unsynced_gnss_count: number;
     };
-    explorer?: ExplorerSummary;
     tracks: HeatmapTrack[];
 }
 
@@ -209,6 +211,9 @@ const isQueueingSync = ref<boolean>(false);
 const activeOrder = ref<HeatmapOrder>(props.order ?? 'newest_on_top');
 const prioritySportKey = ref<string | null>(null);
 const showExplorerTiles = ref<boolean>(false);
+const explorerSummary = ref<ExplorerSummary | null>(null);
+const isLoadingExplorer = ref<boolean>(false);
+const explorerLoadFailed = ref<boolean>(false);
 
 let map: MapLibreMap | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -260,16 +265,6 @@ const decodedTracks = computed<DecodedHeatmapTrack[]>(() =>
 );
 
 const hasTracks = computed<boolean>(() => decodedTracks.value.length > 0);
-const explorerSummary = computed<ExplorerSummary>(() => ({
-    zoom: props.explorer?.zoom ?? 14,
-    total_tiles: props.explorer?.total_tiles ?? 0,
-    max_square: props.explorer?.max_square ?? { size: 0, min_x: 0, min_y: 0 },
-    max_cluster: props.explorer?.max_cluster ?? { size: 0, tiles: [] },
-    tiles: props.explorer?.tiles ?? [],
-}));
-const hasExplorerTiles = computed<boolean>(
-    () => explorerSummary.value.total_tiles > 0,
-);
 const hasActiveFilters = computed<boolean>(
     () => props.filters.sport !== 'all' || props.filters.timeframe !== 'all',
 );
@@ -630,6 +625,43 @@ function queueGnssSync(): void {
     );
 }
 
+async function loadExplorerSummary(): Promise<void> {
+    if (isLoadingExplorer.value || explorerSummary.value !== null) {
+        return;
+    }
+
+    isLoadingExplorer.value = true;
+    explorerLoadFailed.value = false;
+
+    try {
+        const response = await fetch(heatmapExplorer.url(), {
+            headers: {
+                Accept: 'application/json',
+            },
+        });
+
+        if (!response.ok) {
+            explorerLoadFailed.value = true;
+
+            return;
+        }
+
+        explorerSummary.value = (await response.json()) as ExplorerSummary;
+    } catch {
+        explorerLoadFailed.value = true;
+    } finally {
+        isLoadingExplorer.value = false;
+    }
+}
+
+function setExplorerTilesVisible(visible: boolean): void {
+    showExplorerTiles.value = visible;
+
+    if (visible) {
+        void loadExplorerSummary();
+    }
+}
+
 function pointToSegmentDistancePx(
     px: number,
     py: number,
@@ -773,21 +805,14 @@ function tileBounds(
     return { north, south, west, east };
 }
 
-function buildExplorerFeatureCollections(): {
+function buildExplorerFeatureCollections(summary: ExplorerSummary): {
     tiles: FeatureCollection<Polygon>;
     maxSquare: FeatureCollection<Polygon>;
 } {
-    const summary = explorerSummary.value;
     const zoom = summary.zoom || 14;
-    const clusterSet = new Set<string>();
-
-    for (const [cx, cy] of summary.max_cluster.tiles) {
-        clusterSet.add(`${cx}:${cy}`);
-    }
-
     const tileFeatures: Array<Feature<Polygon>> = [];
 
-    for (const [x, y, visits] of summary.tiles) {
+    for (const [x, y, visits, isCluster] of summary.tiles) {
         const { north, south, west, east } = tileBounds(x, y, zoom);
 
         tileFeatures.push({
@@ -796,7 +821,7 @@ function buildExplorerFeatureCollections(): {
                 x,
                 y,
                 visits,
-                is_cluster: clusterSet.has(`${x}:${y}`),
+                is_cluster: isCluster === 1,
             },
             geometry: {
                 type: 'Polygon',
@@ -1135,14 +1160,20 @@ function renderExplorerLayers(): void {
         | GeoJSONSource
         | undefined;
 
-    if (!showExplorerTiles.value || !hasExplorerTiles.value) {
+    const summary = explorerSummary.value;
+
+    if (
+        !showExplorerTiles.value ||
+        summary === null ||
+        summary.total_tiles === 0
+    ) {
         tilesSource?.setData(emptyFeatureCollection());
         squareSource?.setData(emptyFeatureCollection());
 
         return;
     }
 
-    const { tiles, maxSquare } = buildExplorerFeatureCollections();
+    const { tiles, maxSquare } = buildExplorerFeatureCollections(summary);
     tilesSource?.setData(tiles);
     squareSource?.setData(maxSquare);
 }
@@ -1431,12 +1462,9 @@ watch(showExplorerTiles, () => {
     renderExplorerLayers();
 });
 
-watch(
-    () => props.explorer,
-    () => {
-        renderExplorerLayers();
-    },
-);
+watch(explorerSummary, () => {
+    renderExplorerLayers();
+});
 
 watch(
     () => props.tracks,
@@ -1560,12 +1588,7 @@ onBeforeUnmount(() => {
                 <!-- Explorer Tiles + Layer Render Order -->
                 <div class="flex flex-wrap items-center gap-3">
                     <!-- Explorer z14 Grid Toggle -->
-                    <div
-                        class="flex flex-wrap items-center gap-1.5"
-                        :class="
-                            !hasTracks || !hasExplorerTiles ? 'opacity-50' : ''
-                        "
-                    >
+                    <div class="flex flex-wrap items-center gap-1.5">
                         <span
                             class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
                         >
@@ -1579,28 +1602,27 @@ onBeforeUnmount(() => {
                         >
                             <button
                                 type="button"
-                                :disabled="!hasTracks || !hasExplorerTiles"
-                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
+                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     !showExplorerTiles
                                         ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
-                                @click="showExplorerTiles = false"
+                                @click="setExplorerTilesVisible(false)"
                             >
                                 Off
                             </button>
                             <button
                                 type="button"
-                                :disabled="!hasTracks || !hasExplorerTiles"
-                                title="Overlay visited z14 OSM Explorer tiles, Max Cluster, and Max Square"
-                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
+                                :disabled="isLoadingExplorer"
+                                title="Overlay lifetime z14 OSM Explorer tiles from all outdoor activities (ignores filters), with Max Cluster and Max Square"
+                                class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-wait"
                                 :class="
                                     showExplorerTiles
                                         ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-950'
                                         : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
-                                @click="showExplorerTiles = true"
+                                @click="setExplorerTilesVisible(true)"
                             >
                                 Tiles
                             </button>
@@ -1693,20 +1715,35 @@ onBeforeUnmount(() => {
                         </span>
                     </div>
 
-                    <template v-if="hasTracks && hasExplorerTiles">
+                    <template v-if="showExplorerTiles">
                         <span
                             class="hidden h-4 w-px bg-zinc-200 sm:inline-block dark:bg-zinc-800"
                             aria-hidden="true"
                         />
 
                         <div
+                            v-if="isLoadingExplorer"
+                            class="h-6 w-64 animate-pulse rounded-lg bg-zinc-100 dark:bg-zinc-800/70"
+                            aria-label="Loading explorer tiles"
+                        />
+
+                        <span
+                            v-else-if="explorerLoadFailed"
+                            class="font-mono text-[11px] text-rose-600 dark:text-rose-400"
+                        >
+                            Explorer tiles could not be loaded.
+                        </span>
+
+                        <div
+                            v-else-if="explorerSummary"
                             class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            title="Lifetime totals across all outdoor activities, independent of the sport and date filters"
                         >
                             <div class="flex items-baseline gap-1.5">
                                 <span
                                     class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
                                 >
-                                    Tiles
+                                    Lifetime Tiles
                                 </span>
                                 <span
                                     class="font-mono text-xs font-semibold text-emerald-700 tabular-nums dark:text-emerald-400"
@@ -1874,7 +1911,13 @@ onBeforeUnmount(() => {
                             <span>{{ item.label }}</span>
                         </span>
                     </template>
-                    <template v-if="showExplorerTiles && hasExplorerTiles">
+                    <template
+                        v-if="
+                            showExplorerTiles &&
+                            explorerSummary &&
+                            explorerSummary.total_tiles > 0
+                        "
+                    >
                         <span
                             class="mx-0.5 h-3 w-px bg-zinc-200 dark:bg-zinc-700"
                             aria-hidden="true"

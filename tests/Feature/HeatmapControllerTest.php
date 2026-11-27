@@ -236,3 +236,31 @@ it('supports stepped bounded windows, custom date ranges, and layer order option
             ->where('tracks.0.activity_id', $novRide->id),
         );
 });
+
+it('leaves explorer tiles out of the heatmap page and serves lifetime tiles from a dedicated endpoint', function () {
+    $oldRide = Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2019-03-02 08:00:00'),
+        'is_indoor' => false,
+        'streams_synced_at' => CarbonImmutable::parse('2019-03-02 10:00:00'),
+    ]);
+    ActivityStream::factory()->create([
+        'activity_id' => $oldRide->id,
+        'polyline' => [[-36.8485, 174.7633]],
+    ]);
+
+    $this->get('/heatmap?sport=running&timeframe=30d')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Heatmap/Index')
+            ->has('tracks', 0)
+            ->missing('explorer'),
+        );
+
+    $this->getJson('/heatmap/explorer')
+        ->assertOk()
+        ->assertJsonPath('zoom', 14)
+        ->assertJsonPath('total_tiles', 1)
+        ->assertJsonPath('max_square.size', 1)
+        ->assertJsonPath('max_cluster.size', 0)
+        ->assertJsonPath('tiles', [[16145, 9998, 1, 0]]);
+});

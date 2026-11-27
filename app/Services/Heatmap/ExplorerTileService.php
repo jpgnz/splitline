@@ -2,6 +2,11 @@
 
 namespace App\Services\Heatmap;
 
+use App\Models\Activity;
+use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Cache;
+
 /**
  * @phpstan-type ExplorerMaxSquare array{
  *     size: int,
@@ -9,8 +14,7 @@ namespace App\Services\Heatmap;
  *     min_y: int
  * }
  * @phpstan-type ExplorerMaxCluster array{
- *     size: int,
- *     tiles: list<array{0: int, 1: int}>
+ *     size: int
  * }
  * @phpstan-type ExplorerTileBounds array{
  *     north: float,
@@ -23,7 +27,7 @@ namespace App\Services\Heatmap;
  *     total_tiles: int,
  *     max_square: ExplorerMaxSquare,
  *     max_cluster: ExplorerMaxCluster,
- *     tiles: list<array{0: int, 1: int, 2: int}>
+ *     tiles: list<array{0: int, 1: int, 2: int, 3: int}>
  * }
  */
 class ExplorerTileService
@@ -32,13 +36,58 @@ class ExplorerTileService
 
     public const int MAX_RETURNED_TILES = 15000;
 
+    public const string LIFETIME_CACHE_KEY = 'heatmap:explorer:lifetime';
+
+    /**
+     * Bump whenever the tile algorithm or payload shape changes so cached summaries are rebuilt.
+     */
+    private const int LIFETIME_CACHE_VERSION = 2;
+
+    private const int LIFETIME_CHUNK_SIZE = 250;
+
     private const float MAX_MERCATOR_LAT = 85.0511;
 
-    private const int MAX_INTERPOLATION_TILES = 128;
+    /**
+     * Consecutive GPS samples further apart than this are treated as a recording gap
+     * (tunnel, ferry, signal loss, bad first fix), so no tiles are credited between them.
+     */
+    private const float MAX_INTERPOLATION_METERS = 2000.0;
+
+    private const float EARTH_RADIUS_METERS = 6371008.8;
 
     private const int KEY_SHIFT = 20;
 
     private const int KEY_MASK = (1 << self::KEY_SHIFT) - 1;
+
+    /**
+     * Resolve the lifetime Explorer summary across every outdoor activity with a GNSS polyline.
+     * The result is cached and transparently rebuilt whenever the set of synced outdoor streams changes.
+     *
+     * @return ExplorerSummary
+     */
+    public function lifetimeSummary(): array
+    {
+        $fingerprint = $this->lifetimeFingerprint();
+        $cached = Cache::get(self::LIFETIME_CACHE_KEY);
+
+        if (
+            is_array($cached)
+            && ($cached['fingerprint'] ?? null) === $fingerprint
+            && is_array($cached['summary'] ?? null)
+        ) {
+            /** @var ExplorerSummary */
+            return $cached['summary'];
+        }
+
+        $summary = $this->computeLifetimeSummary();
+
+        Cache::forever(self::LIFETIME_CACHE_KEY, [
+            'fingerprint' => $fingerprint,
+            'summary' => $summary,
+        ]);
+
+        return $summary;
+    }
 
     /**
      * Project a WGS84 latitude/longitude coordinate to an OSM Slippy Tile (x, y) index.
@@ -79,8 +128,9 @@ class ExplorerTileService
 
     /**
      * Record every visited tile along a single activity polyline into the shared tile visit map.
-     * Each track increments a visited tile's count at most once, interpolating intermediate tiles
-     * when consecutive GPS samples cross tile boundaries.
+     * Each track increments a visited tile's count at most once. When consecutive GPS samples skip
+     * over tiles, every tile the straight segment passes through is credited, unless the samples are
+     * further apart than MAX_INTERPOLATION_METERS or the segment wraps across the antimeridian.
      *
      * @param  list<array{0: float, 1: float}>  $polyline
      * @param  array<int, int>  $tileVisits
@@ -91,11 +141,14 @@ class ExplorerTileService
             return;
         }
 
+        $n = (float) (1 << $zoom);
         $maxCoord = (1 << $zoom) - 1;
 
         /** @var array<int, true> $trackTiles */
         $trackTiles = [];
         $hasPrev = false;
+        $prevLat = 0.0;
+        $prevLng = 0.0;
         $prevFx = 0.0;
         $prevFy = 0.0;
         $prevX = 0;
@@ -108,21 +161,17 @@ class ExplorerTileService
 
             $trackTiles[self::packKey($x, $y)] = true;
 
-            if ($hasPrev && ($x !== $prevX || $y !== $prevY)) {
-                $manhattan = abs($x - $prevX) + abs($y - $prevY);
-
-                if ($manhattan <= self::MAX_INTERPOLATION_TILES) {
-                    $steps = max(2, (int) ceil(max(abs($fx - $prevFx), abs($fy - $prevFy)) * 2.0));
-
-                    for ($step = 1; $step < $steps; $step++) {
-                        $t = $step / $steps;
-                        $ix = max(0, min($maxCoord, (int) floor($prevFx + ($fx - $prevFx) * $t)));
-                        $iy = max(0, min($maxCoord, (int) floor($prevFy + ($fy - $prevFy) * $t)));
-                        $trackTiles[self::packKey($ix, $iy)] = true;
-                    }
-                }
+            if (
+                $hasPrev
+                && abs($x - $prevX) + abs($y - $prevY) > 1
+                && abs($fx - $prevFx) <= $n / 2.0
+                && $this->haversineMeters($prevLat, $prevLng, $lat, $lng) <= self::MAX_INTERPOLATION_METERS
+            ) {
+                $this->walkGrid($prevFx, $prevFy, $fx, $fy, $maxCoord, $trackTiles);
             }
 
+            $prevLat = $lat;
+            $prevLng = $lng;
             $prevFx = $fx;
             $prevFy = $fy;
             $prevX = $x;
@@ -156,6 +205,8 @@ class ExplorerTileService
     /**
      * Compute Explorer Grid metrics (Total Tiles, Max Square, Max Cluster) from accumulated tile visits.
      *
+     * Each returned tile is [x, y, visits, is_cluster (0|1)].
+     *
      * @param  array<int, int>  $tileVisits
      * @return ExplorerSummary
      */
@@ -172,7 +223,6 @@ class ExplorerTileService
                 ],
                 'max_cluster' => [
                     'size' => 0,
-                    'tiles' => [],
                 ],
                 'tiles' => [],
             ];
@@ -183,16 +233,149 @@ class ExplorerTileService
         sort($keys, SORT_NUMERIC);
 
         $maxSquare = $this->computeMaxSquare($keys);
-        $maxCluster = $this->computeMaxCluster($keys, $tileVisits, $zoom);
-        $tiles = $this->buildReturnedTiles($keys, $tileVisits, $maxSquare);
+        $maxClusterKeys = $this->computeMaxClusterKeys($keys, $tileVisits, $zoom);
+        $tiles = $this->buildReturnedTiles($keys, $tileVisits, $maxSquare, $maxClusterKeys);
 
         return [
             'zoom' => $zoom,
             'total_tiles' => count($tileVisits),
             'max_square' => $maxSquare,
-            'max_cluster' => $maxCluster,
+            'max_cluster' => [
+                'size' => count($maxClusterKeys),
+            ],
             'tiles' => $tiles,
         ];
+    }
+
+    /**
+     * Build a cheap fingerprint of the outdoor GNSS stream set so cached summaries are rebuilt
+     * when streams are synced, re-synced, deleted, or an activity is toggled indoor/outdoor.
+     */
+    private function lifetimeFingerprint(): string
+    {
+        $row = $this->lifetimeTracksQuery()
+            ->toBase()
+            ->selectRaw('COUNT(*) as track_count')
+            ->selectRaw('COALESCE(SUM(activities.id), 0) as activity_id_sum')
+            ->selectRaw('MAX(activity_streams.updated_at) as latest_stream_update')
+            ->first();
+
+        return implode('|', [
+            self::LIFETIME_CACHE_VERSION,
+            (string) ($row->track_count ?? 0),
+            (string) ($row->activity_id_sum ?? 0),
+            (string) ($row->latest_stream_update ?? ''),
+        ]);
+    }
+
+    /**
+     * @return ExplorerSummary
+     */
+    private function computeLifetimeSummary(): array
+    {
+        /** @var array<int, int> $tileVisits */
+        $tileVisits = [];
+
+        $this->lifetimeTracksQuery()
+            ->toBase()
+            ->select([
+                'activity_streams.id as stream_id',
+                'activity_streams.polyline',
+            ])
+            ->chunkById(
+                self::LIFETIME_CHUNK_SIZE,
+                function (Collection $rows) use (&$tileVisits): void {
+                    foreach ($rows as $row) {
+                        $rawPolyline = is_string($row->polyline)
+                            ? json_decode($row->polyline, true)
+                            : $row->polyline;
+
+                        $this->recordPolyline(HeatmapService::normalizePolyline($rawPolyline), $tileVisits);
+                    }
+                },
+                'activity_streams.id',
+                'stream_id',
+            );
+
+        return $this->summarizeTileVisits($tileVisits);
+    }
+
+    /**
+     * @return Builder<Activity>
+     */
+    private function lifetimeTracksQuery(): Builder
+    {
+        return Activity::query()
+            ->join('activity_streams', 'activity_streams.activity_id', '=', 'activities.id')
+            ->where('activities.is_indoor', false)
+            ->whereNotNull('activity_streams.polyline');
+    }
+
+    /**
+     * Credit every tile a straight segment passes through (Amanatides–Woo grid traversal),
+     * stepping exactly one tile per boundary crossing between the start and end tiles.
+     *
+     * @param  array<int, true>  $trackTiles
+     */
+    private function walkGrid(
+        float $startFx,
+        float $startFy,
+        float $endFx,
+        float $endFy,
+        int $maxCoord,
+        array &$trackTiles,
+    ): void {
+        $x = (int) floor($startFx);
+        $y = (int) floor($startFy);
+        $endX = (int) floor($endFx);
+        $endY = (int) floor($endFy);
+
+        $dx = $endFx - $startFx;
+        $dy = $endFy - $startFy;
+        $stepX = $endX <=> $x;
+        $stepY = $endY <=> $y;
+
+        $tDeltaX = $stepX !== 0 ? abs(1.0 / $dx) : INF;
+        $tDeltaY = $stepY !== 0 ? abs(1.0 / $dy) : INF;
+        $tMaxX = match ($stepX) {
+            1 => ($x + 1 - $startFx) / $dx,
+            -1 => ($startFx - $x) / -$dx,
+            default => INF,
+        };
+        $tMaxY = match ($stepY) {
+            1 => ($y + 1 - $startFy) / $dy,
+            -1 => ($startFy - $y) / -$dy,
+            default => INF,
+        };
+
+        $remainingSteps = abs($endX - $x) + abs($endY - $y);
+
+        for ($i = 0; $i < $remainingSteps; $i++) {
+            $advanceX = $y === $endY || ($x !== $endX && $tMaxX < $tMaxY);
+
+            if ($advanceX) {
+                $x += $stepX;
+                $tMaxX += $tDeltaX;
+            } else {
+                $y += $stepY;
+                $tMaxY += $tDeltaY;
+            }
+
+            $trackTiles[self::packKey(
+                max(0, min($maxCoord, $x)),
+                max(0, min($maxCoord, $y)),
+            )] = true;
+        }
+    }
+
+    private function haversineMeters(float $latA, float $lngA, float $latB, float $lngB): float
+    {
+        $dLat = deg2rad($latB - $latA);
+        $dLng = deg2rad($lngB - $lngA);
+        $a = sin($dLat / 2.0) ** 2
+            + cos(deg2rad($latA)) * cos(deg2rad($latB)) * sin($dLng / 2.0) ** 2;
+
+        return 2.0 * self::EARTH_RADIUS_METERS * asin(min(1.0, sqrt($a)));
     }
 
     /**
@@ -235,13 +418,13 @@ class ExplorerTileService
     }
 
     /**
-     * Compute the largest 4-connected cluster of interior cluster tiles (tiles with all 4 orthogonal neighbors visited).
+     * Find the largest 4-connected cluster of interior cluster tiles (tiles with all 4 orthogonal neighbors visited).
      *
      * @param  list<int>  $sortedKeys
      * @param  array<int, int>  $tileVisits
-     * @return ExplorerMaxCluster
+     * @return list<int>
      */
-    private function computeMaxCluster(array $sortedKeys, array $tileVisits, int $zoom): array
+    private function computeMaxClusterKeys(array $sortedKeys, array $tileVisits, int $zoom): array
     {
         $maxCoord = (1 << $zoom) - 1;
 
@@ -264,13 +447,6 @@ class ExplorerTileService
             ) {
                 $clusterTileSet[$key] = true;
             }
-        }
-
-        if ($clusterTileSet === []) {
-            return [
-                'size' => 0,
-                'tiles' => [],
-            ];
         }
 
         /** @var array<int, true> $visited */
@@ -314,45 +490,50 @@ class ExplorerTileService
             }
         }
 
-        $clusterSize = count($bestClusterKeys);
-        sort($bestClusterKeys, SORT_NUMERIC);
-
-        if ($clusterSize > self::MAX_RETURNED_TILES) {
-            $bestClusterKeys = array_slice($bestClusterKeys, 0, self::MAX_RETURNED_TILES);
-        }
-
-        $tiles = [];
-
-        foreach ($bestClusterKeys as $key) {
-            $tiles[] = [
-                $key >> self::KEY_SHIFT,
-                $key & self::KEY_MASK,
-            ];
-        }
-
-        return [
-            'size' => $clusterSize,
-            'tiles' => $tiles,
-        ];
+        return $bestClusterKeys;
     }
 
     /**
-     * Order visited tiles by visit count descending and proximity to the max square center,
-     * capping cleanly at MAX_RETURNED_TILES for browser map rendering.
+     * Order visited tiles for browser rendering, capping at MAX_RETURNED_TILES. Max Square and
+     * Max Cluster tiles always come first so their overlays are never truncated, followed by the
+     * remaining tiles by visit count descending and proximity to the max square center.
      *
      * @param  list<int>  $sortedKeys
      * @param  array<int, int>  $tileVisits
      * @param  ExplorerMaxSquare  $maxSquare
-     * @return list<array{0: int, 1: int, 2: int}>
+     * @param  list<int>  $maxClusterKeys
+     * @return list<array{0: int, 1: int, 2: int, 3: int}>
      */
-    private function buildReturnedTiles(array $sortedKeys, array $tileVisits, array $maxSquare): array
-    {
+    private function buildReturnedTiles(
+        array $sortedKeys,
+        array $tileVisits,
+        array $maxSquare,
+        array $maxClusterKeys,
+    ): array {
+        /** @var array<int, true> $clusterSet */
+        $clusterSet = array_fill_keys($maxClusterKeys, true);
+
+        /** @var array<int, true> $prioritySet */
+        $prioritySet = $clusterSet;
+
+        for ($dx = 0; $dx < $maxSquare['size']; $dx++) {
+            for ($dy = 0; $dy < $maxSquare['size']; $dy++) {
+                $prioritySet[self::packKey($maxSquare['min_x'] + $dx, $maxSquare['min_y'] + $dy)] = true;
+            }
+        }
+
         $centerX = $maxSquare['min_x'] + max(0, $maxSquare['size'] - 1) / 2.0;
         $centerY = $maxSquare['min_y'] + max(0, $maxSquare['size'] - 1) / 2.0;
 
         $orderedKeys = $sortedKeys;
 
-        usort($orderedKeys, static function (int $a, int $b) use ($tileVisits, $centerX, $centerY): int {
+        usort($orderedKeys, static function (int $a, int $b) use ($tileVisits, $prioritySet, $centerX, $centerY): int {
+            $priorityCmp = isset($prioritySet[$b]) <=> isset($prioritySet[$a]);
+
+            if ($priorityCmp !== 0) {
+                return $priorityCmp;
+            }
+
             $visitCmp = $tileVisits[$b] <=> $tileVisits[$a];
 
             if ($visitCmp !== 0) {
@@ -385,6 +566,7 @@ class ExplorerTileService
                 $key >> self::KEY_SHIFT,
                 $key & self::KEY_MASK,
                 $tileVisits[$key],
+                isset($clusterSet[$key]) ? 1 : 0,
             ];
         }
 
