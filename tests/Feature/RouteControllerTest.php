@@ -601,3 +601,44 @@ it('exposes per-attempt sport keys and supports discipline filtering on route de
             ->where('attempts.0.is_pr', true),
         );
 });
+
+it('breaks dominant discipline ties on the most recent attempt when the representative activity is not among them', function () {
+    $matcher = app(RouteMatchingService::class);
+
+    $genericSeed = Activity::factory()->otherBiking()->create([
+        'name' => 'Generic Seed',
+        'started_at_local' => CarbonImmutable::parse('2026-08-01 08:00:00'),
+        'distance_meters' => 10000.0,
+        'duration_seconds' => 2000.0,
+    ]);
+    $olderRoad = Activity::factory()->roadBiking()->create([
+        'name' => 'Older Road',
+        'started_at_local' => CarbonImmutable::parse('2026-08-10 08:00:00'),
+        'distance_meters' => 10010.0,
+        'duration_seconds' => 1700.0,
+    ]);
+    $newerMtb = Activity::factory()->mountainBiking()->create([
+        'name' => 'Newer MTB',
+        'started_at_local' => CarbonImmutable::parse('2026-08-20 08:00:00'),
+        'distance_meters' => 10020.0,
+        'duration_seconds' => 2100.0,
+    ]);
+
+    foreach ([$genericSeed, $olderRoad, $newerMtb] as $idx => $act) {
+        $stream = ActivityStream::factory()->create([
+            'activity_id' => $act->id,
+            'polyline' => routeTestLoop(-36.85, 174.76, $idx * 0.00001),
+        ]);
+        $matcher->matchActivity($act, $stream);
+    }
+
+    $clusterId = ActivityRouteFingerprint::query()->where('activity_id', $olderRoad->id)->value('route_cluster_id');
+    RouteCluster::query()->whereKey($clusterId)->update(['representative_activity_id' => $genericSeed->id]);
+
+    $this->get("/routes/{$clusterId}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('route.sport_key', 'mtb_cycling')
+            ->where('route.effective_discipline', 'mtb'),
+        );
+});

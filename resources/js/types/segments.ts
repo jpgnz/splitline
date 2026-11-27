@@ -1,4 +1,5 @@
 import type { RouteAttemptWeather, RouteAvailableSport } from '@/types/routes';
+import type { SportFilterOption } from '@/types/sports';
 
 export type ClimbCategory =
     | 'hc'
@@ -100,14 +101,6 @@ export interface SegmentElevationPoint {
     grade_pct: number | null;
 }
 
-export interface SegmentAvailableSport {
-    key: string;
-    label: string;
-    short_label: string;
-    accent_hex: string;
-    count: number;
-}
-
 export interface SegmentEffortItem {
     id: number;
     activity_id: number;
@@ -165,7 +158,7 @@ export interface SegmentShowProps {
     summary: SegmentShowSummary;
     available_years: number[];
     selected_year: number | null;
-    available_sports: SegmentAvailableSport[];
+    available_sports: SportFilterOption[];
     selected_sport: string | null;
     progression: SegmentEffortItem[];
     efforts: SegmentEffortItem[];

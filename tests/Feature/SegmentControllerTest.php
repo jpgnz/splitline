@@ -8,6 +8,7 @@ use App\Models\ActivityWeather;
 use App\Models\Segment;
 use App\Models\SegmentEffort;
 use App\Support\AppSettings;
+use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -600,5 +601,129 @@ it('exposes per-effort sport keys and supports discipline filtering on segment d
             ->where('efforts.0.id', $mtbEffort->id)
             ->where('efforts.0.display_rank', 1)
             ->where('efforts.0.is_display_pr', true),
+        );
+});
+
+it('classifies segments and groups detail discipline filters by the configured discipline rollups', function () {
+    app(SportRegistry::class)->saveConfig([
+        'mode' => 'custom',
+        'rollups' => ['gravel_cycling' => 'road_cycling'],
+    ]);
+
+    $activities = [
+        Activity::factory()->roadBiking()->create(['name' => 'Road 1']),
+        Activity::factory()->roadBiking()->create(['name' => 'Road 2']),
+        Activity::factory()->gravelCycling()->create(['name' => 'Gravel 1']),
+        Activity::factory()->gravelCycling()->create(['name' => 'Gravel 2']),
+        Activity::factory()->mountainBiking()->create(['name' => 'MTB 1']),
+        Activity::factory()->mountainBiking()->create(['name' => 'MTB 2']),
+        Activity::factory()->mountainBiking()->create(['name' => 'MTB 3']),
+    ];
+
+    $segment = Segment::factory()->custom()->create([
+        'sport_category' => 'biking',
+        'source_activity_id' => $activities[4]->id,
+        'effort_count' => count($activities),
+    ]);
+
+    foreach ($activities as $idx => $activity) {
+        SegmentEffort::factory()->create([
+            'segment_id' => $segment->id,
+            'activity_id' => $activity->id,
+            'start_index' => $idx + 1,
+            'started_at_local' => CarbonImmutable::parse('2026-05-01 08:00:00')->addDays($idx),
+        ]);
+    }
+
+    $this->get('/segments?sport=road_cycling')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('segments', 1)
+            ->where('segments.0.id', $segment->id)
+            ->where('segments.0.sport_key', 'road_cycling'),
+        );
+
+    $this->get('/segments?sport=mtb_cycling')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page->has('segments', 0));
+
+    $this->get("/segments/{$segment->id}?sport=road_cycling")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('segment.sport_key', 'road_cycling')
+            ->where('available_sports', fn ($options): bool => collect($options)->pluck('count', 'key')->all() === [
+                'road_cycling' => 4,
+                'mtb_cycling' => 3,
+            ])
+            ->where('selected_sport', 'road_cycling')
+            ->where('summary.effort_count', 4)
+            ->where('efforts', fn ($efforts): bool => collect($efforts)->pluck('sport_key')->sort()->values()->all() === [
+                'gravel_cycling',
+                'gravel_cycling',
+                'road_cycling',
+                'road_cycling',
+            ]),
+        );
+});
+
+it('ignores unknown discipline filters on segment detail', function () {
+    $road = Activity::factory()->roadBiking()->create();
+    $mtb = Activity::factory()->mountainBiking()->create();
+
+    $segment = Segment::factory()->custom()->create([
+        'sport_category' => 'biking',
+        'source_activity_id' => $road->id,
+        'effort_count' => 2,
+    ]);
+
+    foreach ([$road, $mtb] as $idx => $activity) {
+        SegmentEffort::factory()->create([
+            'segment_id' => $segment->id,
+            'activity_id' => $activity->id,
+            'start_index' => $idx + 1,
+        ]);
+    }
+
+    $this->get("/segments/{$segment->id}?sport=gravel_cycling")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('selected_sport', null)
+            ->has('efforts', 2),
+        );
+});
+
+it('ignores efforts from excluded activities when classifying and filtering segments', function () {
+    $road = Activity::factory()->roadBiking()->create();
+    $excludedMtbOne = Activity::factory()->mountainBiking()->excluded()->create();
+    $excludedMtbTwo = Activity::factory()->mountainBiking()->excluded()->create();
+
+    $segment = Segment::factory()->custom()->create([
+        'sport_category' => 'biking',
+        'source_activity_id' => $road->id,
+        'effort_count' => 3,
+    ]);
+
+    foreach ([$road, $excludedMtbOne, $excludedMtbTwo] as $idx => $activity) {
+        SegmentEffort::factory()->create([
+            'segment_id' => $segment->id,
+            'activity_id' => $activity->id,
+            'start_index' => $idx + 1,
+        ]);
+    }
+
+    $this->get('/segments?sport=road_cycling')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('segments', 1)
+            ->where('segments.0.sport_key', 'road_cycling'),
+        );
+
+    $this->get("/segments/{$segment->id}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('segment.sport_key', 'road_cycling')
+            ->where('available_sports', fn ($options): bool => collect($options)->pluck('count', 'key')->all() === ['road_cycling' => 1])
+            ->has('efforts', 1)
+            ->where('efforts.0.activity_id', $road->id),
         );
 });

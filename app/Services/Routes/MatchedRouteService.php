@@ -294,21 +294,12 @@ class MatchedRouteService
         $sportCounts = $this->buildActivitySportCounts($activities);
         $sportMeta = $this->resolveClusterSportMeta($cluster, $sportCounts);
         $availableSports = $registry->buildSportFilterOptions($sportCounts);
-
-        $selectedSport = null;
-
-        if ($sport !== null && trim($sport) !== '') {
-            $normalizedSport = $registry->normalizeKey($sport);
-
-            if (isset($sportCounts[$normalizedSport])) {
-                $selectedSport = $normalizedSport;
-            }
-        }
+        $selectedSport = $registry->resolveSportFilterSelection($availableSports, $sport);
 
         $filteredActivities = $selectedSport !== null
             ? array_values(array_filter(
                 $activities,
-                static fn (Activity $act): bool => $registry->resolveActivitySportKey($act) === $selectedSport,
+                static fn (Activity $act): bool => $registry->sportKeysShareBucket($registry->resolveActivitySportKey($act), $selectedSport),
             ))
             : $activities;
 
@@ -1033,21 +1024,11 @@ class MatchedRouteService
         $counts = [];
 
         foreach ($activities as $activity) {
-            $sportKey = $registry->resolveActivitySportKey($activity);
-            $startedAt = $activity->started_at_local->format('Y-m-d H:i:s');
-
-            if (! isset($counts[$sportKey])) {
-                $counts[$sportKey] = [
-                    'count' => 1,
-                    'latest_at' => $startedAt,
-                ];
-            } else {
-                $counts[$sportKey]['count']++;
-
-                if ($startedAt > $counts[$sportKey]['latest_at']) {
-                    $counts[$sportKey]['latest_at'] = $startedAt;
-                }
-            }
+            $registry->addSportKeyCount(
+                $counts,
+                $registry->resolveActivitySportKey($activity),
+                $activity->started_at_local->format('Y-m-d H:i:s'),
+            );
         }
 
         return $counts;
@@ -1075,7 +1056,7 @@ class MatchedRouteService
             'sport_key' => $entry['key'] ?? $sportKey,
             'accent_hex' => $entry['accent_hex'] ?? '#10b981',
             'metric_mode' => $entry['metric_mode'] ?? 'pace',
-            'effective_discipline' => $entry['discipline'] ?? $rep?->effectiveDiscipline(),
+            'effective_discipline' => $entry['discipline'] ?? null,
         ];
     }
 

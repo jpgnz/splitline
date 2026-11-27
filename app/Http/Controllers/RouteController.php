@@ -26,7 +26,7 @@ class RouteController extends Controller
     public function show(Request $request, RouteCluster $routeCluster, MatchedRouteService $service): Response
     {
         $rawSport = $request->query('sport');
-        $sport = is_string($rawSport) && trim($rawSport) !== '' ? trim($rawSport) : null;
+        $sport = is_string($rawSport) ? $rawSport : null;
 
         return Inertia::render(
             'Routes/Show',
