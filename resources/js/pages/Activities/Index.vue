@@ -9,6 +9,7 @@ import {
     Calendar,
     ChevronLeft,
     ChevronRight,
+    Download,
     RotateCcw,
     Search,
     Star,
@@ -35,6 +36,7 @@ import {
     index as activitiesIndex,
     show as showActivity,
 } from '@/routes/activities';
+import { activities as exportActivities } from '@/routes/exports';
 
 interface ActivityFilters {
     search: string;
@@ -715,6 +717,35 @@ const summaryKpis = computed<
                         <X class="size-3.5" />
                     </button>
                 </div>
+
+                <!-- Export Filtered CSV -->
+                <a
+                    :href="
+                        exportActivities.url({
+                            query: {
+                                format: 'csv',
+                                ...(filters.search
+                                    ? { search: filters.search }
+                                    : {}),
+                                ...(filters.sport && filters.sport !== 'all'
+                                    ? { sport: filters.sport }
+                                    : {}),
+                                ...(filters.range
+                                    ? { range: filters.range }
+                                    : {}),
+                                ...(filters.from ? { from: filters.from } : {}),
+                                ...(filters.to ? { to: filters.to } : {}),
+                                ...(filters.pr ? { pr: 1 } : {}),
+                                ...(filters.favorite ? { favorite: 1 } : {}),
+                            },
+                        })
+                    "
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white"
+                    title="Export currently filtered activities as CSV"
+                >
+                    <Download class="size-3.5" />
+                    CSV
+                </a>
 
                 <!-- Table / Calendar Segmented Toggle -->
                 <div

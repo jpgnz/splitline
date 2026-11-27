@@ -1,5 +1,6 @@
 <?php
 
+use App\Services\Export\DataExportService;
 use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('garmin:sync')
@@ -19,5 +20,15 @@ Schedule::command('activities:compute-derived-metrics --queue')
     ->withoutOverlapping();
 
 Schedule::command('geocode:sync --queue')
+    ->hourly()
+    ->withoutOverlapping();
+
+Schedule::command('import:watch')
+    ->everyFiveMinutes()
+    ->withoutOverlapping()
+    ->when(fn (): bool => trim((string) config('services.import_watch.dir', '')) !== '');
+
+Schedule::call(fn (DataExportService $exports): int => $exports->pruneStaleBackupSnapshots())
+    ->name('exports:prune-backup-snapshots')
     ->hourly()
     ->withoutOverlapping();
