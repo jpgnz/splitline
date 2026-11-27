@@ -16,6 +16,7 @@ import ActivityAllStats from '@/components/activities/ActivityAllStats.vue';
 import ActivityBestEfforts from '@/components/activities/ActivityBestEfforts.vue';
 import ActivityDerivedMetricsCard from '@/components/activities/ActivityDerivedMetricsCard.vue';
 import ActivityEffortContext from '@/components/activities/ActivityEffortContext.vue';
+import ActivityExportMenu from '@/components/activities/ActivityExportMenu.vue';
 import ActivityHeaderActions, {
     type ActivityGearPayload,
     type DisciplineOption,
@@ -89,6 +90,7 @@ interface ActivityShowProps {
     gear?: ActivityGearPayload;
     matchedRoute?: ActivityMatchedRoutePayload | null;
     segmentEfforts?: ActivitySegmentEffortItem[];
+    hasOriginalArchive?: boolean;
     discipline_options?: DisciplineOption[];
 }
 
@@ -1136,13 +1138,20 @@ const tabs = computed<
             </div>
 
             <!-- Action Controls -->
-            <ActivityHeaderActions
-                ref="headerActionsRef"
-                v-model:syncing-streams="isSyncingStreams"
-                :activity="activity"
-                :gear="gear"
-                :discipline-options="discipline_options"
-            />
+            <div class="flex flex-wrap items-center gap-2">
+                <ActivityHeaderActions
+                    ref="headerActionsRef"
+                    v-model:syncing-streams="isSyncingStreams"
+                    :activity="activity"
+                    :gear="gear"
+                    :discipline-options="discipline_options"
+                />
+                <ActivityExportMenu
+                    :activity-id="activity.id"
+                    :has-gps="hasCoordinates || polyline.length > 0"
+                    :has-original-archive="Boolean(hasOriginalArchive)"
+                />
+            </div>
         </header>
 
         <!-- Primary KPI Strip -->

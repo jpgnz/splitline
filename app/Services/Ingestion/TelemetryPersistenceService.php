@@ -124,7 +124,7 @@ class TelemetryPersistenceService
 
     /**
      * Upsert a normalized activity summary, seed split-based Best Efforts, assign default gear,
-     * and optionally dispatch asynchronous stream/weather enrichment jobs.
+     * and optionally dispatch asynchronous stream/weather enrichment jobs (after any open transaction commits).
      */
     public function upsertActivity(NormalizedActivity $dto, bool $dispatchEnrichments = true): Activity
     {
@@ -287,7 +287,7 @@ class TelemetryPersistenceService
                 $dto->provider === 'garmin_personal'
                 && (bool) config('services.garmin.auto_sync_streams', true)
             ) {
-                SyncActivityStreamJob::dispatch($activity->id);
+                SyncActivityStreamJob::dispatch($activity->id)->afterCommit();
             }
 
             if (
@@ -297,7 +297,7 @@ class TelemetryPersistenceService
                 && (bool) config('services.open_meteo.enabled', true)
                 && (bool) config('services.open_meteo.auto_sync', true)
             ) {
-                SyncActivityWeatherJob::dispatch($activity->id);
+                SyncActivityWeatherJob::dispatch($activity->id)->afterCommit();
             }
 
             if (
@@ -308,7 +308,7 @@ class TelemetryPersistenceService
                 && (bool) config('services.nominatim.enabled', true)
                 && (bool) config('services.nominatim.auto_sync', true)
             ) {
-                GeocodeActivityLocationJob::dispatch($activity->id);
+                GeocodeActivityLocationJob::dispatch($activity->id)->afterCommit();
             }
         }
 
@@ -397,7 +397,7 @@ class TelemetryPersistenceService
                 ->value('sampling_mode');
 
             if ($existingSamplingMode === null || $existingSamplingMode === 'start_point') {
-                SyncActivityWeatherJob::dispatch($activity->id, force: $existingSamplingMode === 'start_point');
+                SyncActivityWeatherJob::dispatch($activity->id, force: $existingSamplingMode === 'start_point')->afterCommit();
             }
         }
 
@@ -410,7 +410,7 @@ class TelemetryPersistenceService
             && (bool) config('services.nominatim.enabled', true)
             && (bool) config('services.nominatim.auto_sync', true)
         ) {
-            GeocodeActivityLocationJob::dispatch($activity->id);
+            GeocodeActivityLocationJob::dispatch($activity->id)->afterCommit();
         }
 
         return $activityStream;

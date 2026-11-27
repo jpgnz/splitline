@@ -5,6 +5,7 @@ namespace App\Services\Activities;
 use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
+use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Gear\GearService;
 use App\Services\Routes\MatchedRouteService;
 use App\Services\Segments\SegmentQueryService;
@@ -27,7 +28,13 @@ class ActivityQueryService
         private readonly ?SegmentQueryService $segments = null,
         private readonly ?HealthSourceRegistry $healthSources = null,
         private readonly ActivityDerivedMetricsService $derivedMetricsService = new ActivityDerivedMetricsService,
+        private readonly ?ActivityStreamSyncService $streamSync = null,
     ) {}
+
+    private function streamSyncService(): ActivityStreamSyncService
+    {
+        return $this->streamSync ?? app(ActivityStreamSyncService::class);
+    }
 
     private function healthSources(): HealthSourceRegistry
     {
@@ -228,28 +235,17 @@ class ActivityQueryService
         $timezone = $this->timezone();
         $today = CarbonImmutable::now($timezone)->startOfDay();
 
-        $search = $this->normalizeSearch($filters['search'] ?? null);
-        $sport = $this->normalizeChoice($filters['sport'] ?? null, self::VALID_SPORTS, 'all');
-        $rawRange = is_string($filters['range'] ?? null) ? $filters['range'] : null;
-        $rawEnd = is_string($filters['end'] ?? null) ? $filters['end'] : null;
-        $rawFrom = is_string($filters['from'] ?? null) ? $filters['from'] : null;
-        $rawTo = is_string($filters['to'] ?? null) ? $filters['to'] : null;
-
-        $dateWindow = $this->dateWindowResolver()->resolveDayWindow(
-            $rawRange,
-            $rawEnd,
-            $rawFrom,
-            $rawTo,
-            $today,
-            self::VALID_RANGES,
-            'all',
-        );
+        [
+            'search' => $search,
+            'sport' => $sport,
+            'dateWindow' => $dateWindow,
+            'pr' => $pr,
+            'favorite' => $favorite,
+        ] = $this->resolveListFilters($filters, $today);
         $range = $dateWindow['range'];
         $from = $dateWindow['from'];
         $to = $dateWindow['to'];
 
-        $pr = $this->normalizeBool($filters['pr'] ?? false);
-        $favorite = $this->normalizeBool($filters['favorite'] ?? false);
         $view = $this->normalizeChoice($filters['view'] ?? null, self::VALID_VIEWS, 'table');
         $sort = $this->normalizeChoice($filters['sort'] ?? null, self::VALID_SORTS, 'date');
         $dir = ($filters['dir'] ?? null) === 'asc' ? 'asc' : 'desc';
@@ -318,6 +314,7 @@ class ActivityQueryService
      *     gear: array<string, mixed>,
      *     matchedRoute: ?array<string, mixed>,
      *     segmentEfforts: list<array<string, mixed>>,
+     *     hasOriginalArchive: bool,
      *     discipline_options: list<array{value: string, label: string}>
      * }
      */
@@ -521,6 +518,7 @@ class ActivityQueryService
             'gear' => $this->gearService->forActivity($activity),
             'matchedRoute' => $this->matchedRouteService()->forActivity($activity),
             'segmentEfforts' => $this->segmentQueryService()->forActivity($activity),
+            'hasOriginalArchive' => $this->streamSyncService()->hasLocalArchive($activity),
             'discipline_options' => $this->sportRegistry()->disciplinesForCategory($activity->sport_category),
         ];
     }
@@ -568,6 +566,65 @@ class ActivityQueryService
         }
 
         return false;
+    }
+
+    /**
+     * Build the Activity query matching the Activities index filters (search, sport, date window, PR, favorite).
+     *
+     * @param  array<string, mixed>  $filters
+     * @return Builder<Activity>
+     */
+    public function filteredQuery(array $filters = []): Builder
+    {
+        $today = CarbonImmutable::now($this->timezone())->startOfDay();
+
+        [
+            'search' => $search,
+            'sport' => $sport,
+            'dateWindow' => $dateWindow,
+            'pr' => $pr,
+            'favorite' => $favorite,
+        ] = $this->resolveListFilters($filters, $today);
+
+        $query = Activity::query();
+        $this->applyFacetFilters($query, $search, $sport, $pr, $favorite);
+        $this->applyDateWindowFilter($query, $dateWindow);
+
+        return $query;
+    }
+
+    /**
+     * @param  array<string, mixed>  $filters
+     * @return array{
+     *     search: ?string,
+     *     sport: string,
+     *     dateWindow: array{range: string, start: ?string, end: string, from: ?string, to: ?string},
+     *     pr: bool,
+     *     favorite: bool
+     * }
+     */
+    private function resolveListFilters(array $filters, CarbonImmutable $today): array
+    {
+        $rawRange = is_string($filters['range'] ?? null) ? $filters['range'] : null;
+        $rawEnd = is_string($filters['end'] ?? null) ? $filters['end'] : null;
+        $rawFrom = is_string($filters['from'] ?? null) ? $filters['from'] : null;
+        $rawTo = is_string($filters['to'] ?? null) ? $filters['to'] : null;
+
+        return [
+            'search' => $this->normalizeSearch($filters['search'] ?? null),
+            'sport' => $this->normalizeChoice($filters['sport'] ?? null, self::VALID_SPORTS, 'all'),
+            'dateWindow' => $this->dateWindowResolver()->resolveDayWindow(
+                $rawRange,
+                $rawEnd,
+                $rawFrom,
+                $rawTo,
+                $today,
+                self::VALID_RANGES,
+                'all',
+            ),
+            'pr' => $this->normalizeBool($filters['pr'] ?? false),
+            'favorite' => $this->normalizeBool($filters['favorite'] ?? false),
+        ];
     }
 
     /**

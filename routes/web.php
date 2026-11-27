@@ -4,6 +4,7 @@ use App\Http\Controllers\ActivityComparisonController;
 use App\Http\Controllers\ActivityController;
 use App\Http\Controllers\BestEffortController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\ExportController;
 use App\Http\Controllers\FitnessController;
 use App\Http\Controllers\GearController;
 use App\Http\Controllers\GoalController;
@@ -21,9 +22,14 @@ Route::redirect('/dashboard', '/');
 Route::get('/health/{metric}', [HealthMetricController::class, 'show'])->name('health.show');
 Route::get('/fitness', [FitnessController::class, 'index'])->name('fitness.index');
 
+Route::get('/exports/backup', [ExportController::class, 'backup'])->middleware('throttle:6,1')->name('exports.backup');
+Route::get('/exports/activities', [ExportController::class, 'activities'])->name('exports.activities');
+
 Route::get('/activities', [ActivityController::class, 'index'])->name('activities.index');
 Route::get('/activities/compare', [ActivityComparisonController::class, 'index'])->name('activities.compare');
 Route::get('/activities/{activity}', [ActivityController::class, 'show'])->name('activities.show');
+Route::get('/activities/{activity}/export/gpx', [ExportController::class, 'activityGpx'])->name('activities.export.gpx');
+Route::get('/activities/{activity}/export/original', [ExportController::class, 'activityOriginal'])->name('activities.export.original');
 Route::patch('/activities/{activity}/discipline', [ActivityController::class, 'updateDiscipline'])->name('activities.discipline.update');
 Route::post('/activities/{activity}/favorite', [ActivityController::class, 'toggleFavorite'])->name('activities.favorite.toggle');
 Route::post('/activities/{activity}/sync-streams', [ActivityController::class, 'syncStreams'])->name('activities.streams.sync');
