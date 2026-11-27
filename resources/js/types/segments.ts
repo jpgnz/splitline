@@ -100,10 +100,19 @@ export interface SegmentElevationPoint {
     grade_pct: number | null;
 }
 
+export interface SegmentAvailableSport {
+    key: string;
+    label: string;
+    short_label: string;
+    accent_hex: string;
+    count: number;
+}
+
 export interface SegmentEffortItem {
     id: number;
     activity_id: number;
     activity_name: string;
+    sport_key: string;
     date: string;
     started_at_local: string;
     year: number;
@@ -156,6 +165,8 @@ export interface SegmentShowProps {
     summary: SegmentShowSummary;
     available_years: number[];
     selected_year: number | null;
+    available_sports: SegmentAvailableSport[];
+    selected_sport: string | null;
     progression: SegmentEffortItem[];
     efforts: SegmentEffortItem[];
 }
