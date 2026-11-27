@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Mountain } from '@lucide/vue';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import {
     AttributionControl,
@@ -11,9 +12,15 @@ import {
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
+    ElevationCurtainLayer,
+    type ElevationCurtainMarker,
+    type ElevationCurtainPoint,
+} from '@/lib/elevationCurtainLayer';
+import {
     emptyFeatureCollection,
     ensureMapLibreWorker,
     getMapStyleUrl,
+    syncMapterhornTerrain,
     toLngLat,
 } from '@/lib/maplibre';
 import { percentileOf } from '@/lib/telemetry';
@@ -69,6 +76,8 @@ const emit = defineEmits<{
     hoverIndex: [index: number | null];
 }>();
 
+type ActivityMapViewMode = '2d' | 'profile' | '3d';
+
 const WIND_ARROW_IMAGE_ID = 'wind-arrow';
 const WIND_AMBIENT_SOURCE_ID = 'activity-wind-ambient';
 const WIND_AMBIENT_LAYER_ID = 'activity-wind-ambient-arrows';
@@ -86,6 +95,7 @@ const ENDPOINTS_SOURCE_ID = 'activity-endpoints';
 const ENDPOINTS_LAYER_ID = 'activity-endpoints-circles';
 const HOVER_SOURCE_ID = 'activity-hover-point';
 const HOVER_LAYER_ID = 'activity-hover-circle';
+const ELEVATION_CURTAIN_LAYER_ID = 'activity-elevation-curtain';
 
 const TELEMETRY_STOPS: Array<[number, number, number]> = [
     [14, 165, 233], // #0ea5e9 sky-500
@@ -105,6 +115,8 @@ const WIND_GRID_TARGET_SPACING_Y = 88;
 let cachedWindArrowImageData: ImageData | null = null;
 
 const containerRef = ref<HTMLElement | null>(null);
+const viewMode = ref<ActivityMapViewMode>('2d');
+const showTerrain = ref<boolean>(false);
 const { isDark } = useChartTheme();
 const {
     units,
@@ -121,6 +133,11 @@ let activePopupSource: 'endpoint' | 'jump' | 'wind' | null = null;
 let windRefreshFrameId: number | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let styleReady = false;
+let isHoveringCurtain = false;
+let curtainHeightBySeriesIndex = new Map<number, number>();
+const elevationCurtainLayer = new ElevationCurtainLayer(
+    ELEVATION_CURTAIN_LAYER_ID,
+);
 
 const containerStyle = computed(() => ({
     height:
@@ -217,6 +234,82 @@ const gnssSeriesPoints = computed<
 
     return list;
 });
+
+const hasAltitudeData = computed<boolean>(() => {
+    let validAltitudeCount = 0;
+
+    for (const item of gnssSeriesPoints.value) {
+        if (
+            item.point.altitude !== null &&
+            Number.isFinite(item.point.altitude)
+        ) {
+            validAltitudeCount += 1;
+
+            if (validAltitudeCount >= 2) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+});
+
+const isProfileMode = computed<boolean>(
+    () => viewMode.value === 'profile' && hasAltitudeData.value,
+);
+
+function selectViewMode(mode: ActivityMapViewMode): void {
+    if (mode === 'profile' && !hasAltitudeData.value) {
+        return;
+    }
+
+    if (viewMode.value === mode) {
+        return;
+    }
+
+    viewMode.value = mode;
+
+    if (mode === '3d' && !showTerrain.value) {
+        showTerrain.value = true;
+    }
+
+    applyViewModeCamera(mode);
+}
+
+function toggleTerrain(): void {
+    showTerrain.value = !showTerrain.value;
+}
+
+function applyViewModeCamera(mode: ActivityMapViewMode): void {
+    if (!map) {
+        return;
+    }
+
+    if (mode === '2d') {
+        map.easeTo({
+            pitch: 0,
+            bearing: 0,
+            duration: 450,
+        });
+
+        return;
+    }
+
+    if (mode === 'profile') {
+        map.easeTo({
+            pitch: Math.max(map.getPitch(), 54),
+            bearing: Math.abs(map.getBearing()) < 1 ? -14 : map.getBearing(),
+            duration: 500,
+        });
+
+        return;
+    }
+
+    map.easeTo({
+        pitch: Math.max(map.getPitch(), 58),
+        duration: 500,
+    });
+}
 
 function haversineMeters(
     lat1: number,
@@ -1064,31 +1157,48 @@ function buildEndpointsGeoJson(): FeatureCollection<Point> {
     };
 }
 
-function buildHoverGeoJson(index: number | null): FeatureCollection<Point> {
+function resolveHoverStreamPoint(
+    index: number | null,
+): { seriesIndex: number; point: StreamPoint } | null {
     if (index === null || index < 0 || index >= props.series.length) {
-        return { type: 'FeatureCollection', features: [] };
+        return null;
     }
 
-    let point = props.series[index];
+    const direct = props.series[index];
 
-    if (point.lat === null || point.lng === null) {
-        let nearest: StreamPoint | null = null;
-        let bestDelta = Number.POSITIVE_INFINITY;
+    if (
+        direct.lat !== null &&
+        direct.lng !== null &&
+        Number.isFinite(direct.lat) &&
+        Number.isFinite(direct.lng)
+    ) {
+        return { seriesIndex: index, point: direct };
+    }
 
-        for (const item of gnssSeriesPoints.value) {
-            const delta = Math.abs(item.index - index);
+    let nearest: { index: number; point: StreamPoint } | null = null;
+    let bestDelta = Number.POSITIVE_INFINITY;
 
-            if (delta < bestDelta) {
-                bestDelta = delta;
-                nearest = item.point;
-            }
+    for (const item of gnssSeriesPoints.value) {
+        const delta = Math.abs(item.index - index);
+
+        if (delta < bestDelta) {
+            bestDelta = delta;
+            nearest = item;
         }
+    }
 
-        if (!nearest || nearest.lat === null || nearest.lng === null) {
-            return { type: 'FeatureCollection', features: [] };
-        }
+    if (!nearest || nearest.point.lat === null || nearest.point.lng === null) {
+        return null;
+    }
 
-        point = nearest;
+    return { seriesIndex: nearest.index, point: nearest.point };
+}
+
+function buildHoverGeoJson(index: number | null): FeatureCollection<Point> {
+    const resolved = resolveHoverStreamPoint(index);
+
+    if (!resolved) {
+        return { type: 'FeatureCollection', features: [] };
     }
 
     return {
@@ -1099,10 +1209,318 @@ function buildHoverGeoJson(index: number | null): FeatureCollection<Point> {
                 properties: {},
                 geometry: {
                     type: 'Point',
-                    coordinates: [point.lng!, point.lat!],
+                    coordinates: [resolved.point.lng!, resolved.point.lat!],
                 },
             },
         ],
+    };
+}
+
+function buildElevationCurtainModel(): {
+    points: ElevationCurtainPoint[];
+    markers: ElevationCurtainMarker[];
+    heightBySeriesIndex: Map<number, number>;
+} {
+    const pts = gnssSeriesPoints.value;
+    const heightMap = new Map<number, number>();
+
+    if (pts.length < 2) {
+        return { points: [], markers: [], heightBySeriesIndex: heightMap };
+    }
+
+    const altitudes: Array<number | null> = pts.map((item) =>
+        item.point.altitude !== null && Number.isFinite(item.point.altitude)
+            ? item.point.altitude
+            : null,
+    );
+    const validAlts = altitudes.filter((v): v is number => v !== null);
+
+    if (validAlts.length < 2) {
+        return { points: [], markers: [], heightBySeriesIndex: heightMap };
+    }
+
+    // Fill isolated null altitude readings by linear interpolation from neighbors
+    let firstValidIdx = -1;
+
+    for (let i = 0; i < altitudes.length; i += 1) {
+        if (altitudes[i] !== null) {
+            firstValidIdx = i;
+            break;
+        }
+    }
+
+    const filledAlts = new Float64Array(altitudes.length);
+
+    for (let i = 0; i < firstValidIdx; i += 1) {
+        filledAlts[i] = altitudes[firstValidIdx]!;
+    }
+
+    let prevValidIdx = firstValidIdx;
+
+    for (let i = firstValidIdx; i < altitudes.length; i += 1) {
+        const val = altitudes[i];
+
+        if (val !== null) {
+            filledAlts[i] = val;
+
+            if (i - prevValidIdx > 1) {
+                const startVal = altitudes[prevValidIdx]!;
+                const gap = i - prevValidIdx;
+
+                for (let j = prevValidIdx + 1; j < i; j += 1) {
+                    filledAlts[j] =
+                        startVal +
+                        ((val - startVal) * (j - prevValidIdx)) / gap;
+                }
+            }
+
+            prevValidIdx = i;
+        }
+    }
+
+    for (let i = prevValidIdx + 1; i < altitudes.length; i += 1) {
+        filledAlts[i] = altitudes[prevValidIdx]!;
+    }
+
+    const sortedAlts = [...validAlts].sort((a, b) => a - b);
+    const minAlt = sortedAlts[0];
+    const maxAlt = sortedAlts[sortedAlts.length - 1];
+    const scaleMin =
+        sortedAlts.length >= 10 ? percentileOf(sortedAlts, 0.01) : minAlt;
+    const scaleMax =
+        sortedAlts.length >= 10 ? percentileOf(sortedAlts, 0.99) : maxAlt;
+    const elevSpan = Math.max(1, scaleMax - scaleMin);
+
+    let minLat = Number.POSITIVE_INFINITY;
+    let maxLat = Number.NEGATIVE_INFINITY;
+    let minLng = Number.POSITIVE_INFINITY;
+    let maxLng = Number.NEGATIVE_INFINITY;
+
+    for (const item of pts) {
+        const [lat, lng] = item.latLng;
+
+        if (lat < minLat) {
+            minLat = lat;
+        }
+        if (lat > maxLat) {
+            maxLat = lat;
+        }
+        if (lng < minLng) {
+            minLng = lng;
+        }
+        if (lng > maxLng) {
+            maxLng = lng;
+        }
+    }
+
+    const routeSpanMeters = Math.max(
+        250,
+        haversineMeters(minLat, minLng, maxLat, maxLng),
+    );
+    const naturalExaggeration = (routeSpanMeters * 0.15) / elevSpan;
+    const verticalExaggeration = Math.max(
+        1.2,
+        Math.min(18, naturalExaggeration),
+    );
+    const scaledPeak = Math.max(1, (maxAlt - minAlt) * verticalExaggeration);
+    const baseOffset = Math.max(routeSpanMeters * 0.008, scaledPeak * 0.045);
+
+    const range = props.highlightRange;
+    const mutedColor = isDark.value ? '#64748b' : '#94a3b8';
+    const useWindColors =
+        !range &&
+        props.colorMode === 'wind' &&
+        hasWeatherSamples.value &&
+        Boolean(props.weather);
+    const useMetricColors =
+        !range &&
+        props.colorMode !== 'solid' &&
+        props.colorMode !== 'wind' &&
+        activeMetricRange.value !== null;
+
+    const metricMin = activeMetricRange.value?.min ?? 0;
+    const metricSpan = (activeMetricRange.value?.max ?? 0) - metricMin;
+    const weatherSamples = props.weather?.samples ?? [];
+    const maxWindScale = windMaxScaleKmh.value;
+
+    const curtainPoints: ElevationCurtainPoint[] = [];
+    let highlightFirstPoint: ElevationCurtainPoint | null = null;
+    let highlightLastPoint: ElevationCurtainPoint | null = null;
+
+    for (let i = 0; i < pts.length; i += 1) {
+        const item = pts[i];
+        const heightMeters =
+            baseOffset +
+            Math.max(0, filledAlts[i] - minAlt) * verticalExaggeration;
+        heightMap.set(item.index, heightMeters);
+
+        const dist = item.point.distance;
+        const inHighlight = Boolean(
+            range &&
+            dist !== null &&
+            dist >= range.startDistance &&
+            dist <= range.endDistance,
+        );
+
+        let color = props.accentColor;
+
+        if (range) {
+            color = inHighlight ? '#ea580c' : mutedColor;
+        } else if (useWindColors) {
+            const interpolated = interpolateWeatherAt(
+                weatherSamples,
+                item.point.time,
+                item.point.distance,
+            );
+
+            if (
+                interpolated &&
+                interpolated.wind_speed_kmh !== null &&
+                interpolated.wind_direction_deg !== null
+            ) {
+                const segIdx = Math.min(i, pts.length - 2);
+                const routeBearing = computeSmoothedBearing(pts, segIdx);
+                const effective = computeEffectiveWind(
+                    interpolated.wind_speed_kmh,
+                    interpolated.wind_direction_deg,
+                    routeBearing,
+                );
+                color = interpolateWindColor(
+                    effective.effectiveKmh,
+                    maxWindScale,
+                    interpolated.wind_speed_kmh,
+                );
+            } else {
+                color = '#94a3b8';
+            }
+        } else if (useMetricColors) {
+            const val = getMetricValue(item.point, props.colorMode);
+
+            if (val !== null) {
+                const ratio =
+                    metricSpan > 0 ? (val - metricMin) / metricSpan : 0.5;
+                color = interpolateTelemetryColor(
+                    ratio,
+                    props.colorMode === 'stamina',
+                );
+            }
+        }
+
+        const curtainPt: ElevationCurtainPoint = {
+            seriesIndex: item.index,
+            lng: item.latLng[1],
+            lat: item.latLng[0],
+            heightMeters,
+            color,
+            dimmed: Boolean(range && !inHighlight),
+            highlighted: inHighlight,
+        };
+
+        curtainPoints.push(curtainPt);
+
+        if (inHighlight) {
+            if (!highlightFirstPoint) {
+                highlightFirstPoint = curtainPt;
+            }
+
+            highlightLastPoint = curtainPt;
+        }
+    }
+
+    const strokeColor = markerStrokeColor();
+    const markers: ElevationCurtainMarker[] = [];
+
+    if (curtainPoints.length > 0) {
+        const startPt = curtainPoints[0];
+        markers.push({
+            lng: startPt.lng,
+            lat: startPt.lat,
+            heightMeters: startPt.heightMeters,
+            fillColor: '#10b981',
+            strokeColor,
+            radiusPx: 5.5,
+            strokeWidthPx: 2,
+            showPlumbLine: true,
+            plumbColor: '#10b981',
+        });
+
+        const endPt = curtainPoints[curtainPoints.length - 1];
+        markers.push({
+            lng: endPt.lng,
+            lat: endPt.lat,
+            heightMeters: endPt.heightMeters,
+            fillColor: '#f43f5e',
+            strokeColor,
+            radiusPx: 5.5,
+            strokeWidthPx: 2,
+            showPlumbLine: true,
+            plumbColor: '#f43f5e',
+        });
+    }
+
+    if (highlightFirstPoint && highlightLastPoint) {
+        markers.push(
+            {
+                lng: highlightFirstPoint.lng,
+                lat: highlightFirstPoint.lat,
+                heightMeters: highlightFirstPoint.heightMeters,
+                fillColor: '#10b981',
+                strokeColor,
+                radiusPx: 6,
+                strokeWidthPx: 2.5,
+                showPlumbLine: true,
+                plumbColor: '#10b981',
+            },
+            {
+                lng: highlightLastPoint.lng,
+                lat: highlightLastPoint.lat,
+                heightMeters: highlightLastPoint.heightMeters,
+                fillColor: '#ea580c',
+                strokeColor,
+                radiusPx: 6,
+                strokeWidthPx: 2.5,
+                showPlumbLine: true,
+                plumbColor: '#ea580c',
+            },
+        );
+    }
+
+    return {
+        points: curtainPoints,
+        markers,
+        heightBySeriesIndex: heightMap,
+    };
+}
+
+function buildCurtainHoverMarker(
+    index: number | null,
+): ElevationCurtainMarker | null {
+    if (!isProfileMode.value) {
+        return null;
+    }
+
+    const resolved = resolveHoverStreamPoint(index);
+
+    if (!resolved) {
+        return null;
+    }
+
+    const heightMeters = curtainHeightBySeriesIndex.get(resolved.seriesIndex);
+
+    if (heightMeters === undefined) {
+        return null;
+    }
+
+    return {
+        lng: resolved.point.lng!,
+        lat: resolved.point.lat!,
+        heightMeters,
+        fillColor: props.accentColor,
+        strokeColor: markerStrokeColor(),
+        radiusPx: 7,
+        strokeWidthPx: 2.5,
+        showPlumbLine: true,
+        plumbColor: props.accentColor,
     };
 }
 
@@ -1515,6 +1933,10 @@ function ensureOverlayLayers(): void {
             },
         });
     }
+
+    if (!map.getLayer(ELEVATION_CURTAIN_LAYER_ID)) {
+        map.addLayer(elevationCurtainLayer);
+    }
 }
 
 function fitRouteBounds(): void {
@@ -1531,6 +1953,18 @@ function fitRouteBounds(): void {
             duration: 0,
         });
     }
+}
+
+function syncTerrainState(): void {
+    if (!map || !styleReady) {
+        return;
+    }
+
+    syncMapterhornTerrain(map, {
+        hillshade: showTerrain.value,
+        terrain3d: viewMode.value === '3d',
+        isDark: isDark.value,
+    });
 }
 
 function updateWindArrows(): void {
@@ -1605,8 +2039,10 @@ function renderRoute(fitBounds = false): void {
         return;
     }
 
+    syncTerrainState();
     ensureOverlayLayers();
 
+    const profileActive = isProfileMode.value;
     const { data: routeData, lineWidth } = buildRouteGeoJson();
     const routeSource = map.getSource(ROUTE_SOURCE_ID) as
         | GeoJSONSource
@@ -1614,21 +2050,48 @@ function renderRoute(fitBounds = false): void {
     routeSource?.setData(routeData);
 
     if (map.getLayer(ROUTE_LAYER_ID)) {
-        map.setPaintProperty(ROUTE_LAYER_ID, 'line-width', lineWidth);
-        map.setPaintProperty(
-            ROUTE_LAYER_ID,
-            'line-color',
-            props.highlightRange
-                ? isDark.value
-                    ? '#64748b'
-                    : '#94a3b8'
-                : ['get', 'color'],
-        );
-        map.setPaintProperty(
-            ROUTE_LAYER_ID,
-            'line-opacity',
-            props.highlightRange ? 0.55 : 0.92,
-        );
+        if (profileActive) {
+            map.setPaintProperty(ROUTE_LAYER_ID, 'line-width', 2);
+            map.setPaintProperty(
+                ROUTE_LAYER_ID,
+                'line-color',
+                isDark.value ? '#71717a' : '#71717a',
+            );
+            map.setPaintProperty(
+                ROUTE_LAYER_ID,
+                'line-opacity',
+                isDark.value ? 0.3 : 0.24,
+            );
+        } else {
+            map.setPaintProperty(ROUTE_LAYER_ID, 'line-width', lineWidth);
+            map.setPaintProperty(
+                ROUTE_LAYER_ID,
+                'line-color',
+                props.highlightRange
+                    ? isDark.value
+                        ? '#64748b'
+                        : '#94a3b8'
+                    : ['get', 'color'],
+            );
+            map.setPaintProperty(
+                ROUTE_LAYER_ID,
+                'line-opacity',
+                props.highlightRange ? 0.55 : 0.92,
+            );
+        }
+    }
+
+    const flatOverlayVisibility = profileActive ? 'none' : 'visible';
+
+    for (const layerId of [
+        HIGHLIGHT_CASING_LAYER_ID,
+        HIGHLIGHT_LAYER_ID,
+        HIGHLIGHT_ENDPOINTS_LAYER_ID,
+        ENDPOINTS_LAYER_ID,
+    ]) {
+        if (map.getLayer(layerId)) {
+            map.setLayoutProperty(layerId, 'visibility', flatOverlayVisibility);
+        }
     }
 
     const highlight = buildHighlightGeoJson();
@@ -1651,6 +2114,21 @@ function renderRoute(fitBounds = false): void {
         | GeoJSONSource
         | undefined;
     endpointsSource?.setData(buildEndpointsGeoJson());
+
+    if (profileActive) {
+        const model = buildElevationCurtainModel();
+        curtainHeightBySeriesIndex = model.heightBySeriesIndex;
+        elevationCurtainLayer.setData({
+            points: model.points,
+            markers: model.markers,
+            hoverMarker: buildCurtainHoverMarker(props.activeIndex),
+            isDark: isDark.value,
+        });
+        elevationCurtainLayer.setVisible(true);
+    } else {
+        curtainHeightBySeriesIndex = new Map();
+        elevationCurtainLayer.setVisible(false);
+    }
 
     updateWindArrows();
 
@@ -1695,6 +2173,21 @@ function renderRoute(fitBounds = false): void {
             'circle-stroke-color',
             strokeColor,
         );
+        map.setPaintProperty(
+            HOVER_LAYER_ID,
+            'circle-radius',
+            profileActive ? 4 : 7,
+        );
+        map.setPaintProperty(
+            HOVER_LAYER_ID,
+            'circle-stroke-width',
+            profileActive ? 1.5 : 2.5,
+        );
+        map.setPaintProperty(
+            HOVER_LAYER_ID,
+            'circle-opacity',
+            profileActive ? 0.72 : 1,
+        );
     }
 }
 
@@ -1707,6 +2200,10 @@ function updateHoverMarker(index: number | null): void {
         | GeoJSONSource
         | undefined;
     hoverSource?.setData(buildHoverGeoJson(index));
+
+    if (isProfileMode.value) {
+        elevationCurtainLayer.setHoverMarker(buildCurtainHoverMarker(index));
+    }
 }
 
 onMounted(() => {
@@ -1721,7 +2218,9 @@ onMounted(() => {
     map = new MapLibreMap({
         container: containerRef.value,
         style: getMapStyleUrl(isDark.value),
-        scrollZoom: false,
+        scrollZoom: true,
+        cooperativeGestures: true,
+        maxPitch: 75,
         attributionControl: false,
         ...(initialBounds
             ? {
@@ -1737,7 +2236,10 @@ onMounted(() => {
               }),
     });
 
-    map.addControl(new NavigationControl({ showCompass: false }), 'top-left');
+    map.addControl(
+        new NavigationControl({ showCompass: true, visualizePitch: true }),
+        'top-left',
+    );
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 
     endpointPopup = new Popup({
@@ -1757,8 +2259,58 @@ onMounted(() => {
         scheduleWindArrowsRefresh();
     });
 
+    map.on('mousemove', (event) => {
+        if (!map || !isProfileMode.value) {
+            return;
+        }
+
+        const picked = elevationCurtainLayer.pickNearestSeriesIndex(
+            event.point.x,
+            event.point.y,
+            16,
+        );
+
+        if (picked !== null) {
+            if (activePopupSource === 'wind') {
+                endpointPopup?.remove();
+                activePopupSource = null;
+            }
+
+            isHoveringCurtain = true;
+            map.getCanvas().style.cursor = 'pointer';
+            emit('hoverIndex', picked);
+
+            return;
+        }
+
+        if (isHoveringCurtain) {
+            isHoveringCurtain = false;
+
+            const groundHits = map.getLayer(ROUTE_HIT_LAYER_ID)
+                ? map.queryRenderedFeatures(event.point, {
+                      layers: [ROUTE_HIT_LAYER_ID],
+                  })
+                : [];
+
+            if (groundHits.length === 0) {
+                if (activePopupSource === null) {
+                    map.getCanvas().style.cursor = '';
+                }
+
+                emit('hoverIndex', null);
+            }
+        }
+    });
+
+    map.getCanvas().addEventListener('mouseleave', () => {
+        if (isHoveringCurtain) {
+            isHoveringCurtain = false;
+            emit('hoverIndex', null);
+        }
+    });
+
     map.on('mousemove', ROUTE_HIT_LAYER_ID, (event) => {
-        if (!map) {
+        if (!map || isHoveringCurtain) {
             return;
         }
 
@@ -1780,6 +2332,10 @@ onMounted(() => {
     });
 
     map.on('mouseleave', ROUTE_HIT_LAYER_ID, () => {
+        if (isHoveringCurtain) {
+            return;
+        }
+
         if (map && activePopupSource === null) {
             map.getCanvas().style.cursor = '';
         }
@@ -1950,6 +2506,19 @@ watch(isDark, (dark) => {
     map.setStyle(getMapStyleUrl(dark), { diff: false });
 });
 
+watch(hasAltitudeData, (available) => {
+    if (!available && viewMode.value === 'profile') {
+        viewMode.value = '2d';
+        applyViewModeCamera('2d');
+    }
+});
+
+watch([viewMode, showTerrain], () => {
+    isHoveringCurtain = false;
+    renderRoute(false);
+    updateHoverMarker(props.activeIndex);
+});
+
 watch(
     () => [
         props.colorMode,
@@ -1992,6 +2561,8 @@ onBeforeUnmount(() => {
     endpointPopup?.remove();
     endpointPopup = null;
     activePopupSource = null;
+    isHoveringCurtain = false;
+    curtainHeightBySeriesIndex = new Map();
     styleReady = false;
     map?.remove();
     map = null;
@@ -2004,6 +2575,74 @@ onBeforeUnmount(() => {
         :style="containerStyle"
     >
         <div ref="containerRef" class="h-full w-full" />
+
+        <!-- Top-Right View Mode & Terrain Controls -->
+        <div
+            class="absolute top-3 right-3 z-[400] flex flex-wrap items-center justify-end gap-1.5"
+        >
+            <div
+                class="inline-flex items-center rounded-lg border border-zinc-200/90 bg-white/95 p-0.5 font-mono text-[11px] shadow-xs backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95"
+                role="group"
+                aria-label="Map view mode"
+            >
+                <button
+                    type="button"
+                    title="Flat 2D map"
+                    class="rounded-md px-2 py-1 font-medium transition-colors"
+                    :class="
+                        viewMode === '2d'
+                            ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                            : 'cursor-pointer text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    "
+                    @click="selectViewMode('2d')"
+                >
+                    2D
+                </button>
+                <button
+                    v-if="hasAltitudeData"
+                    type="button"
+                    title="2D map with elevated activity profile"
+                    class="rounded-md px-2 py-1 font-medium transition-colors"
+                    :class="
+                        viewMode === 'profile'
+                            ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                            : 'cursor-pointer text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    "
+                    @click="selectViewMode('profile')"
+                >
+                    Profile
+                </button>
+                <button
+                    type="button"
+                    title="3D terrain view"
+                    class="rounded-md px-2 py-1 font-medium transition-colors"
+                    :class="
+                        viewMode === '3d'
+                            ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                            : 'cursor-pointer text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                    "
+                    @click="selectViewMode('3d')"
+                >
+                    3D
+                </button>
+            </div>
+
+            <button
+                type="button"
+                :aria-pressed="showTerrain"
+                title="Toggle Mapterhorn terrain hillshading"
+                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-medium shadow-xs backdrop-blur-xs transition-colors"
+                :class="
+                    showTerrain
+                        ? 'border-emerald-500/50 bg-emerald-50/95 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-300'
+                        : 'border-zinc-200/90 bg-white/95 text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:text-white'
+                "
+                @click="toggleTerrain"
+            >
+                <Mountain class="size-3.5" />
+                <span>Terrain</span>
+            </button>
+        </div>
 
         <div
             v-if="windArrowsLegendDisplay || windLegendDisplay || legendDisplay"
