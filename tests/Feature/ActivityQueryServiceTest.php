@@ -4,6 +4,7 @@ use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
+use App\Models\WeightMeasurement;
 use App\Services\Activities\ActivityQueryService;
 use Carbon\CarbonImmutable;
 
@@ -609,4 +610,56 @@ it('computes 5-zone running power bounds, GAP pace distribution, all-time PR ran
         ->and($effort['twelve_week_trend'])->toHaveCount(12)
         ->and($effort['twelve_week_trend'][11]['is_current_week'])->toBeTrue()
         ->and(array_column($effort['week_activities'], 'id'))->toBe([$sibling->id, $run->id]);
+});
+
+it('resolves sport-scoped top-3 power effort ranks and date-matched athlete weight in activity detail', function () {
+    WeightMeasurement::factory()->create([
+        'calendar_date' => '2026-11-10',
+        'weight_grams' => 72400,
+    ]);
+
+    WeightMeasurement::factory()->create([
+        'calendar_date' => '2026-11-18',
+        'weight_grams' => 71500,
+    ]);
+
+    // Later measurement should not be used for the Nov 19 ride
+    WeightMeasurement::factory()->create([
+        'calendar_date' => '2026-11-25',
+        'weight_grams' => 70100,
+    ]);
+
+    // Running activity with higher 5s power must not affect cycling ranks
+    Activity::factory()->create([
+        'sport_category' => 'running',
+        'started_at_local' => CarbonImmutable::parse('2026-11-15 07:00:00'),
+        'power_curve' => ['5' => 999, '300' => 500],
+    ]);
+
+    // Three stronger 1200s peers push the target ride out of Top 3 for 1200s
+    Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-01 07:00:00'),
+        'power_curve' => ['5' => 760, '300' => 360, '1200' => 310],
+    ]);
+    Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-05 07:00:00'),
+        'power_curve' => ['5' => 720, '300' => 320, '1200' => 305],
+    ]);
+    Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-10 07:00:00'),
+        'power_curve' => ['5' => 690, '300' => 300, '1200' => 300],
+    ]);
+
+    $targetRide = Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-19 07:00:00'),
+        'power_curve' => ['5' => 810, '300' => 340, '1200' => 280],
+    ]);
+
+    $detail = app(ActivityQueryService::class)->detail($targetRide);
+
+    expect($detail['athleteWeightKg'])->toBe(71.5)
+        ->and($detail['powerEffortRanks'])->toBe([
+            5 => 1,
+            300 => 2,
+        ]);
 });
