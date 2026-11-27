@@ -15,12 +15,11 @@ beforeEach(function () {
 });
 
 it('downloads a live sqlite backup snapshot when using a file-backed sqlite database', function () {
-    $tempDbPath = '/tmp/opencode/splitline-controller-backup-'.uniqid('', true).'.sqlite';
-    @mkdir(dirname($tempDbPath), 0777, true);
+    $tempDbPath = sys_get_temp_dir().'/splitline-controller-backup-'.uniqid('', true).'.sqlite';
     touch($tempDbPath);
 
     $originalDefault = config('database.default');
-    $downloadedTempCopy = '/tmp/opencode/splitline-downloaded-'.uniqid('', true).'.sqlite';
+    $downloadedTempCopy = sys_get_temp_dir().'/splitline-downloaded-'.uniqid('', true).'.sqlite';
     $snapshotPath = null;
 
     try {
@@ -77,6 +76,24 @@ it('returns 422 when requesting a live backup on an in-memory sqlite database', 
     $this->get(route('exports.backup'))
         ->assertUnprocessable()
         ->assertJsonStructure(['message']);
+});
+
+it('rejects cross-site backup requests', function () {
+    $this->withHeader('Sec-Fetch-Site', 'cross-site')
+        ->get(route('exports.backup'))
+        ->assertForbidden();
+
+    $this->withHeader('Sec-Fetch-Site', 'same-origin')
+        ->get(route('exports.backup'))
+        ->assertUnprocessable();
+});
+
+it('throttles repeated backup requests', function () {
+    foreach (range(1, 6) as $attempt) {
+        $this->get(route('exports.backup'))->assertUnprocessable();
+    }
+
+    $this->get(route('exports.backup'))->assertTooManyRequests();
 });
 
 it('downloads filtered activities as csv by default', function () {

@@ -3,11 +3,11 @@
 namespace App\Services\Export;
 
 use App\Models\Activity;
+use App\Services\Activities\ActivityQueryService;
 use App\Services\Garmin\ActivityStreamSyncService;
-use App\Support\DateWindowResolver;
-use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
@@ -33,39 +33,6 @@ use XMLWriter;
  */
 class DataExportService
 {
-    /**
-     * @var list<string>
-     */
-    private const array VALID_SPORTS = [
-        'all',
-        'running',
-        'road_running',
-        'trail_running',
-        'track_running',
-        'treadmill_running',
-        'cycling',
-        'road_cycling',
-        'gravel_cycling',
-        'mtb_cycling',
-        'indoor_cycling',
-        'ebike_cycling',
-        'commute_cycling',
-        'biking',
-        'road',
-        'mtb',
-        'biking_other',
-        'walking',
-        'hiking',
-        'swimming',
-        'cardio',
-        'other',
-    ];
-
-    /**
-     * @var list<string>
-     */
-    private const array VALID_RANGES = ['30d', '12w', '6m', '1y', 'this_year', 'last_year', 'all', 'custom'];
-
     /**
      * @var list<string>
      */
@@ -114,10 +81,15 @@ class DataExportService
         'fit_upload/fits',
     ];
 
+    public const int STALE_SNAPSHOT_MINUTES = 60;
+
+    private const string ARCHIVE_STATS_CACHE_KEY = 'data_export.archive_stats';
+
+    private const int ARCHIVE_STATS_CACHE_SECONDS = 300;
+
     public function __construct(
         private readonly ActivityStreamSyncService $streamSync,
-        private readonly SportRegistry $sportRegistry,
-        private readonly DateWindowResolver $dateWindowResolver,
+        private readonly ActivityQueryService $activityQueries,
     ) {}
 
     /**
@@ -141,7 +113,7 @@ class DataExportService
             throw new RuntimeException('Live SQLite backups cannot be created for an in-memory database.');
         }
 
-        $tmpDirectory = storage_path('app/private/tmp');
+        $tmpDirectory = $this->backupSnapshotDirectory();
         File::ensureDirectoryExists($tmpDirectory);
 
         $timestamp = CarbonImmutable::now($this->timezone())->format('Y-m-d-His');
@@ -152,6 +124,8 @@ class DataExportService
             @unlink($snapshotPath);
         }
 
+        $previousUmask = umask(0077);
+
         try {
             $connection->statement('VACUUM INTO ?', [$snapshotPath]);
         } catch (Throwable $exception) {
@@ -159,12 +133,14 @@ class DataExportService
                 @unlink($snapshotPath);
             }
 
-            throw new RuntimeException(
-                'Failed to create SQLite backup snapshot: '.$exception->getMessage(),
-                previous: $exception,
-            );
+            report($exception);
+
+            throw new RuntimeException('Failed to create SQLite backup snapshot.', previous: $exception);
+        } finally {
+            umask($previousUmask);
         }
 
+        @chmod($snapshotPath, 0600);
         clearstatcache(true, $snapshotPath);
         $size = is_file($snapshotPath) ? filesize($snapshotPath) : false;
 
@@ -177,6 +153,32 @@ class DataExportService
             'filename' => $filename,
             'size_bytes' => $size,
         ];
+    }
+
+    /**
+     * Delete leftover backup snapshots (e.g. from aborted downloads or timed-out requests).
+     */
+    public function pruneStaleBackupSnapshots(int $olderThanMinutes = self::STALE_SNAPSHOT_MINUTES): int
+    {
+        $snapshots = glob($this->backupSnapshotDirectory().DIRECTORY_SEPARATOR.'splitline-backup-*.sqlite');
+
+        if ($snapshots === false) {
+            return 0;
+        }
+
+        $cutoff = CarbonImmutable::now('UTC')->subMinutes(max(0, $olderThanMinutes))->getTimestamp();
+        $deleted = 0;
+
+        foreach ($snapshots as $snapshot) {
+            clearstatcache(true, $snapshot);
+            $modifiedAt = @filemtime($snapshot);
+
+            if (is_file($snapshot) && $modifiedAt !== false && $modifiedAt <= $cutoff && @unlink($snapshot)) {
+                $deleted++;
+            }
+        }
+
+        return $deleted;
     }
 
     /**
@@ -242,7 +244,7 @@ class DataExportService
 
                 echo json_encode(
                     $this->mapActivityExportRow($activity),
-                    JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE,
+                    JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE,
                 );
             }
 
@@ -287,22 +289,24 @@ class DataExportService
         $writer->writeAttribute('xmlns', 'http://www.topografix.com/GPX/1/1');
         $writer->writeAttribute('xmlns:xsi', 'http://www.w3.org/2001/XMLSchema-instance');
         $writer->writeAttribute('xmlns:gpxtpx', 'http://www.garmin.com/xmlschemas/TrackPointExtension/v1');
+        $writer->writeAttribute('xmlns:pwr', 'http://www.garmin.com/xmlschemas/PowerExtension/v1');
         $writer->writeAttribute(
             'xsi:schemaLocation',
             'http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd '
-            .'http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd',
+            .'http://www.garmin.com/xmlschemas/TrackPointExtension/v1 http://www.garmin.com/xmlschemas/TrackPointExtensionv1.xsd '
+            .'http://www.garmin.com/xmlschemas/PowerExtension/v1 http://www.garmin.com/xmlschemas/PowerExtensionv1.xsd',
         );
 
         $startedAtUtc = $activity->started_at_utc->utc();
 
         $writer->startElement('metadata');
-        $writer->writeElement('name', $activity->name);
+        $writer->writeElement('name', $this->xmlSafeText($activity->name));
         $writer->writeElement('time', $startedAtUtc->format('Y-m-d\TH:i:s\Z'));
         $writer->endElement();
 
         $writer->startElement('trk');
-        $writer->writeElement('name', $activity->name);
-        $writer->writeElement('type', $activity->activity_type_key !== '' ? $activity->activity_type_key : $activity->sport_category);
+        $writer->writeElement('name', $this->xmlSafeText($activity->name));
+        $writer->writeElement('type', $this->xmlSafeText($activity->activity_type_key !== '' ? $activity->activity_type_key : $activity->sport_category));
 
         $writer->startElement('trkseg');
 
@@ -327,7 +331,7 @@ class DataExportService
                 $writer->startElement('extensions');
 
                 if ($point['power'] !== null) {
-                    $writer->writeElement('power', (string) $point['power']);
+                    $writer->writeElement('pwr:PowerInWatts', (string) $point['power']);
                 }
 
                 if ($point['hr'] !== null || $point['cadence'] !== null) {
@@ -416,7 +420,11 @@ class DataExportService
             }
         }
 
-        $archiveStats = $this->computeCachedArchiveStats();
+        $archiveStats = Cache::remember(
+            self::ARCHIVE_STATS_CACHE_KEY,
+            self::ARCHIVE_STATS_CACHE_SECONDS,
+            fn (): array => $this->computeCachedArchiveStats(),
+        );
 
         return [
             'is_sqlite' => $isSqlite,
@@ -469,30 +477,9 @@ class DataExportService
      */
     private function buildFilteredExportQuery(array $filters): Builder
     {
-        $timezone = $this->timezone();
-        $today = CarbonImmutable::now($timezone)->startOfDay();
+        $matchingIds = $this->activityQueries->filteredQuery($filters)->select('id')->toBase();
 
-        $search = $this->normalizeSearch($filters['search'] ?? null);
-        $sport = $this->normalizeChoice($filters['sport'] ?? null, self::VALID_SPORTS, 'all');
-        $rawRange = is_string($filters['range'] ?? null) ? $filters['range'] : null;
-        $rawEnd = is_string($filters['end'] ?? null) ? $filters['end'] : null;
-        $rawFrom = is_string($filters['from'] ?? null) ? $filters['from'] : null;
-        $rawTo = is_string($filters['to'] ?? null) ? $filters['to'] : null;
-
-        $dateWindow = $this->dateWindowResolver->resolveDayWindow(
-            $rawRange,
-            $rawEnd,
-            $rawFrom,
-            $rawTo,
-            $today,
-            self::VALID_RANGES,
-            'all',
-        );
-
-        $pr = $this->normalizeBool($filters['pr'] ?? false);
-        $favorite = $this->normalizeBool($filters['favorite'] ?? false);
-
-        $query = Activity::query()
+        return Activity::query()
             ->select([
                 'activities.id',
                 'activities.provider',
@@ -531,87 +518,10 @@ class DataExportService
                 'activity_weathers.headwind_pct as export_headwind_pct',
             ])
             ->leftJoin('activity_derived_metrics', 'activity_derived_metrics.activity_id', '=', 'activities.id')
-            ->leftJoin('activity_weathers', 'activity_weathers.activity_id', '=', 'activities.id');
-
-        $this->applyFacetFilters($query, $search, $sport, $pr, $favorite);
-        $this->applyDateWindowFilter($query, $dateWindow);
-
-        return $query
+            ->leftJoin('activity_weathers', 'activity_weathers.activity_id', '=', 'activities.id')
+            ->whereIn('activities.id', $matchingIds)
             ->orderByDesc('activities.started_at_local')
             ->orderByDesc('activities.id');
-    }
-
-    /**
-     * @param  Builder<Activity>  $query
-     */
-    private function applyFacetFilters(
-        Builder $query,
-        ?string $search,
-        string $sport,
-        bool $pr,
-        bool $favorite,
-    ): void {
-        if ($search !== null) {
-            $escaped = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], mb_strtolower($search));
-            $pattern = '%'.$escaped.'%';
-
-            $query->where(function (Builder $subQuery) use ($pattern): void {
-                $subQuery
-                    ->whereRaw("LOWER(activities.name) LIKE ? ESCAPE '\\'", [$pattern])
-                    ->orWhereRaw("LOWER(COALESCE(activities.location_name, '')) LIKE ? ESCAPE '\\'", [$pattern]);
-            });
-        }
-
-        if ($sport === 'biking_other') {
-            $query->where('activities.sport_category', 'biking')
-                ->whereRaw('COALESCE(activities.discipline_override, activities.sport_discipline) = ?', ['other']);
-        } elseif ($sport !== 'all') {
-            $this->sportRegistry->applyScope($query, $sport);
-        }
-
-        if ($pr) {
-            $query->where('activities.is_pr', true);
-        }
-
-        if ($favorite) {
-            $query->where('activities.is_favorite', true);
-        }
-    }
-
-    /**
-     * @param  Builder<Activity>  $query
-     * @param  array{
-     *     range: string,
-     *     start: ?string,
-     *     end: string,
-     *     from: ?string,
-     *     to: ?string
-     * }  $dateWindow
-     */
-    private function applyDateWindowFilter(Builder $query, array $dateWindow): void
-    {
-        if ($dateWindow['range'] === 'all') {
-            return;
-        }
-
-        if ($dateWindow['range'] === 'custom') {
-            if ($dateWindow['from'] !== null) {
-                $query->where('activities.started_at_local', '>=', $dateWindow['from'].' 00:00:00');
-            }
-
-            if ($dateWindow['to'] !== null) {
-                $query->where('activities.started_at_local', '<=', $dateWindow['to'].' 23:59:59');
-            }
-
-            return;
-        }
-
-        if ($dateWindow['start'] !== null) {
-            $query->whereBetween('activities.started_at_local', [
-                $dateWindow['start'].' 00:00:00',
-                $dateWindow['end'].' 23:59:59',
-            ]);
-        }
     }
 
     /**
@@ -836,6 +746,21 @@ class DataExportService
         return "{$date}-{$slug}.{$extension}";
     }
 
+    /**
+     * Scrub invalid UTF-8 and strip characters that are not allowed in XML 1.0 documents.
+     */
+    private function xmlSafeText(string $value): string
+    {
+        $scrubbed = mb_scrub($value, 'UTF-8');
+
+        return preg_replace('/[^\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u', '', $scrubbed) ?? '';
+    }
+
+    private function backupSnapshotDirectory(): string
+    {
+        return storage_path('app/private/tmp');
+    }
+
     private function isFileBackedSqliteDatabase(string $database): bool
     {
         $trimmed = trim($database);
@@ -885,46 +810,6 @@ class DataExportService
             'count' => $count,
             'size_bytes' => $sizeBytes,
         ];
-    }
-
-    private function normalizeSearch(mixed $value): ?string
-    {
-        if (! is_string($value)) {
-            return null;
-        }
-
-        $trimmed = trim($value);
-
-        return $trimmed !== '' ? $trimmed : null;
-    }
-
-    /**
-     * @param  list<string>  $allowed
-     */
-    private function normalizeChoice(mixed $value, array $allowed, string $default): string
-    {
-        if (is_string($value) && in_array($value, $allowed, true)) {
-            return $value;
-        }
-
-        return $default;
-    }
-
-    private function normalizeBool(mixed $value): bool
-    {
-        if (is_bool($value)) {
-            return $value;
-        }
-
-        if (is_int($value)) {
-            return $value === 1;
-        }
-
-        if (is_string($value)) {
-            return filter_var($value, FILTER_VALIDATE_BOOLEAN);
-        }
-
-        return false;
     }
 
     private function timezone(): string
