@@ -110,6 +110,7 @@ const { resolvedAppearance, updateAppearance } = useAppearance();
 const { nav: sportsNav, pinSubDisciplines } = useSports();
 
 const appName = computed<string>(() => page.props.name || 'Splitline');
+const appVersion = computed<string>(() => page.props.appVersion);
 
 const dashboardHref = dashboard.url();
 const settingsHref = settingsIndex.url();
@@ -882,6 +883,15 @@ watch(
                             <span>Settings</span>
                         </Link>
                     </div>
+
+                    <div
+                        class="flex items-center justify-between gap-2 px-2.5 pt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                    >
+                        <span>Version</span>
+                        <span class="truncate" :title="appVersion">
+                            {{ appVersion }}
+                        </span>
+                    </div>
                 </div>
             </aside>
         </div>
@@ -1108,6 +1118,15 @@ watch(
                         <Sun v-if="isDarkMode" class="size-3.5" />
                         <Moon v-else class="size-3.5" />
                     </button>
+                </div>
+
+                <div
+                    class="flex items-center justify-between gap-2 px-2.5 pt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                >
+                    <span>Version</span>
+                    <span class="truncate" :title="appVersion">
+                        {{ appVersion }}
+                    </span>
                 </div>
             </div>
         </aside>
