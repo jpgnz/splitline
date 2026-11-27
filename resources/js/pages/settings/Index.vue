@@ -40,7 +40,11 @@ import ImportWatcherCard, {
     type ImportWatchStatus,
 } from '@/components/settings/ImportWatcherCard.vue';
 import { formatNumber, formatRelativeTime } from '@/lib/format';
-import { backfill as syncBackfill, status as syncStatus } from '@/routes/sync';
+import {
+    backfill as syncBackfill,
+    enrichments as syncEnrichments,
+    status as syncStatus,
+} from '@/routes/sync';
 import type {
     EnrichmentQueueJobs,
     EnrichmentQueueSummary,
@@ -247,11 +251,17 @@ watch(
 );
 
 function applyPolledEnrichmentJobs(next: EnrichmentQueueJobs): void {
+    const wasActive = liveEnrichmentQueue.value.jobs.total > 0;
+
     liveEnrichmentQueue.value = {
         ...liveEnrichmentQueue.value,
         jobs: next.jobs,
         has_active_work: next.has_active_work,
     };
+
+    if (wasActive && next.jobs.total === 0) {
+        router.reload({ only: ['enrichment_queue'] });
+    }
 }
 
 // The layout already polls queued-job counts while enrichment runs; reuse its snapshot
@@ -263,6 +273,53 @@ watch(latestPolledEnrichments, (next) => {
         applyPolledEnrichmentJobs(next);
     }
 });
+
+const isQueuingEnrichments = ref<boolean>(false);
+
+const pendingEnrichmentCount = computed<number>(() => {
+    const pending = liveEnrichmentQueue.value.pending;
+
+    return (
+        pending.streams +
+        pending.weather +
+        pending.routes +
+        pending.segments +
+        pending.derived_metrics +
+        pending.geocoding
+    );
+});
+
+function queuePendingEnrichments(): void {
+    if (isQueuingEnrichments.value || pendingEnrichmentCount.value === 0) {
+        return;
+    }
+
+    router.post(
+        syncEnrichments.url(),
+        {},
+        {
+            preserveScroll: true,
+            onStart: () => {
+                isQueuingEnrichments.value = true;
+            },
+            onSuccess: () => {
+                const message = page.props.flash?.syncStatus;
+
+                toast.success(
+                    typeof message === 'string' && message.length > 0
+                        ? message
+                        : 'Pending enrichments queued in the background.',
+                );
+            },
+            onError: () => {
+                toast.error('Unable to queue pending enrichments.');
+            },
+            onFinish: () => {
+                isQueuingEnrichments.value = false;
+            },
+        },
+    );
+}
 
 const isAnySyncRunning = computed<boolean>(
     () =>
@@ -2291,10 +2348,10 @@ function submitSegmentsSettings(): void {
                                 Historical Backfill
                             </div>
                             <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                                Re-fetch historical health metrics (including
-                                weekly Fitness Age, VO2 Max, sleep, HRV, and
-                                weight) in resumable background chunks, and
-                                queue any missing FIT streams and weather.
+                                Pulls older activities and daily health history
+                                (sleep, HRV, VO2 Max, Fitness Age, and weight)
+                                from {{ provider.name }} in resumable background
+                                chunks.
                             </p>
                         </div>
 
@@ -2457,45 +2514,73 @@ function submitSegmentsSettings(): void {
                     </div>
                 </div>
 
-                <!-- Background Enrichment Queue -->
+                <!-- Activity Enrichments -->
                 <div
                     class="mt-4 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/60 p-4 dark:border-zinc-800 dark:bg-zinc-900/40"
                 >
                     <div
-                        class="flex flex-wrap items-center justify-between gap-2"
+                        class="flex flex-wrap items-start justify-between gap-3"
                     >
-                        <div class="space-y-0.5">
+                        <div class="min-w-0 flex-1 space-y-0.5">
                             <div
                                 class="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 <Layers class="size-3" />
-                                Background Enrichment Queue
+                                Activity Enrichments
                             </div>
                             <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                                Queued worker jobs and remaining activities
-                                awaiting stream, weather, route matching, or
-                                place naming.
+                                Fills in extra detail on activities already in
+                                Splitline — FIT streams, weather, matched
+                                routes, climbs &amp; segments, derived metrics,
+                                and place names. Pending items run hourly
+                                automatically, or queue them now.
                             </p>
                         </div>
 
-                        <span
-                            class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium tabular-nums"
-                            :class="
-                                isEnrichmentQueueActive
-                                    ? 'bg-sky-500/12 text-sky-700 dark:text-sky-300'
-                                    : 'bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
-                            "
-                        >
+                        <div class="flex shrink-0 flex-wrap items-center gap-2">
                             <span
-                                v-if="isEnrichmentQueueActive"
-                                class="size-1.5 animate-pulse rounded-full bg-sky-500"
-                            />
-                            {{
-                                isEnrichmentQueueActive
-                                    ? `Active · ${formatNumber(liveEnrichmentQueue.jobs.total)} queued`
-                                    : 'Queue Idle'
-                            }}
-                        </span>
+                                class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                :class="
+                                    isEnrichmentQueueActive
+                                        ? 'bg-sky-500/12 text-sky-700 dark:text-sky-300'
+                                        : 'bg-zinc-200/70 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
+                                "
+                            >
+                                <span
+                                    v-if="isEnrichmentQueueActive"
+                                    class="size-1.5 animate-pulse rounded-full bg-sky-500"
+                                />
+                                {{
+                                    isEnrichmentQueueActive
+                                        ? `Active · ${formatNumber(liveEnrichmentQueue.jobs.total)} queued`
+                                        : 'Queue Idle'
+                                }}
+                            </span>
+
+                            <button
+                                type="button"
+                                :disabled="
+                                    isQueuingEnrichments ||
+                                    pendingEnrichmentCount === 0
+                                "
+                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                                @click="queuePendingEnrichments"
+                            >
+                                <RefreshCw
+                                    :class="[
+                                        'size-3.5',
+                                        isQueuingEnrichments && 'animate-spin',
+                                    ]"
+                                />
+                                {{
+                                    isQueuingEnrichments
+                                        ? 'Queueing...'
+                                        : pendingEnrichmentCount === 0
+                                          ? 'All Caught Up'
+                                          : 'Queue All Pending'
+                                }}
+                            </button>
+                        </div>
                     </div>
 
                     <div class="mt-3.5 grid gap-3 sm:grid-cols-2">
@@ -2503,11 +2588,20 @@ function submitSegmentsSettings(): void {
                         <div
                             class="rounded-lg border border-zinc-200/80 bg-white p-3 dark:border-zinc-800 dark:bg-[#141417]"
                         >
-                            <p
-                                class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            <div
+                                class="flex items-baseline justify-between gap-2"
                             >
-                                Queued Jobs
-                            </p>
+                                <p
+                                    class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Queued Jobs
+                                </p>
+                                <span
+                                    class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                                >
+                                    Active worker queue
+                                </span>
+                            </div>
                             <div
                                 class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-4"
                             >
@@ -2594,11 +2688,20 @@ function submitSegmentsSettings(): void {
                         <div
                             class="rounded-lg border border-zinc-200/80 bg-white p-3 dark:border-zinc-800 dark:bg-[#141417]"
                         >
-                            <p
-                                class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                            <div
+                                class="flex items-baseline justify-between gap-2"
                             >
-                                Pending Enrichments
-                            </p>
+                                <p
+                                    class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Pending Enrichments
+                                </p>
+                                <span
+                                    class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                                >
+                                    Missing on activities
+                                </span>
+                            </div>
                             <div
                                 class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-3"
                             >

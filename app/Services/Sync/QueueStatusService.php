@@ -2,7 +2,12 @@
 
 namespace App\Services\Sync;
 
+use App\Jobs\ComputeDerivedMetricsJob;
+use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\GeocodeRouteClusterJob;
+use App\Jobs\GeocodeSegmentJob;
+use App\Jobs\MatchUnfingerprintedRoutesJob;
+use App\Jobs\ScanActivitySegmentsJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
@@ -11,6 +16,10 @@ use App\Models\Segment;
 use App\Services\Activities\ActivityDerivedMetricsService;
 use App\Services\Routes\RouteMatchingService;
 use App\Services\Segments\SegmentMatchingService;
+use Illuminate\Bus\UniqueLock;
+use Illuminate\Cache\Lock;
+use Illuminate\Contracts\Queue\ShouldBeUnique;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -176,5 +185,197 @@ class QueueStatusService
             'derived_metrics' => $missingDerivedMetrics,
             'geocoding' => $pendingGeocoding,
         ];
+    }
+
+    /**
+     * Dispatch background queue jobs for every currently pending activity enrichment.
+     *
+     * Category counts and `total` only include newly queued work; pending items whose unique job is
+     * already waiting on the queue are reported separately as `already_queued`.
+     *
+     * @return array{
+     *     streams: int,
+     *     weather: int,
+     *     routes: int,
+     *     segments: int,
+     *     derived_metrics: int,
+     *     geocoding: int,
+     *     total: int,
+     *     already_queued: int
+     * }
+     */
+    public function queuePendingEnrichments(): array
+    {
+        $counts = [
+            'streams' => 0,
+            'weather' => 0,
+            'routes' => 0,
+            'segments' => 0,
+            'derived_metrics' => 0,
+            'geocoding' => 0,
+            'total' => 0,
+            'already_queued' => 0,
+        ];
+
+        if (! Schema::hasTable('activities')) {
+            return $counts;
+        }
+
+        if (trim((string) config('services.garmin.key', '')) !== '') {
+            /** @var list<int> $streamIds */
+            $streamIds = array_values(array_map(
+                'intval',
+                Activity::query()
+                    ->where('is_manual', false)
+                    ->awaitingStreams()
+                    ->orderByDesc('started_at_local')
+                    ->orderByDesc('id')
+                    ->pluck('id')
+                    ->all(),
+            ));
+
+            if ($streamIds !== []) {
+                DB::transaction(function () use ($streamIds, &$counts): void {
+                    foreach ($streamIds as $activityId) {
+                        $this->recordDispatch($counts, 'streams', new SyncActivityStreamJob($activityId));
+                    }
+                });
+            }
+        }
+
+        $hasEnrichmentTables = Schema::hasTable('activity_streams') && Schema::hasTable('activity_weathers');
+
+        if ($hasEnrichmentTables && (bool) config('services.open_meteo.enabled', true)) {
+            /** @var list<int> $weatherIds */
+            $weatherIds = array_values(array_map(
+                'intval',
+                Activity::query()
+                    ->awaitingWeather()
+                    ->orderByDesc('started_at_local')
+                    ->orderByDesc('id')
+                    ->pluck('id')
+                    ->all(),
+            ));
+
+            if ($weatherIds !== []) {
+                DB::transaction(function () use ($weatherIds, &$counts): void {
+                    foreach ($weatherIds as $activityId) {
+                        $this->recordDispatch($counts, 'weather', new SyncActivityWeatherJob($activityId));
+                    }
+                });
+            }
+        }
+
+        if ($hasEnrichmentTables && Schema::hasTable('activity_route_fingerprints')) {
+            $unfingerprintedRoutes = $this->routeMatchingService->unfingerprintedCount();
+
+            if ($unfingerprintedRoutes > 0) {
+                $this->recordDispatch($counts, 'routes', new MatchUnfingerprintedRoutesJob(rebuild: false), $unfingerprintedRoutes);
+            }
+        }
+
+        if ($hasEnrichmentTables && Schema::hasColumn('activities', 'segments_scanned_at')) {
+            $unscannedSegments = $this->segmentMatchingService->unscannedCount();
+
+            if ($unscannedSegments > 0) {
+                $this->recordDispatch($counts, 'segments', new ScanActivitySegmentsJob(rebuild: false), $unscannedSegments);
+            }
+        }
+
+        if ($hasEnrichmentTables && Schema::hasTable('activity_derived_metrics')) {
+            $missingDerivedMetrics = $this->derivedMetricsService->missingCount();
+
+            if ($missingDerivedMetrics > 0) {
+                $this->recordDispatch($counts, 'derived_metrics', new ComputeDerivedMetricsJob(force: false), $missingDerivedMetrics);
+            }
+        }
+
+        if ((bool) config('services.nominatim.enabled', true)) {
+            /** @var list<int> $clusterIds */
+            $clusterIds = (Schema::hasTable('route_clusters') && Schema::hasColumn('route_clusters', 'geocode_attempted_at'))
+                ? array_values(array_map(
+                    'intval',
+                    RouteCluster::query()
+                        ->awaitingGeocoding()
+                        ->orderByDesc('activity_count')
+                        ->orderBy('id')
+                        ->pluck('id')
+                        ->all(),
+                ))
+                : [];
+
+            /** @var list<int> $segmentIds */
+            $segmentIds = (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocode_attempted_at'))
+                ? array_values(array_map(
+                    'intval',
+                    Segment::query()
+                        ->awaitingGeocoding()
+                        ->orderByDesc('effort_count')
+                        ->orderBy('id')
+                        ->pluck('id')
+                        ->all(),
+                ))
+                : [];
+
+            /** @var list<int> $activityIds */
+            $activityIds = Schema::hasColumn('activities', 'geocode_attempted_at')
+                ? array_values(array_map(
+                    'intval',
+                    Activity::query()
+                        ->awaitingGeocoding()
+                        ->orderByDesc('started_at_local')
+                        ->orderByDesc('id')
+                        ->pluck('id')
+                        ->all(),
+                ))
+                : [];
+
+            if ($clusterIds !== [] || $segmentIds !== [] || $activityIds !== []) {
+                DB::transaction(function () use ($clusterIds, $segmentIds, $activityIds, &$counts): void {
+                    foreach ($clusterIds as $clusterId) {
+                        $this->recordDispatch($counts, 'geocoding', new GeocodeRouteClusterJob($clusterId));
+                    }
+
+                    foreach ($segmentIds as $segmentId) {
+                        $this->recordDispatch($counts, 'geocoding', new GeocodeSegmentJob($segmentId));
+                    }
+
+                    foreach ($activityIds as $activityId) {
+                        $this->recordDispatch($counts, 'geocoding', new GeocodeActivityLocationJob($activityId));
+                    }
+                });
+            }
+        }
+
+        $counts['total'] = $counts['streams']
+            + $counts['weather']
+            + $counts['routes']
+            + $counts['segments']
+            + $counts['derived_metrics']
+            + $counts['geocoding'];
+
+        return $counts;
+    }
+
+    /**
+     * Dispatch a unique enrichment job and tally its pending items as newly queued, or as already queued
+     * when an identical job still holds its unique lock (the framework would silently skip the dispatch).
+     *
+     * @param  array{streams: int, weather: int, routes: int, segments: int, derived_metrics: int, geocoding: int, total: int, already_queued: int}  $counts
+     * @param  'streams'|'weather'|'routes'|'segments'|'derived_metrics'|'geocoding'  $category
+     */
+    private function recordDispatch(array &$counts, string $category, ShouldBeUnique $job, int $pendingItems = 1): void
+    {
+        $lock = Cache::lock(UniqueLock::getKey($job));
+
+        if ($lock instanceof Lock && $lock->isLocked()) {
+            $counts['already_queued'] += $pendingItems;
+
+            return;
+        }
+
+        dispatch($job);
+
+        $counts[$category] += $pendingItems;
     }
 }
