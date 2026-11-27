@@ -1,6 +1,11 @@
 import { usePage } from '@inertiajs/vue3';
 import { computed } from 'vue';
-import type { KmSplitItem, SplitItem, StreamPoint } from '@/types/activity';
+import type {
+    DecouplingMetric,
+    KmSplitItem,
+    SplitItem,
+    StreamPoint,
+} from '@/types/activity';
 import type { UnitSystem } from '@/types/global';
 
 export type { UnitSystem };
@@ -88,6 +93,36 @@ export function oscillationUnit(units: UnitSystem): 'cm' | 'in' {
 
 export function oscillationFromCm(cm: number, units: UnitSystem): number {
     return units === 'imperial' ? cm / 2.54 : cm;
+}
+
+export function efficiencyFactorUnit(
+    metric: DecouplingMetric | null | undefined,
+    units: UnitSystem,
+): 'W/bpm' | 'm/min/bpm' | 'ft/min/bpm' {
+    if (metric === 'power') {
+        return 'W/bpm';
+    }
+
+    return units === 'imperial' ? 'ft/min/bpm' : 'm/min/bpm';
+}
+
+/**
+ * Convert an Efficiency Factor stored as m/min/bpm (or W/bpm for power) into the display unit system.
+ */
+export function efficiencyFactorFromMetric(
+    value: number | null | undefined,
+    metric: DecouplingMetric | null | undefined,
+    units: UnitSystem,
+): number | null {
+    if (!isFiniteNumber(value)) {
+        return null;
+    }
+
+    if (metric === 'power') {
+        return value;
+    }
+
+    return elevationFromMeters(value, units);
 }
 
 export function distanceFromMeters(meters: number, units: UnitSystem): number {
@@ -733,6 +768,12 @@ export function useUnits() {
         climbDensityFromMPerKm: (mPerKm: number) =>
             climbDensityFromMPerKm(mPerKm, units.value),
         oscillationFromCm: (cm: number) => oscillationFromCm(cm, units.value),
+        efficiencyFactorUnit: (metric: DecouplingMetric | null | undefined) =>
+            efficiencyFactorUnit(metric, units.value),
+        efficiencyFactorFromMetric: (
+            value: number | null | undefined,
+            metric: DecouplingMetric | null | undefined,
+        ) => efficiencyFactorFromMetric(value, metric, units.value),
         kmToInputDistance: (km: number) => kmToInputDistance(km, units.value),
         inputDistanceToKm: (value: number) =>
             inputDistanceToKm(value, units.value),
