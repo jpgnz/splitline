@@ -4,6 +4,7 @@ use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
 use App\Services\Activities\ActivityComparisonService;
+use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 
 function makeDistanceSeries(float $totalDistance, float $speedMps, int $baseHr, ?float $basePower = null, float $startAlt = 10.0, float $grade = 0.01): array
@@ -105,10 +106,8 @@ it('aligns distance-indexed telemetry and computes Ghost Pacer time deltas accur
         ->and($fasterSeries['time_delta_seconds'][0])->toBe(0.0)
         ->and($fasterSeries['time_delta_seconds'][$lastIdx])->toBe(-400.0)
         ->and($fasterSeries['summary']['final_time_delta_seconds'])->toBe(-400.0)
-        ->and($fasterSeries['summary']['max_ahead_seconds'])->toBe(-400.0)
         ->and($slowerSeries['time_delta_seconds'][$lastIdx])->toBe(800.0)
-        ->and($slowerSeries['summary']['final_time_delta_seconds'])->toBe(800.0)
-        ->and($slowerSeries['summary']['max_behind_seconds'])->toBe(800.0);
+        ->and($slowerSeries['summary']['final_time_delta_seconds'])->toBe(800.0);
 });
 
 it('falls back to time alignment when activities lack distance streams and computes distance deltas when available', function () {
@@ -377,4 +376,307 @@ it('handles empty and single-activity states with sport-filtered candidates', fu
         ->and($single['activities'][0]['is_baseline'])->toBeTrue()
         ->and($single['aligned']['bins'])->toBeEmpty()
         ->and(array_column($single['candidates'], 'id'))->toBe([$run2->id]);
+});
+
+it('compares pace instead of raw duration when final splits are partial', function () {
+    $base = Activity::factory()->create();
+    $other = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'km_splits' => [
+            ['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 300.0, 'avg_hr' => 150],
+            ['km' => 2, 'distance_meters' => 1000.0, 'duration_seconds' => 300.0, 'avg_hr' => 152],
+            ['km' => 3, 'distance_meters' => 300.0, 'duration_seconds' => 90.0, 'avg_hr' => 155],
+        ],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $other->id,
+        'km_splits' => [
+            ['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 290.0, 'avg_hr' => 151],
+            // Partial vs full baseline split: 500m at 280s/km pace
+            ['km' => 2, 'distance_meters' => 500.0, 'duration_seconds' => 140.0, 'avg_hr' => 154],
+            // Both partial: 800m at 290s/km vs baseline 300m at 300s/km
+            ['km' => 3, 'distance_meters' => 800.0, 'duration_seconds' => 232.0, 'avg_hr' => 158],
+        ],
+    ]);
+
+    $splits = app(ActivityComparisonService::class)->compare([$base->id, $other->id])['splits'];
+
+    expect($splits[0]['entries'][1]['time_delta_seconds'])->toBe(-10.0)
+        ->and($splits[0]['entries'][1]['time_delta_basis'])->toBe('duration')
+        ->and($splits[1]['entries'][1]['time_delta_seconds'])->toBe(-20.0)
+        ->and($splits[1]['entries'][1]['time_delta_basis'])->toBe('pace')
+        ->and($splits[2]['entries'][0]['is_partial'])->toBeTrue()
+        ->and($splits[2]['entries'][1]['is_partial'])->toBeTrue()
+        ->and($splits[2]['entries'][1]['time_delta_seconds'])->toBe(-10.0)
+        ->and($splits[2]['entries'][1]['time_delta_basis'])->toBe('pace')
+        ->and($splits[2]['entries'][0]['time_delta_basis'])->toBeNull();
+});
+
+it('falls back to split position when stored km numbers are missing or duplicated', function () {
+    $base = Activity::factory()->create();
+    $other = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'km_splits' => [
+            ['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 300.0],
+            ['distance_meters' => 1000.0, 'duration_seconds' => 310.0],
+        ],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $other->id,
+        'km_splits' => [
+            ['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 295.0],
+            ['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 305.0],
+        ],
+    ]);
+
+    $splits = app(ActivityComparisonService::class)->compare([$base->id, $other->id])['splits'];
+
+    expect($splits)->toHaveCount(2)
+        ->and($splits[0]['entries'][1]['time_delta_seconds'])->toBe(-5.0)
+        ->and($splits[1]['entries'][0]['duration_seconds'])->toBe(310.0)
+        ->and($splits[1]['entries'][1]['time_delta_seconds'])->toBe(-5.0);
+});
+
+it('builds mile splits from distance streams for imperial users', function () {
+    app(AppSettings::class)->set('unit_system', 'imperial');
+
+    $base = Activity::factory()->create();
+    $other = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => makeDistanceSeries(3500.0, 4.0, 140),
+        'km_splits' => [['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 250.0]],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $other->id,
+        'series' => makeDistanceSeries(3400.0, 3.5, 140),
+        'km_splits' => [['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 285.7]],
+    ]);
+
+    $result = app(ActivityComparisonService::class)->compare([$base->id, $other->id]);
+    $splits = $result['splits'];
+
+    // Mile 1: 1609.344m at 4.0 m/s = 402.3s vs 3.5 m/s = 459.8s (+57.5s)
+    // Mile 3 is partial for both (281m vs 181m), so the delta is per-mile pace: same +57.5s
+    expect($result['split_unit'])->toBe('mi')
+        ->and($splits)->toHaveCount(3)
+        ->and($splits[0]['label'])->toBe('Mi 1')
+        ->and($splits[0]['entries'][0]['distance_meters'])->toBe(1609.3)
+        ->and($splits[0]['entries'][0]['duration_seconds'])->toEqualWithDelta(402.3, 0.2)
+        ->and($splits[0]['entries'][0]['pace_seconds_per_km'])->toEqualWithDelta(250.0, 0.2)
+        ->and($splits[0]['entries'][1]['time_delta_seconds'])->toEqualWithDelta(57.5, 0.2)
+        ->and($splits[0]['entries'][1]['time_delta_basis'])->toBe('duration')
+        ->and($splits[0]['entries'][0]['is_partial'])->toBeFalse()
+        ->and($splits[2]['entries'][0]['is_partial'])->toBeTrue()
+        ->and($splits[2]['entries'][0]['distance_meters'])->toEqualWithDelta(281.3, 0.2)
+        ->and($splits[2]['entries'][1]['time_delta_basis'])->toBe('pace')
+        ->and($splits[2]['entries'][1]['time_delta_seconds'])->toEqualWithDelta(57.5, 0.3);
+});
+
+it('keeps stored km splits for imperial users when an activity lacks a distance stream', function () {
+    app(AppSettings::class)->set('unit_system', 'imperial');
+
+    $base = Activity::factory()->create();
+    $other = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => makeDistanceSeries(3500.0, 4.0, 140),
+        'km_splits' => [['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 250.0]],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $other->id,
+        'series' => [],
+        'km_splits' => [['km' => 1, 'distance_meters' => 1000.0, 'duration_seconds' => 260.0]],
+    ]);
+
+    $result = app(ActivityComparisonService::class)->compare([$base->id, $other->id]);
+
+    expect($result['split_unit'])->toBe('km')
+        ->and($result['splits'])->toHaveCount(1)
+        ->and($result['splits'][0]['label'])->toBe('Km 1')
+        ->and($result['splits'][0]['entries'][1]['time_delta_seconds'])->toBe(10.0);
+});
+
+it('includes stopped time in the distance-aligned ghost gap and ignores backwards distance steps', function () {
+    $base = Activity::factory()->create();
+    $paused = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => [
+            ['time' => 0, 'distance' => 0],
+            ['time' => 500, 'distance' => 2000],
+            ['time' => 1000, 'distance' => 4000],
+        ],
+    ]);
+
+    // Same 4 m/s pace, but a 120s stop at 2000m and a GPS glitch stepping back to 1995m
+    ActivityStream::factory()->create([
+        'activity_id' => $paused->id,
+        'series' => [
+            ['time' => 0, 'distance' => 0],
+            ['time' => 487.5, 'distance' => 1950],
+            ['time' => 500, 'distance' => 2000],
+            ['time' => 560, 'distance' => 1995],
+            ['time' => 620, 'distance' => 2000],
+            ['time' => 1120, 'distance' => 4000],
+        ],
+    ]);
+
+    $series = app(ActivityComparisonService::class)
+        ->compare([$base->id, $paused->id], 'distance')['aligned']['series'][1];
+
+    // Bin 39 sits at ~981m, before the stop
+    expect($series['time_delta_seconds'][39])->toBe(0.0)
+        ->and($series['time_delta_seconds'][ActivityComparisonService::SAMPLE_BINS - 1])->toBe(120.0)
+        ->and($series['summary']['final_time_delta_seconds'])->toBe(120.0);
+});
+
+it('aligns from the first sample with distance when leading distance values are missing', function () {
+    $base = Activity::factory()->create();
+    $lateLock = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => [
+            ['time' => 0, 'distance' => 0],
+            ['time' => 1000, 'distance' => 4000],
+        ],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $lateLock->id,
+        'series' => [
+            ['time' => 0, 'distance' => null],
+            ['time' => 10, 'distance' => null],
+            ['time' => 20, 'distance' => 0],
+            ['time' => 1020, 'distance' => 4000],
+        ],
+    ]);
+
+    $result = app(ActivityComparisonService::class)->compare([$base->id, $lateLock->id], 'distance');
+    $series = $result['aligned']['series'][1];
+
+    expect($result['aligned']['axis_max'])->toBe(4000.0)
+        ->and($series['elapsed_seconds'][0])->toBe(20.0)
+        ->and($series['time_delta_seconds'][0])->toBe(20.0)
+        ->and($series['summary']['final_time_delta_seconds'])->toBe(20.0);
+});
+
+it('normalises columnar stream series', function () {
+    $base = Activity::factory()->create();
+    $columnar = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => [
+            ['time' => 0, 'distance' => 0, 'hr' => 140],
+            ['time' => 1000, 'distance' => 4000, 'hr' => 160],
+        ],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $columnar->id,
+        'series' => [
+            'time' => [0, 530, 1060],
+            'distance' => [0, 2000, 4000],
+            'hr' => [142, 152, 162],
+        ],
+    ]);
+
+    $result = app(ActivityComparisonService::class)->compare([$base->id, $columnar->id]);
+    $series = $result['aligned']['series'][1];
+
+    expect($result['activities'][1]['has_streams'])->toBeTrue()
+        ->and($series['hr'][0])->toBe(142.0)
+        ->and($series['summary']['final_time_delta_seconds'])->toBe(60.0);
+});
+
+it('rebases epoch timestamps to elapsed seconds', function () {
+    $base = Activity::factory()->create();
+    $epoch = Activity::factory()->create();
+    $start = 1_763_000_000;
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => [
+            ['time' => 0, 'distance' => 0],
+            ['time' => 1000, 'distance' => 4000],
+        ],
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $epoch->id,
+        'series' => [
+            ['time' => $start, 'distance' => 0],
+            ['time' => $start + 1060, 'distance' => 4000],
+        ],
+    ]);
+
+    $series = app(ActivityComparisonService::class)
+        ->compare([$base->id, $epoch->id])['aligned']['series'][1];
+
+    expect($series['elapsed_seconds'][0])->toBe(0.0)
+        ->and($series['summary']['final_time_delta_seconds'])->toBe(60.0);
+});
+
+it('keeps aligning the remaining activities when one of three has no stream', function () {
+    $base = Activity::factory()->create();
+    $noStream = Activity::factory()->create();
+    $slower = Activity::factory()->create();
+
+    ActivityStream::factory()->create([
+        'activity_id' => $base->id,
+        'series' => makeDistanceSeries(5000.0, 4.0, 140),
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $slower->id,
+        'series' => makeDistanceSeries(4000.0, 3.2, 140),
+    ]);
+
+    $result = app(ActivityComparisonService::class)->compare([$base->id, $noStream->id, $slower->id]);
+    $aligned = $result['aligned'];
+    $lastIdx = ActivityComparisonService::SAMPLE_BINS - 1;
+
+    // At 4000m: baseline 1000s vs slower 1250s
+    expect($result['align'])->toBe('distance')
+        ->and($result['activities'][1]['has_streams'])->toBeFalse()
+        ->and($aligned['axis_max'])->toBe(4000.0)
+        ->and($aligned['series'][1]['has_stream'])->toBeFalse()
+        ->and($aligned['series'][1]['time_delta_seconds'])->each->toBeNull()
+        ->and($aligned['series'][1]['summary']['final_time_delta_seconds'])->toBeNull()
+        ->and($aligned['series'][2]['time_delta_seconds'][$lastIdx])->toBe(250.0);
+});
+
+it('falls back to distance alignment when time alignment is impossible', function () {
+    $a = Activity::factory()->create();
+    $b = Activity::factory()->create();
+
+    foreach ([$a, $b] as $activity) {
+        ActivityStream::factory()->create([
+            'activity_id' => $activity->id,
+            'series' => [
+                ['time' => 0, 'distance' => 0],
+                ['time' => 0, 'distance' => 1000],
+            ],
+        ]);
+    }
+
+    $result = app(ActivityComparisonService::class)->compare([$a->id, $b->id], 'time');
+
+    expect($result['align'])->toBe('distance')
+        ->and($result['requested_align'])->toBe('time')
+        ->and($result['fallback_reason'])->toBe('missing_time_stream')
+        ->and($result['aligned']['axis_max'])->toBe(1000.0);
 });

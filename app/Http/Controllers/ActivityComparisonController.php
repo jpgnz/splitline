@@ -2,8 +2,8 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\CompareActivitiesRequest;
 use App\Services\Activities\ActivityComparisonService;
-use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -13,13 +13,13 @@ class ActivityComparisonController extends Controller
         private readonly ActivityComparisonService $comparisonService,
     ) {}
 
-    public function index(Request $request): Response
+    public function index(CompareActivitiesRequest $request): Response
     {
         return Inertia::render(
             'Activities/Compare',
             $this->comparisonService->compare(
-                $request->query('ids'),
-                $request->query('align', 'distance'),
+                $request->activityIds(),
+                $request->align(),
             ),
         );
     }
