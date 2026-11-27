@@ -672,13 +672,8 @@ function formatDaysRemaining(days: number): string {
             class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
         >
             <div>
-                <p
-                    class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    Planning
-                </p>
                 <h1
-                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
                 >
                     Goals &amp; Streaks
                 </h1>
@@ -876,17 +871,8 @@ function formatDaysRemaining(days: number): string {
 
             <div class="flex items-center justify-between gap-3">
                 <div>
-                    <p
-                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        {{
-                            editingGoalId !== null
-                                ? 'Edit Target'
-                                : 'New Target'
-                        }}
-                    </p>
                     <h2
-                        class="mt-0.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                     >
                         {{
                             editingGoalId !== null

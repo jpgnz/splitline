@@ -1534,13 +1534,8 @@ const hrSparklineOption = computed<EChartsOption>(() => {
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div>
-                <p
-                    class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    {{ dateLabel }}
-                </p>
                 <h1
-                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
                 >
                     Health Overview
                 </h1>
@@ -1671,11 +1666,6 @@ const hrSparklineOption = computed<EChartsOption>(() => {
             class="flex flex-col gap-4 rounded-xl border border-emerald-500/25 bg-white p-5 sm:flex-row sm:items-center sm:justify-between dark:border-emerald-500/25 dark:bg-[#141417]"
         >
             <div class="space-y-1">
-                <p
-                    class="font-mono text-[10px] tracking-widest text-emerald-600 uppercase dark:text-emerald-400"
-                >
-                    Getting Started
-                </p>
                 <h2
                     class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                 >

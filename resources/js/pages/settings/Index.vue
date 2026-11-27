@@ -971,13 +971,8 @@ function submitSegmentsSettings(): void {
         <!-- Page Header -->
         <header class="flex flex-wrap items-end justify-between gap-4">
             <div>
-                <p
-                    class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    Workspace Configuration
-                </p>
                 <h1
-                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
                 >
                     Settings
                 </h1>

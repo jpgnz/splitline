@@ -3347,18 +3347,8 @@ const recentHasOffroad = computed<boolean>(() =>
                 class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
             >
                 <div>
-                    <p
-                        v-if="sport.family_key"
-                        class="font-mono text-[11px] tracking-widest uppercase"
-                        :style="{ color: accentHex }"
-                    >
-                        {{
-                            `${getSportMeta(sport.family_key).label} · ${sport.short_label}`
-                        }}
-                    </p>
                     <h1
                         class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
-                        :class="sport.family_key ? 'mt-1' : ''"
                     >
                         {{ sport.label }}
                     </h1>
@@ -4200,202 +4190,6 @@ const recentHasOffroad = computed<boolean>(() =>
             </div>
         </section>
 
-        <!-- Eddington Number Card -->
-        <section
-            v-if="eddington && activeEddington"
-            class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
-        >
-            <span
-                class="absolute top-0 left-0 h-0.5 w-12"
-                :style="{ backgroundColor: accentHex }"
-            />
-
-            <div class="grid gap-5 lg:grid-cols-12 lg:items-center">
-                <!-- Left: Headline E = N, Progress Bar & Longest Day -->
-                <div class="space-y-4 lg:col-span-7">
-                    <div
-                        class="flex flex-wrap items-start justify-between gap-3"
-                    >
-                        <div>
-                            <p
-                                class="font-mono text-[10px] tracking-widest uppercase"
-                                :style="{ color: accentHex }"
-                            >
-                                Eddington Number · Daily Distance Consistency
-                            </p>
-                            <div
-                                class="mt-1.5 flex items-baseline gap-2.5 tabular-nums"
-                            >
-                                <span
-                                    class="font-mono text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-100"
-                                >
-                                    E =
-                                    {{
-                                        formatNumber(activeEddington.number, 0)
-                                    }}
-                                </span>
-                                <span
-                                    class="rounded-md border border-zinc-200/90 bg-[#f7f7f5] px-2 py-0.5 font-mono text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-300"
-                                >
-                                    {{ activeEddington.unit }}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div
-                            class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"
-                        >
-                            <div
-                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
-                            >
-                                <span
-                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
-                                >
-                                    Longest Day
-                                </span>
-                                <p
-                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
-                                >
-                                    {{
-                                        eddington.max_single_day_meters > 0
-                                            ? units.formatDistanceCompact(
-                                                  eddington.max_single_day_meters,
-                                                  1,
-                                              )
-                                            : '—'
-                                    }}
-                                </p>
-                            </div>
-                            <div
-                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
-                            >
-                                <span
-                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
-                                >
-                                    Active Days
-                                </span>
-                                <p
-                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
-                                >
-                                    {{ formatNumber(eddington.active_days, 0) }}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Progress Toward E + 1 -->
-                    <div class="space-y-2">
-                        <div
-                            class="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums"
-                        >
-                            <span class="text-zinc-700 dark:text-zinc-300">
-                                <strong
-                                    class="font-semibold text-zinc-950 dark:text-white"
-                                >
-                                    {{
-                                        formatNumber(
-                                            activeEddington.days_needed_for_next,
-                                            0,
-                                        )
-                                    }}
-                                </strong>
-                                more
-                                {{
-                                    activeEddington.days_needed_for_next === 1
-                                        ? 'day'
-                                        : 'days'
-                                }}
-                                of ≥ {{ activeEddington.next_target }}
-                                {{ activeEddington.unit }} to reach E =
-                                {{ activeEddington.next_target }}
-                            </span>
-                            <span
-                                class="text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{ activeEddington.completed_for_next }} /
-                                {{ activeEddington.next_target }} days
-                            </span>
-                        </div>
-
-                        <div
-                            class="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
-                        >
-                            <div
-                                class="h-full rounded-full transition-all duration-300"
-                                :style="{
-                                    width: `${eddingtonNextProgressPct}%`,
-                                    backgroundColor: accentHex,
-                                }"
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Right: Next 3 Milestones Mini-Table -->
-                <div
-                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/60 p-3.5 lg:col-span-5 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                >
-                    <div class="mb-2.5 flex items-center justify-between gap-2">
-                        <span
-                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            Next Targets
-                        </span>
-                        <Target
-                            class="size-3.5"
-                            :style="{ color: accentHex }"
-                        />
-                    </div>
-
-                    <div
-                        class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
-                    >
-                        <div
-                            v-for="row in activeEddington.next_targets"
-                            :key="row.target"
-                            class="grid grid-cols-1 gap-1.5 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0 sm:grid-cols-[4.5rem_1fr_auto] sm:items-center sm:gap-3"
-                        >
-                            <span
-                                class="font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                E = {{ row.target }}
-                            </span>
-
-                            <div class="flex items-center gap-2">
-                                <div
-                                    class="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800"
-                                >
-                                    <div
-                                        class="h-full rounded-full"
-                                        :style="{
-                                            width: `${clampPct((row.completed_days / row.target) * 100)}%`,
-                                            backgroundColor: accentHex,
-                                        }"
-                                    />
-                                </div>
-                                <span
-                                    class="text-[11px] text-zinc-500 dark:text-zinc-400"
-                                >
-                                    {{ row.completed_days }}/{{ row.target }}
-                                </span>
-                            </div>
-
-                            <span
-                                class="text-left text-[11px] font-medium text-zinc-700 sm:text-right dark:text-zinc-300"
-                            >
-                                +{{ row.remaining_days }}
-                                {{ row.remaining_days === 1 ? 'day' : 'days' }}
-                                <span class="text-zinc-500 dark:text-zinc-400">
-                                    ≥ {{ row.target }}
-                                    {{ activeEddington.unit }}
-                                </span>
-                            </span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
         <!-- ========================================================= -->
         <!-- MODULE 1: PACE & RUNNING DYNAMICS (modules.pace !== null) -->
         <!-- ========================================================= -->
@@ -5186,167 +4980,6 @@ const recentHasOffroad = computed<boolean>(() =>
                     </div>
                 </div>
             </section>
-
-            <!-- Run / Walk / Idle Proportion Bar -->
-            <section
-                v-if="modules.pace.runWalkBreakdown !== null"
-                class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
-            >
-                <div class="mb-3 flex items-center justify-between gap-2">
-                    <h2
-                        class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                    >
-                        Run / Walk / Idle Breakdown
-                    </h2>
-                    <span
-                        class="font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
-                    >
-                        {{
-                            formatDurationHuman(
-                                modules.pace.runWalkBreakdown.total_seconds,
-                            )
-                        }}
-                        tracked
-                    </span>
-                </div>
-
-                <div
-                    class="flex h-3 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
-                >
-                    <div
-                        v-if="modules.pace.runWalkBreakdown.run_pct > 0"
-                        class="h-full bg-amber-500 transition-all"
-                        :style="{
-                            width: `${modules.pace.runWalkBreakdown.run_pct}%`,
-                        }"
-                    />
-                    <div
-                        v-if="modules.pace.runWalkBreakdown.walk_pct > 0"
-                        class="h-full bg-sky-500 transition-all"
-                        :style="{
-                            width: `${modules.pace.runWalkBreakdown.walk_pct}%`,
-                        }"
-                    />
-                    <div
-                        v-if="modules.pace.runWalkBreakdown.idle_pct > 0"
-                        class="h-full bg-zinc-400 transition-all dark:bg-zinc-600"
-                        :style="{
-                            width: `${modules.pace.runWalkBreakdown.idle_pct}%`,
-                        }"
-                    />
-                </div>
-
-                <div
-                    class="mt-3 grid grid-cols-1 gap-3 tabular-nums sm:grid-cols-3"
-                >
-                    <div
-                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                    >
-                        <div
-                            class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            <span class="size-1.5 rounded-full bg-amber-500" />
-                            Run
-                        </div>
-                        <div
-                            class="mt-0.5 flex items-baseline justify-between gap-2"
-                        >
-                            <span
-                                class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                {{
-                                    formatNumber(
-                                        modules.pace.runWalkBreakdown.run_pct,
-                                        1,
-                                    )
-                                }}%
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{
-                                    formatDurationHuman(
-                                        modules.pace.runWalkBreakdown
-                                            .run_seconds,
-                                    )
-                                }}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div
-                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                    >
-                        <div
-                            class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            <span class="size-1.5 rounded-full bg-sky-500" />
-                            Walk
-                        </div>
-                        <div
-                            class="mt-0.5 flex items-baseline justify-between gap-2"
-                        >
-                            <span
-                                class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                {{
-                                    formatNumber(
-                                        modules.pace.runWalkBreakdown.walk_pct,
-                                        1,
-                                    )
-                                }}%
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{
-                                    formatDurationHuman(
-                                        modules.pace.runWalkBreakdown
-                                            .walk_seconds,
-                                    )
-                                }}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div
-                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                    >
-                        <div
-                            class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            <span
-                                class="size-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500"
-                            />
-                            Idle
-                        </div>
-                        <div
-                            class="mt-0.5 flex items-baseline justify-between gap-2"
-                        >
-                            <span
-                                class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                {{
-                                    formatNumber(
-                                        modules.pace.runWalkBreakdown.idle_pct,
-                                        1,
-                                    )
-                                }}%
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{
-                                    formatDurationHuman(
-                                        modules.pace.runWalkBreakdown
-                                            .idle_seconds,
-                                    )
-                                }}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-            </section>
         </template>
 
         <!-- ========================================================= -->
@@ -6132,6 +5765,366 @@ const recentHasOffroad = computed<boolean>(() =>
                 </div>
             </section>
         </template>
+
+        <!-- Eddington Number Card -->
+        <section
+            v-if="eddington && activeEddington"
+            class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+        >
+            <span
+                class="absolute top-0 left-0 h-0.5 w-12"
+                :style="{ backgroundColor: accentHex }"
+            />
+
+            <div class="grid gap-5 lg:grid-cols-12 lg:items-center">
+                <!-- Left: Headline E = N, Progress Bar & Longest Day -->
+                <div class="space-y-4 lg:col-span-7">
+                    <div
+                        class="flex flex-wrap items-start justify-between gap-3"
+                    >
+                        <div>
+                            <p
+                                class="flex items-center gap-1.5 font-mono text-[10px] tracking-widest uppercase"
+                                :style="{ color: accentHex }"
+                            >
+                                <span>
+                                    Eddington Number · Daily Distance
+                                    Consistency
+                                </span>
+                                <InfoPopover topic="eddington" />
+                            </p>
+                            <div
+                                class="mt-1.5 flex items-baseline gap-2.5 tabular-nums"
+                            >
+                                <span
+                                    class="font-mono text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-100"
+                                >
+                                    E =
+                                    {{
+                                        formatNumber(activeEddington.number, 0)
+                                    }}
+                                </span>
+                                <span
+                                    class="rounded-md border border-zinc-200/90 bg-[#f7f7f5] px-2 py-0.5 font-mono text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-300"
+                                >
+                                    {{ activeEddington.unit }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div
+                            class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"
+                        >
+                            <div
+                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            >
+                                <span
+                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Longest Day
+                                </span>
+                                <p
+                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{
+                                        eddington.max_single_day_meters > 0
+                                            ? units.formatDistanceCompact(
+                                                  eddington.max_single_day_meters,
+                                                  1,
+                                              )
+                                            : '—'
+                                    }}
+                                </p>
+                            </div>
+                            <div
+                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            >
+                                <span
+                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Active Days
+                                </span>
+                                <p
+                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{ formatNumber(eddington.active_days, 0) }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress Toward E + 1 -->
+                    <div class="space-y-2">
+                        <div
+                            class="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums"
+                        >
+                            <span class="text-zinc-700 dark:text-zinc-300">
+                                <strong
+                                    class="font-semibold text-zinc-950 dark:text-white"
+                                >
+                                    {{
+                                        formatNumber(
+                                            activeEddington.days_needed_for_next,
+                                            0,
+                                        )
+                                    }}
+                                </strong>
+                                more
+                                {{
+                                    activeEddington.days_needed_for_next === 1
+                                        ? 'day'
+                                        : 'days'
+                                }}
+                                of ≥ {{ activeEddington.next_target }}
+                                {{ activeEddington.unit }} to reach E =
+                                {{ activeEddington.next_target }}
+                            </span>
+                            <span
+                                class="text-[11px] text-zinc-500 dark:text-zinc-400"
+                            >
+                                {{ activeEddington.completed_for_next }} /
+                                {{ activeEddington.next_target }} days
+                            </span>
+                        </div>
+
+                        <div
+                            class="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+                        >
+                            <div
+                                class="h-full rounded-full transition-all duration-300"
+                                :style="{
+                                    width: `${eddingtonNextProgressPct}%`,
+                                    backgroundColor: accentHex,
+                                }"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Next 3 Milestones Mini-Table -->
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/60 p-3.5 lg:col-span-5 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div class="mb-2.5 flex items-center justify-between gap-2">
+                        <span
+                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Next Targets
+                        </span>
+                        <Target
+                            class="size-3.5"
+                            :style="{ color: accentHex }"
+                        />
+                    </div>
+
+                    <div
+                        class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
+                    >
+                        <div
+                            v-for="row in activeEddington.next_targets"
+                            :key="row.target"
+                            class="grid grid-cols-1 gap-1.5 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0 sm:grid-cols-[4.5rem_1fr_auto] sm:items-center sm:gap-3"
+                        >
+                            <span
+                                class="font-semibold text-zinc-900 dark:text-zinc-100"
+                            >
+                                E = {{ row.target }}
+                            </span>
+
+                            <div class="flex items-center gap-2">
+                                <div
+                                    class="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800"
+                                >
+                                    <div
+                                        class="h-full rounded-full"
+                                        :style="{
+                                            width: `${clampPct((row.completed_days / row.target) * 100)}%`,
+                                            backgroundColor: accentHex,
+                                        }"
+                                    />
+                                </div>
+                                <span
+                                    class="text-[11px] text-zinc-500 dark:text-zinc-400"
+                                >
+                                    {{ row.completed_days }}/{{ row.target }}
+                                </span>
+                            </div>
+
+                            <span
+                                class="text-left text-[11px] font-medium text-zinc-700 sm:text-right dark:text-zinc-300"
+                            >
+                                +{{ row.remaining_days }}
+                                {{ row.remaining_days === 1 ? 'day' : 'days' }}
+                                <span class="text-zinc-500 dark:text-zinc-400">
+                                    ≥ {{ row.target }}
+                                    {{ activeEddington.unit }}
+                                </span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Run / Walk / Idle Proportion Bar -->
+        <section
+            v-if="
+                modules.pace !== null && modules.pace.runWalkBreakdown !== null
+            "
+            class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+        >
+            <div class="mb-3 flex items-center justify-between gap-2">
+                <h2
+                    class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                >
+                    Run / Walk / Idle Breakdown
+                </h2>
+                <span
+                    class="font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
+                >
+                    {{
+                        formatDurationHuman(
+                            modules.pace.runWalkBreakdown.total_seconds,
+                        )
+                    }}
+                    tracked
+                </span>
+            </div>
+
+            <div
+                class="flex h-3 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+            >
+                <div
+                    v-if="modules.pace.runWalkBreakdown.run_pct > 0"
+                    class="h-full bg-amber-500 transition-all"
+                    :style="{
+                        width: `${modules.pace.runWalkBreakdown.run_pct}%`,
+                    }"
+                />
+                <div
+                    v-if="modules.pace.runWalkBreakdown.walk_pct > 0"
+                    class="h-full bg-sky-500 transition-all"
+                    :style="{
+                        width: `${modules.pace.runWalkBreakdown.walk_pct}%`,
+                    }"
+                />
+                <div
+                    v-if="modules.pace.runWalkBreakdown.idle_pct > 0"
+                    class="h-full bg-zinc-400 transition-all dark:bg-zinc-600"
+                    :style="{
+                        width: `${modules.pace.runWalkBreakdown.idle_pct}%`,
+                    }"
+                />
+            </div>
+
+            <div
+                class="mt-3 grid grid-cols-1 gap-3 tabular-nums sm:grid-cols-3"
+            >
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        <span class="size-1.5 rounded-full bg-amber-500" />
+                        Run
+                    </div>
+                    <div
+                        class="mt-0.5 flex items-baseline justify-between gap-2"
+                    >
+                        <span
+                            class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            {{
+                                formatNumber(
+                                    modules.pace.runWalkBreakdown.run_pct,
+                                    1,
+                                )
+                            }}%
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            {{
+                                formatDurationHuman(
+                                    modules.pace.runWalkBreakdown.run_seconds,
+                                )
+                            }}
+                        </span>
+                    </div>
+                </div>
+
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        <span class="size-1.5 rounded-full bg-sky-500" />
+                        Walk
+                    </div>
+                    <div
+                        class="mt-0.5 flex items-baseline justify-between gap-2"
+                    >
+                        <span
+                            class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            {{
+                                formatNumber(
+                                    modules.pace.runWalkBreakdown.walk_pct,
+                                    1,
+                                )
+                            }}%
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            {{
+                                formatDurationHuman(
+                                    modules.pace.runWalkBreakdown.walk_seconds,
+                                )
+                            }}
+                        </span>
+                    </div>
+                </div>
+
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        <span
+                            class="size-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500"
+                        />
+                        Idle
+                    </div>
+                    <div
+                        class="mt-0.5 flex items-baseline justify-between gap-2"
+                    >
+                        <span
+                            class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            {{
+                                formatNumber(
+                                    modules.pace.runWalkBreakdown.idle_pct,
+                                    1,
+                                )
+                            }}%
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            {{
+                                formatDurationHuman(
+                                    modules.pace.runWalkBreakdown.idle_seconds,
+                                )
+                            }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </section>
 
         <!-- ========================================================= -->
         <!-- MODULE 3: CLIMBING & REGIONS (modules.climbing !== null)  -->
