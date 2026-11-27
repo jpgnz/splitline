@@ -22,6 +22,7 @@ import ActivityHeaderActions, {
 import ActivityMatchedRoute from '@/components/activities/ActivityMatchedRoute.vue';
 import ActivityPaceAnalysis from '@/components/activities/ActivityPaceAnalysis.vue';
 import ActivityPaceDistribution from '@/components/activities/ActivityPaceDistribution.vue';
+import ActivitySegmentsPanel from '@/components/activities/ActivitySegmentsPanel.vue';
 import ActivitySplitsAndLaps from '@/components/activities/ActivitySplitsAndLaps.vue';
 import ActivityStreamsPanel, {
     countTelemetryPanels,
@@ -64,6 +65,7 @@ import type {
     StreamPoint,
 } from '@/types/activity';
 import type { ActivityMatchedRoutePayload } from '@/types/routes';
+import type { ActivitySegmentEffortItem } from '@/types/segments';
 
 interface AdjacentActivity {
     id: number;
@@ -83,10 +85,18 @@ interface ActivityShowProps {
     nextActivity: AdjacentActivity | null;
     gear?: ActivityGearPayload;
     matchedRoute?: ActivityMatchedRoutePayload | null;
+    segmentEfforts?: ActivitySegmentEffortItem[];
     discipline_options?: DisciplineOption[];
 }
 
-type DetailTab = 'overview' | 'pace' | 'efforts' | 'effort' | 'route' | 'stats';
+type DetailTab =
+    | 'overview'
+    | 'pace'
+    | 'efforts'
+    | 'segments'
+    | 'effort'
+    | 'route'
+    | 'stats';
 
 const props = defineProps<ActivityShowProps>();
 const { getSportMeta, resolveActivitySportKey, sportBadgeClasses } =
@@ -916,6 +926,39 @@ const hoveredWeatherReadout = computed<{
     };
 });
 
+const segmentEffortsList = computed<ActivitySegmentEffortItem[]>(
+    () => props.segmentEfforts ?? [],
+);
+
+const hasGnssStreamForSegments = computed<boolean>(() => {
+    if (props.activity.is_indoor) {
+        return false;
+    }
+
+    let gnssCount = 0;
+
+    for (const pt of series.value) {
+        if (
+            pt.lat !== null &&
+            pt.lng !== null &&
+            Number.isFinite(pt.lat) &&
+            Number.isFinite(pt.lng)
+        ) {
+            gnssCount += 1;
+
+            if (gnssCount >= 5) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+});
+
+const showSegmentsTab = computed<boolean>(
+    () => segmentEffortsList.value.length > 0 || hasGnssStreamForSegments.value,
+);
+
 const tabs = computed<
     Array<{ key: DetailTab; label: string; badge?: string | number }>
 >(() => {
@@ -945,6 +988,17 @@ const tabs = computed<
             key: 'efforts',
             label: 'Best Efforts',
             badge: props.bestEfforts.length,
+        });
+    }
+
+    if (showSegmentsTab.value) {
+        list.push({
+            key: 'segments',
+            label: 'Segments & Climbs',
+            badge:
+                segmentEffortsList.value.length > 0
+                    ? segmentEffortsList.value.length
+                    : undefined,
         });
     }
 
@@ -1484,7 +1538,19 @@ const tabs = computed<
             @select-range="highlightedRange = $event"
         />
 
-        <!-- TAB 4: Matched Route -->
+        <!-- TAB 4: Segments & Climbs -->
+        <ActivitySegmentsPanel
+            v-else-if="activeTab === 'segments' && showSegmentsTab"
+            :activity-id="activity.id"
+            :is-indoor="activity.is_indoor"
+            :segment-efforts="segmentEffortsList"
+            :series="series"
+            :uses-pace="usesPace"
+            :is-swimming="isSwimming"
+            @select-range="highlightedRange = $event"
+        />
+
+        <!-- TAB 5: Matched Route -->
         <ActivityMatchedRoute
             v-else-if="activeTab === 'route' && matchedRoute"
             :matched-route="matchedRoute"

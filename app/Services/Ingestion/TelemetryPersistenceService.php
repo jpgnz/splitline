@@ -3,6 +3,7 @@
 namespace App\Services\Ingestion;
 
 use App\Jobs\GeocodeActivityLocationJob;
+use App\Jobs\MatchActivitySegmentsJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
@@ -340,6 +341,7 @@ class TelemetryPersistenceService
         $activityUpdates = [
             'streams_synced_at' => CarbonImmutable::now('UTC'),
             'streams_unavailable_at' => null,
+            'segments_scanned_at' => null,
         ];
 
         foreach ($extendedRawSummary as $column => $value) {
@@ -378,6 +380,8 @@ class TelemetryPersistenceService
             // Route matching is best-effort enrichment; the scheduled routes:match scan retries it.
             report($exception);
         }
+
+        MatchActivitySegmentsJob::dispatch($activity->id);
 
         if (
             ! $activity->is_indoor

@@ -6,6 +6,7 @@ use App\Models\Activity;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\ActivityStream;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use App\Services\Geocoding\ReverseGeocodingService;
 use App\Services\Ingestion\TelemetryPersistenceService;
 use App\Services\Routes\RouteMatchingService;
@@ -506,4 +507,40 @@ it('keeps a geocoded location when the provider omits one and hands ownership ba
     $activity->refresh();
     expect($activity->location_name)->toBe('North Shore')
         ->and($activity->location_geocoded_at)->toBeNull();
+});
+
+it('records an attempt when a segment cannot be geocoded so it is only retried after the retry window', function () {
+    Http::preventStrayRequests();
+    Sleep::fake();
+    config([
+        'services.nominatim.retry_failed_days' => 7,
+        'services.nominatim.negative_cache_days' => 30,
+    ]);
+
+    Http::fake([
+        'https://nominatim.openstreetmap.org/reverse*' => Http::response(['error' => 'Unable to geocode']),
+    ]);
+
+    $segment = Segment::factory()->custom()->create(['geocoded_at' => null]);
+    $service = app(ReverseGeocodingService::class);
+
+    expect(Segment::query()->awaitingGeocoding()->pluck('id')->all())->toBe([$segment->id])
+        ->and($service->enrichSegment($segment))->toBeFalse();
+
+    $segment->refresh();
+    expect($segment->geocoded_at)->toBeNull()
+        ->and($segment->geocode_attempted_at)->not->toBeNull()
+        ->and(Segment::query()->awaitingGeocoding()->count())->toBe(0)
+        ->and($service->pendingCount())->toBe(0);
+
+    $this->travel(8)->days();
+
+    expect(Segment::query()->awaitingGeocoding()->pluck('id')->all())->toBe([$segment->id]);
+});
+
+it('only counts visible segments as awaiting geocoding', function () {
+    Segment::factory()->climb('cat4')->create(['effort_count' => 1, 'detection_count' => 1, 'geocoded_at' => null]);
+    $visibleClimb = Segment::factory()->climb('cat4')->create(['effort_count' => 6, 'detection_count' => 6, 'geocoded_at' => null]);
+
+    expect(Segment::query()->awaitingGeocoding()->pluck('id')->all())->toBe([$visibleClimb->id]);
 });

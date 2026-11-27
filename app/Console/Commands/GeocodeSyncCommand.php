@@ -4,8 +4,10 @@ namespace App\Console\Commands;
 
 use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\GeocodeRouteClusterJob;
+use App\Jobs\GeocodeSegmentJob;
 use App\Models\Activity;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use App\Services\Geocoding\Exceptions\GeocodingUnavailableException;
 use App\Services\Geocoding\NominatimClient;
 use App\Services\Geocoding\ReverseGeocodingService;
@@ -22,15 +24,15 @@ class GeocodeSyncCommand extends Command
      */
     protected $signature = 'geocode:sync
         {--queue : Dispatch geocoding jobs onto the background geocode queue instead of running inline}
-        {--limit=50 : Maximum number of route clusters and activities to process}
-        {--force : Re-geocode routes and previously geocoded activity locations, bypassing the place cache (provider-supplied location names are never replaced)}';
+        {--limit=50 : Maximum number of route clusters, segments, and activities to process}
+        {--force : Re-geocode routes, segments, and previously geocoded activity locations, bypassing the place cache (provider-supplied location names are never replaced)}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Reverse-geocode matched routes and outdoor activities missing place names via Nominatim';
+    protected $description = 'Reverse-geocode matched routes, segments, and outdoor activities missing place names via Nominatim';
 
     /**
      * Execute the console command.
@@ -57,14 +59,18 @@ class GeocodeSyncCommand extends Command
 
         $clusterIds = $this->resolveTargetClusterIds($limit, $force);
         $remaining = max(0, $limit - count($clusterIds));
+        $segmentIds = $remaining > 0
+            ? $this->resolveTargetSegmentIds($remaining, $force)
+            : [];
+        $remaining = max(0, $remaining - count($segmentIds));
         $activityIds = $remaining > 0
             ? $this->resolveTargetActivityIds($remaining, $force)
             : [];
 
-        $total = count($clusterIds) + count($activityIds);
+        $total = count($clusterIds) + count($segmentIds) + count($activityIds);
 
         if ($total === 0) {
-            $this->components->info('No matched routes or outdoor activities are awaiting geocoding. Nothing to do.');
+            $this->components->info('No matched routes, segments, or outdoor activities are awaiting geocoding. Nothing to do.');
 
             return self::SUCCESS;
         }
@@ -74,26 +80,37 @@ class GeocodeSyncCommand extends Command
                 GeocodeRouteClusterJob::dispatch($clusterId, force: $force);
             }
 
+            foreach ($segmentIds as $segmentId) {
+                GeocodeSegmentJob::dispatch($segmentId, force: $force);
+            }
+
             foreach ($activityIds as $activityId) {
                 GeocodeActivityLocationJob::dispatch($activityId, force: $force);
             }
 
             $clusterCount = count($clusterIds);
+            $segmentCount = count($segmentIds);
             $activityCount = count($activityIds);
-            $this->components->info("Queued background geocoding for {$clusterCount} route cluster(s) and {$activityCount} activity(ies).");
+
+            if ($segmentCount > 0) {
+                $this->components->info("Queued background geocoding for {$clusterCount} route cluster(s), {$segmentCount} segment(s), and {$activityCount} activity(ies).");
+            } else {
+                $this->components->info("Queued background geocoding for {$clusterCount} route cluster(s) and {$activityCount} activity(ies).");
+            }
 
             return self::SUCCESS;
         }
 
         $startedAt = microtime(true);
         $clustersEnriched = 0;
+        $segmentsEnriched = 0;
         $activitiesEnriched = 0;
         $skipped = 0;
         $errors = 0;
         $rateLimited = false;
 
         $this->components->info(
-            'Geocoding '.count($clusterIds).' route cluster(s) and '.count($activityIds).' activity(ies) via '.$client->providerHost().'...',
+            'Geocoding '.count($clusterIds).' route cluster(s), '.count($segmentIds).' segment(s), and '.count($activityIds).' activity(ies) via '.$client->providerHost().'...',
         );
 
         foreach ($clusterIds as $clusterId) {
@@ -120,6 +137,35 @@ class GeocodeSyncCommand extends Command
             } catch (Throwable $exception) {
                 $errors++;
                 $this->components->twoColumnDetail("Route #{$cluster->id}", "<fg=red>{$exception->getMessage()}</>");
+            }
+        }
+
+        if (! $rateLimited) {
+            foreach ($segmentIds as $segmentId) {
+                $segment = Segment::query()->find($segmentId);
+
+                if ($segment === null) {
+                    continue;
+                }
+
+                try {
+                    if ($geocoder->enrichSegment($segment, force: $force)) {
+                        $segmentsEnriched++;
+                        $this->components->twoColumnDetail(
+                            "Segment #{$segment->id} {$segment->displayName()}",
+                            $segment->place_label ?? 'geocoded',
+                        );
+                    } else {
+                        $skipped++;
+                    }
+                } catch (GeocodingUnavailableException $exception) {
+                    $rateLimited = true;
+                    $this->components->warn($exception->getMessage());
+                    break;
+                } catch (Throwable $exception) {
+                    $errors++;
+                    $this->components->twoColumnDetail("Segment #{$segment->id}", "<fg=red>{$exception->getMessage()}</>");
+                }
             }
         }
 
@@ -156,12 +202,13 @@ class GeocodeSyncCommand extends Command
 
         $this->components->info($rateLimited ? 'Geocoding paused: Nominatim is rate limiting or unavailable.' : 'Geocoding sync completed.');
         $this->components->twoColumnDetail('Routes Enriched', (string) $clustersEnriched);
+        $this->components->twoColumnDetail('Segments Enriched', (string) $segmentsEnriched);
         $this->components->twoColumnDetail('Activities Enriched', (string) $activitiesEnriched);
         $this->components->twoColumnDetail('Skipped', (string) $skipped);
         $this->components->twoColumnDetail('Errors', (string) $errors);
         $this->components->twoColumnDetail('Duration', "{$elapsedSeconds}s");
 
-        return $rateLimited && ($clustersEnriched + $activitiesEnriched) === 0
+        return $rateLimited && ($clustersEnriched + $segmentsEnriched + $activitiesEnriched) === 0
             ? self::FAILURE
             : self::SUCCESS;
     }
@@ -179,6 +226,26 @@ class GeocodeSyncCommand extends Command
             'intval',
             $query
                 ->orderByDesc('activity_count')
+                ->orderByDesc('id')
+                ->limit($limit)
+                ->pluck('id')
+                ->all(),
+        ));
+    }
+
+    /**
+     * @return list<int>
+     */
+    private function resolveTargetSegmentIds(int $limit, bool $force): array
+    {
+        $query = $force
+            ? Segment::query()->visible()
+            : Segment::query()->awaitingGeocoding();
+
+        return array_values(array_map(
+            'intval',
+            $query
+                ->orderByDesc('effort_count')
                 ->orderByDesc('id')
                 ->limit($limit)
                 ->pluck('id')

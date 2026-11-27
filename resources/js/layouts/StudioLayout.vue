@@ -40,6 +40,7 @@ import { index as activitiesIndex } from '@/routes/activities';
 import { index as goalsIndex } from '@/routes/goals';
 import { index as heatmapIndex } from '@/routes/heatmap';
 import { index as routesIndex } from '@/routes/routes';
+import { index as segmentsIndex } from '@/routes/segments';
 import { index as settingsIndex } from '@/routes/settings';
 import { status as syncStatus, store as syncStore } from '@/routes/sync';
 import { useEnrichmentQueueFeed } from '@/composables/useEnrichmentQueueFeed';
@@ -134,6 +135,12 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                     label: 'Matched Routes',
                     href: routesIndex.url(),
                     icon: Route,
+                },
+                {
+                    key: 'segments',
+                    label: 'Segments & Climbs',
+                    href: segmentsIndex.url(),
+                    icon: Mountain,
                 },
             ],
         },
