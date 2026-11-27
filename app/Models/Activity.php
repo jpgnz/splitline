@@ -529,7 +529,9 @@ class Activity extends Model
                         $streamSub
                             ->selectRaw('1')
                             ->from('activity_streams')
-                            ->whereColumn('activity_streams.activity_id', "{$table}.id");
+                            ->whereColumn('activity_streams.activity_id', "{$table}.id")
+                            ->whereNotNull('activity_streams.polyline')
+                            ->where('activity_streams.polyline', '!=', '[]');
                     });
             });
     }
@@ -567,7 +569,9 @@ class Activity extends Model
                                 $streamSub
                                     ->selectRaw('1')
                                     ->from('activity_streams')
-                                    ->whereColumn('activity_streams.activity_id', "{$table}.id");
+                                    ->whereColumn('activity_streams.activity_id', "{$table}.id")
+                                    ->whereNotNull('activity_streams.polyline')
+                                    ->where('activity_streams.polyline', '!=', '[]');
                             });
                     });
             });

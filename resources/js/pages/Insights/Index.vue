@@ -13,6 +13,7 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption } from 'echarts';
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart, {
     type ChartPointClickPayload,
 } from '@/components/charts/BaseChart.vue';
@@ -1452,16 +1453,6 @@ function windBadgeTone(key: string): string {
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div class="space-y-1">
-                <div class="flex items-center gap-2">
-                    <span
-                        class="inline-flex size-2 rounded-full bg-indigo-500"
-                    />
-                    <span
-                        class="font-mono text-[10px] font-medium tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        Correlation Explorer
-                    </span>
-                </div>
                 <h1
                     class="text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl dark:text-zinc-50"
                 >
@@ -1769,16 +1760,18 @@ function windBadgeTone(key: string): string {
                         class="mt-1.5 flex flex-wrap gap-1.5 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         <span
-                            class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
-                            title="Activities with computed Efficiency Factor (higher = better aerobic output per heartbeat)"
+                            class="inline-flex items-center gap-1 rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
                         >
-                            EF
-                            {{
-                                coveragePct(
-                                    summary.with_derived_metrics,
-                                    summary.total_activities,
-                                )
-                            }}%
+                            <span>
+                                EF
+                                {{
+                                    coveragePct(
+                                        summary.with_derived_metrics,
+                                        summary.total_activities,
+                                    )
+                                }}%
+                            </span>
+                            <InfoPopover topic="efficiency_factor" />
                         </span>
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
@@ -1787,7 +1780,6 @@ function windBadgeTone(key: string): string {
                         </span>
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
-                            title="Training days matched to same-day sleep"
                         >
                             Sleep {{ summary.with_sleep }}
                         </span>
@@ -1833,6 +1825,7 @@ function windBadgeTone(key: string): string {
                             >
                                 Sleep vs. Efficiency &amp; Drift
                             </h2>
+                            <InfoPopover topic="insights_sleep_performance" />
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             Morning sleep duration and quality paired with
@@ -1842,7 +1835,7 @@ function windBadgeTone(key: string): string {
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         sleep_vs_performance.correlations
@@ -1850,24 +1843,35 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Sleep Score vs Efficiency Factor',
-                                        sleep_vs_performance.correlations
-                                            .score_vs_ef,
-                                    )
-                                "
                             >
-                                Score vs EF ·
-                                {{
-                                    formatCorrelationLabel(
-                                        sleep_vs_performance.correlations
-                                            .score_vs_ef,
-                                    )
-                                }}
+                                <span>
+                                    Score vs EF ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            sleep_vs_performance.correlations
+                                                .score_vs_ef,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Sleep Score vs Efficiency Factor correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Sleep Score vs Efficiency Factor',
+                                                sleep_vs_performance
+                                                    .correlations.score_vs_ef,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         sleep_vs_performance.correlations
@@ -1875,21 +1879,33 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Sleep Duration vs Cardiac Drift',
-                                        sleep_vs_performance.correlations
-                                            .hours_vs_decoupling,
-                                    )
-                                "
                             >
-                                Hours vs Drift ·
-                                {{
-                                    formatCorrelationLabel(
-                                        sleep_vs_performance.correlations
-                                            .hours_vs_decoupling,
-                                    )
-                                }}
+                                <span>
+                                    Hours vs Drift ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            sleep_vs_performance.correlations
+                                                .hours_vs_decoupling,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Sleep Duration vs Cardiac Drift correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Sleep Duration vs Cardiac Drift',
+                                                sleep_vs_performance
+                                                    .correlations
+                                                    .hours_vs_decoupling,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                         </div>
                     </div>
@@ -1968,32 +1984,43 @@ function windBadgeTone(key: string): string {
 
                         <div
                             v-if="sleepView === 'scatter'"
-                            class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            class="inline-flex items-center gap-1"
                         >
-                            <button
-                                type="button"
-                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-                                :class="
+                            <div
+                                class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            >
+                                <button
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+                                    :class="
+                                        sleepScatterY === 'efficiency_factor'
+                                            ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="sleepScatterY = 'efficiency_factor'"
+                                >
+                                    EF
+                                </button>
+                                <button
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+                                    :class="
+                                        sleepScatterY === 'decoupling_pct'
+                                            ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="sleepScatterY = 'decoupling_pct'"
+                                >
+                                    Drift %
+                                </button>
+                            </div>
+                            <InfoPopover
+                                :topic="
                                     sleepScatterY === 'efficiency_factor'
-                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                        ? 'efficiency_factor'
+                                        : 'decoupling'
                                 "
-                                @click="sleepScatterY = 'efficiency_factor'"
-                            >
-                                EF
-                            </button>
-                            <button
-                                type="button"
-                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-                                :class="
-                                    sleepScatterY === 'decoupling_pct'
-                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                                "
-                                @click="sleepScatterY = 'decoupling_pct'"
-                            >
-                                Drift %
-                            </button>
+                            />
                         </div>
                     </div>
                 </div>
@@ -2050,6 +2077,7 @@ function windBadgeTone(key: string): string {
                             >
                                 HRV &amp; Recovery vs. Output
                             </h2>
+                            <InfoPopover topic="insights_hrv_performance" />
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             Compare workout output across overnight HRV baseline
@@ -2058,7 +2086,7 @@ function windBadgeTone(key: string): string {
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         hrv_vs_performance.correlations
@@ -2066,24 +2094,35 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Overnight HRV vs Efficiency Factor',
-                                        hrv_vs_performance.correlations
-                                            .hrv_vs_ef,
-                                    )
-                                "
                             >
-                                HRV vs EF ·
-                                {{
-                                    formatCorrelationLabel(
-                                        hrv_vs_performance.correlations
-                                            .hrv_vs_ef,
-                                    )
-                                }}
+                                <span>
+                                    HRV vs EF ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            hrv_vs_performance.correlations
+                                                .hrv_vs_ef,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Overnight HRV vs Efficiency Factor correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Overnight HRV vs Efficiency Factor',
+                                                hrv_vs_performance.correlations
+                                                    .hrv_vs_ef,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         hrv_vs_performance.correlations
@@ -2091,24 +2130,35 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Overnight HRV vs Cardiac Drift',
-                                        hrv_vs_performance.correlations
-                                            .hrv_vs_decoupling,
-                                    )
-                                "
                             >
-                                HRV vs Drift ·
-                                {{
-                                    formatCorrelationLabel(
-                                        hrv_vs_performance.correlations
-                                            .hrv_vs_decoupling,
-                                    )
-                                }}
+                                <span>
+                                    HRV vs Drift ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            hrv_vs_performance.correlations
+                                                .hrv_vs_decoupling,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Overnight HRV vs Cardiac Drift correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Overnight HRV vs Cardiac Drift',
+                                                hrv_vs_performance.correlations
+                                                    .hrv_vs_decoupling,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         hrv_vs_performance.correlations
@@ -2116,21 +2166,32 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Resting HR vs Efficiency Factor',
-                                        hrv_vs_performance.correlations
-                                            .rhr_vs_ef,
-                                    )
-                                "
                             >
-                                RHR vs EF ·
-                                {{
-                                    formatCorrelationLabel(
-                                        hrv_vs_performance.correlations
-                                            .rhr_vs_ef,
-                                    )
-                                }}
+                                <span>
+                                    RHR vs EF ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            hrv_vs_performance.correlations
+                                                .rhr_vs_ef,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Resting HR vs Efficiency Factor correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Resting HR vs Efficiency Factor',
+                                                hrv_vs_performance.correlations
+                                                    .rhr_vs_ef,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                         </div>
                     </div>
@@ -2179,32 +2240,43 @@ function windBadgeTone(key: string): string {
 
                         <div
                             v-if="hrvView === 'scatter'"
-                            class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            class="inline-flex items-center gap-1"
                         >
-                            <button
-                                type="button"
-                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-                                :class="
+                            <div
+                                class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            >
+                                <button
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+                                    :class="
+                                        hrvScatterY === 'efficiency_factor'
+                                            ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="hrvScatterY = 'efficiency_factor'"
+                                >
+                                    EF
+                                </button>
+                                <button
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+                                    :class="
+                                        hrvScatterY === 'decoupling_pct'
+                                            ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="hrvScatterY = 'decoupling_pct'"
+                                >
+                                    Drift %
+                                </button>
+                            </div>
+                            <InfoPopover
+                                :topic="
                                     hrvScatterY === 'efficiency_factor'
-                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                        ? 'efficiency_factor'
+                                        : 'decoupling'
                                 "
-                                @click="hrvScatterY = 'efficiency_factor'"
-                            >
-                                EF
-                            </button>
-                            <button
-                                type="button"
-                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-                                :class="
-                                    hrvScatterY === 'decoupling_pct'
-                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                                "
-                                @click="hrvScatterY = 'decoupling_pct'"
-                            >
-                                Drift %
-                            </button>
+                            />
                         </div>
                     </div>
                 </div>
@@ -2260,6 +2332,7 @@ function windBadgeTone(key: string): string {
                             >
                                 Temperature &amp; Wind Impact
                             </h2>
+                            <InfoPopover topic="insights_weather_impact" />
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             Heat penalty and wind exposure across outdoor
@@ -2268,30 +2341,43 @@ function windBadgeTone(key: string): string {
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         weather_impact.correlations.temp_vs_ef,
                                         true,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Temperature vs Efficiency Factor',
-                                        weather_impact.correlations.temp_vs_ef,
-                                        'sessions',
-                                    )
-                                "
                             >
-                                Temp vs EF ·
-                                {{
-                                    formatCorrelationLabel(
-                                        weather_impact.correlations.temp_vs_ef,
-                                    )
-                                }}
+                                <span>
+                                    Temp vs EF ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            weather_impact.correlations
+                                                .temp_vs_ef,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Temperature vs Efficiency Factor correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Temperature vs Efficiency Factor',
+                                                weather_impact.correlations
+                                                    .temp_vs_ef,
+                                                'sessions',
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         weather_impact.correlations
@@ -2299,22 +2385,33 @@ function windBadgeTone(key: string): string {
                                         false,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Temperature vs Cardiac Drift',
-                                        weather_impact.correlations
-                                            .temp_vs_decoupling,
-                                        'sessions',
-                                    )
-                                "
                             >
-                                Temp vs Drift ·
-                                {{
-                                    formatCorrelationLabel(
-                                        weather_impact.correlations
-                                            .temp_vs_decoupling,
-                                    )
-                                }}
+                                <span>
+                                    Temp vs Drift ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            weather_impact.correlations
+                                                .temp_vs_decoupling,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Temperature vs Cardiac Drift correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Temperature vs Cardiac Drift',
+                                                weather_impact.correlations
+                                                    .temp_vs_decoupling,
+                                                'sessions',
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                         </div>
                     </div>
@@ -2351,32 +2448,45 @@ function windBadgeTone(key: string): string {
 
                         <div
                             v-if="weatherView === 'scatter'"
-                            class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            class="inline-flex items-center gap-1"
                         >
-                            <button
-                                type="button"
-                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-                                :class="
+                            <div
+                                class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                            >
+                                <button
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+                                    :class="
+                                        weatherScatterY === 'efficiency_factor'
+                                            ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="
+                                        weatherScatterY = 'efficiency_factor'
+                                    "
+                                >
+                                    EF
+                                </button>
+                                <button
+                                    type="button"
+                                    class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
+                                    :class="
+                                        weatherScatterY === 'decoupling_pct'
+                                            ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                    "
+                                    @click="weatherScatterY = 'decoupling_pct'"
+                                >
+                                    Drift %
+                                </button>
+                            </div>
+                            <InfoPopover
+                                :topic="
                                     weatherScatterY === 'efficiency_factor'
-                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                                        ? 'efficiency_factor'
+                                        : 'decoupling'
                                 "
-                                @click="weatherScatterY = 'efficiency_factor'"
-                            >
-                                EF
-                            </button>
-                            <button
-                                type="button"
-                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] transition-colors"
-                                :class="
-                                    weatherScatterY === 'decoupling_pct'
-                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
-                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                                "
-                                @click="weatherScatterY = 'decoupling_pct'"
-                            >
-                                Drift %
-                            </button>
+                            />
                         </div>
                     </div>
                 </div>
@@ -2432,6 +2542,7 @@ function windBadgeTone(key: string): string {
                             }}
                             sessions)
                         </h3>
+                        <InfoPopover topic="wind_impact" />
                     </div>
 
                     <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -2521,6 +2632,7 @@ function windBadgeTone(key: string): string {
                                 Workout Timing &amp; Intensity → Overnight
                                 Recovery
                             </h2>
+                            <InfoPopover topic="insights_workout_recovery" />
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             Matches each training day against the following
@@ -2531,7 +2643,7 @@ function windBadgeTone(key: string): string {
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         workout_to_recovery.correlations
@@ -2539,24 +2651,35 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Start Hour vs Next-Night HRV Delta',
-                                        workout_to_recovery.correlations
-                                            .start_hour_vs_hrv_delta,
-                                    )
-                                "
                             >
-                                Start Hour vs HRV Δ ·
-                                {{
-                                    formatCorrelationLabel(
-                                        workout_to_recovery.correlations
-                                            .start_hour_vs_hrv_delta,
-                                    )
-                                }}
+                                <span>
+                                    Start Hour vs HRV Δ ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            workout_to_recovery.correlations
+                                                .start_hour_vs_hrv_delta,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Start Hour vs Next-Night HRV Delta correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Start Hour vs Next-Night HRV Delta',
+                                                workout_to_recovery.correlations
+                                                    .start_hour_vs_hrv_delta,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                             <span
-                                class="rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
+                                class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium tabular-nums"
                                 :class="
                                     correlationTone(
                                         workout_to_recovery.correlations
@@ -2564,21 +2687,32 @@ function windBadgeTone(key: string): string {
                                         true,
                                     )
                                 "
-                                :title="
-                                    correlationTooltip(
-                                        'Start Hour vs Next-Night Sleep Score',
-                                        workout_to_recovery.correlations
-                                            .start_hour_vs_sleep_score,
-                                    )
-                                "
                             >
-                                Start Hour vs Sleep ·
-                                {{
-                                    formatCorrelationLabel(
-                                        workout_to_recovery.correlations
-                                            .start_hour_vs_sleep_score,
-                                    )
-                                }}
+                                <span>
+                                    Start Hour vs Sleep ·
+                                    {{
+                                        formatCorrelationLabel(
+                                            workout_to_recovery.correlations
+                                                .start_hour_vs_sleep_score,
+                                        )
+                                    }}
+                                </span>
+                                <InfoPopover
+                                    topic="correlation"
+                                    label="More info about Start Hour vs Next-Night Sleep Score correlation"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1.5 text-[11px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-200"
+                                    >
+                                        {{
+                                            correlationTooltip(
+                                                'Start Hour vs Next-Night Sleep Score',
+                                                workout_to_recovery.correlations
+                                                    .start_hour_vs_sleep_score,
+                                            )
+                                        }}
+                                    </p>
+                                </InfoPopover>
                             </span>
                         </div>
                     </div>

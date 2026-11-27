@@ -11,6 +11,7 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption } from 'echarts';
 import { computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart, {
     type ChartPointClickPayload,
 } from '@/components/charts/BaseChart.vue';
@@ -571,9 +572,9 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     matchedRoute.weather_impact.wind
                         .headwind_vs_tailwind_delta_seconds !== null
                 "
-                class="text-zinc-500 dark:text-zinc-400"
+                class="inline-flex items-center gap-1 text-zinc-500 dark:text-zinc-400"
             >
-                Headwind vs Tailwind
+                <span>Headwind vs Tailwind</span>
                 <strong class="text-zinc-900 dark:text-zinc-100">
                     {{
                         formatWeatherDelta(
@@ -582,6 +583,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                         )
                     }}
                 </strong>
+                <InfoPopover topic="wind_impact" />
             </span>
             <span
                 v-if="matchedRoute.weather_impact.temperature"

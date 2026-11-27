@@ -20,6 +20,7 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed, ref, watch } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
 import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
@@ -38,6 +39,7 @@ import {
     formatShortDate,
     formatTimeOfDay,
 } from '@/lib/format';
+import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import { useSports } from '@/lib/sports';
 import { M_TO_FT, useUnits } from '@/lib/units';
 import {
@@ -3051,6 +3053,7 @@ interface OffroadKpiCard {
     value: string;
     subtitle: string | null;
     barClass: string;
+    infoTopic?: MetricGlossaryTopic;
 }
 
 interface OffroadTabOption {
@@ -3074,6 +3077,7 @@ const offroadKpiCards = computed<OffroadKpiCard[]>(() => {
             value: formatNumber(offroad.avg_grit, 1),
             subtitle: 'Higher = more technical',
             barClass: 'bg-emerald-500',
+            infoTopic: 'grit_flow',
         });
     }
 
@@ -3084,6 +3088,7 @@ const offroadKpiCards = computed<OffroadKpiCard[]>(() => {
             value: formatNumber(offroad.avg_flow, 1),
             subtitle: 'Lower = smoother riding',
             barClass: 'bg-sky-500',
+            infoTopic: 'grit_flow',
         });
     }
 
@@ -3342,18 +3347,8 @@ const recentHasOffroad = computed<boolean>(() =>
                 class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
             >
                 <div>
-                    <p
-                        v-if="sport.family_key"
-                        class="font-mono text-[11px] tracking-widest uppercase"
-                        :style="{ color: accentHex }"
-                    >
-                        {{
-                            `${getSportMeta(sport.family_key).label} · ${sport.short_label}`
-                        }}
-                    </p>
                     <h1
                         class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
-                        :class="sport.family_key ? 'mt-1' : ''"
                     >
                         {{ sport.label }}
                     </h1>
@@ -3786,9 +3781,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 <div>
                     <div class="space-y-2.5">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            HR Zone Distribution &amp; Polarization
+                            <span>HR Zone Distribution &amp; Polarization</span>
+                            <InfoPopover topic="hr_polarization" size="sm" />
                         </h2>
 
                         <DateRangeControl
@@ -4033,9 +4029,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            Aerobic Efficiency &amp; Drift
+                            <span>Aerobic Efficiency &amp; Drift</span>
+                            <InfoPopover topic="decoupling" size="sm" />
                         </h2>
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
@@ -4066,9 +4063,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/60"
                     >
                         <span
-                            class="text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1 text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Latest EF
+                            <span>Latest EF</span>
+                            <InfoPopover topic="efficiency_factor" />
                         </span>
                         <div class="mt-0.5 flex items-baseline gap-1.5">
                             <span
@@ -4189,202 +4187,6 @@ const recentHasOffroad = computed<boolean>(() =>
                     <span class="size-2 rounded-full bg-rose-500" />
                     High Drift (&gt;10%)
                 </span>
-            </div>
-        </section>
-
-        <!-- Eddington Number Card -->
-        <section
-            v-if="eddington && activeEddington"
-            class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
-        >
-            <span
-                class="absolute top-0 left-0 h-0.5 w-12"
-                :style="{ backgroundColor: accentHex }"
-            />
-
-            <div class="grid gap-5 lg:grid-cols-12 lg:items-center">
-                <!-- Left: Headline E = N, Progress Bar & Longest Day -->
-                <div class="space-y-4 lg:col-span-7">
-                    <div
-                        class="flex flex-wrap items-start justify-between gap-3"
-                    >
-                        <div>
-                            <p
-                                class="font-mono text-[10px] tracking-widest uppercase"
-                                :style="{ color: accentHex }"
-                            >
-                                Eddington Number · Daily Distance Consistency
-                            </p>
-                            <div
-                                class="mt-1.5 flex items-baseline gap-2.5 tabular-nums"
-                            >
-                                <span
-                                    class="font-mono text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-100"
-                                >
-                                    E =
-                                    {{
-                                        formatNumber(activeEddington.number, 0)
-                                    }}
-                                </span>
-                                <span
-                                    class="rounded-md border border-zinc-200/90 bg-[#f7f7f5] px-2 py-0.5 font-mono text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-300"
-                                >
-                                    {{ activeEddington.unit }}
-                                </span>
-                            </div>
-                        </div>
-
-                        <div
-                            class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"
-                        >
-                            <div
-                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
-                            >
-                                <span
-                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
-                                >
-                                    Longest Day
-                                </span>
-                                <p
-                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
-                                >
-                                    {{
-                                        eddington.max_single_day_meters > 0
-                                            ? units.formatDistanceCompact(
-                                                  eddington.max_single_day_meters,
-                                                  1,
-                                              )
-                                            : '—'
-                                    }}
-                                </p>
-                            </div>
-                            <div
-                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
-                            >
-                                <span
-                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
-                                >
-                                    Active Days
-                                </span>
-                                <p
-                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
-                                >
-                                    {{ formatNumber(eddington.active_days, 0) }}
-                                </p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Progress Toward E + 1 -->
-                    <div class="space-y-2">
-                        <div
-                            class="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums"
-                        >
-                            <span class="text-zinc-700 dark:text-zinc-300">
-                                <strong
-                                    class="font-semibold text-zinc-950 dark:text-white"
-                                >
-                                    {{
-                                        formatNumber(
-                                            activeEddington.days_needed_for_next,
-                                            0,
-                                        )
-                                    }}
-                                </strong>
-                                more
-                                {{
-                                    activeEddington.days_needed_for_next === 1
-                                        ? 'day'
-                                        : 'days'
-                                }}
-                                of ≥ {{ activeEddington.next_target }}
-                                {{ activeEddington.unit }} to reach E =
-                                {{ activeEddington.next_target }}
-                            </span>
-                            <span
-                                class="text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{ activeEddington.completed_for_next }} /
-                                {{ activeEddington.next_target }} days
-                            </span>
-                        </div>
-
-                        <div
-                            class="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
-                        >
-                            <div
-                                class="h-full rounded-full transition-all duration-300"
-                                :style="{
-                                    width: `${eddingtonNextProgressPct}%`,
-                                    backgroundColor: accentHex,
-                                }"
-                            />
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Right: Next 3 Milestones Mini-Table -->
-                <div
-                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/60 p-3.5 lg:col-span-5 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                >
-                    <div class="mb-2.5 flex items-center justify-between gap-2">
-                        <span
-                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            Next Targets
-                        </span>
-                        <Target
-                            class="size-3.5"
-                            :style="{ color: accentHex }"
-                        />
-                    </div>
-
-                    <div
-                        class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
-                    >
-                        <div
-                            v-for="row in activeEddington.next_targets"
-                            :key="row.target"
-                            class="grid grid-cols-1 gap-1.5 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0 sm:grid-cols-[4.5rem_1fr_auto] sm:items-center sm:gap-3"
-                        >
-                            <span
-                                class="font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                E = {{ row.target }}
-                            </span>
-
-                            <div class="flex items-center gap-2">
-                                <div
-                                    class="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800"
-                                >
-                                    <div
-                                        class="h-full rounded-full"
-                                        :style="{
-                                            width: `${clampPct((row.completed_days / row.target) * 100)}%`,
-                                            backgroundColor: accentHex,
-                                        }"
-                                    />
-                                </div>
-                                <span
-                                    class="text-[11px] text-zinc-500 dark:text-zinc-400"
-                                >
-                                    {{ row.completed_days }}/{{ row.target }}
-                                </span>
-                            </div>
-
-                            <span
-                                class="text-left text-[11px] font-medium text-zinc-700 sm:text-right dark:text-zinc-300"
-                            >
-                                +{{ row.remaining_days }}
-                                {{ row.remaining_days === 1 ? 'day' : 'days' }}
-                                <span class="text-zinc-500 dark:text-zinc-400">
-                                    ≥ {{ row.target }}
-                                    {{ activeEddington.unit }}
-                                </span>
-                            </span>
-                        </div>
-                    </div>
-                </div>
             </div>
         </section>
 
@@ -4977,9 +4779,13 @@ const recentHasOffroad = computed<boolean>(() =>
                                     Riegel Equivalence Model
                                 </p>
                                 <h2
-                                    class="mt-0.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                    class="mt-0.5 flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                                 >
-                                    Race Predictor
+                                    <span>Race Predictor</span>
+                                    <InfoPopover
+                                        topic="race_predictor"
+                                        size="sm"
+                                    />
                                 </h2>
                             </div>
                             <Trophy
@@ -5052,9 +4858,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="flex items-center justify-between gap-2">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            VO2 Max Trend
+                            <span>VO2 Max Trend</span>
+                            <InfoPopover topic="vo2_max" size="sm" />
                         </h2>
 
                         <div
@@ -5117,9 +4924,13 @@ const recentHasOffroad = computed<boolean>(() =>
                                 Grade-Adjusted vs Raw Pace
                             </p>
                             <h2
-                                class="mt-0.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                class="mt-0.5 flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                             >
-                                Aerobic Efficiency
+                                <span>Aerobic Efficiency</span>
+                                <InfoPopover
+                                    topic="gap_vs_raw_pace"
+                                    size="sm"
+                                />
                             </h2>
                         </div>
                         <span
@@ -5169,167 +4980,6 @@ const recentHasOffroad = computed<boolean>(() =>
                     </div>
                 </div>
             </section>
-
-            <!-- Run / Walk / Idle Proportion Bar -->
-            <section
-                v-if="modules.pace.runWalkBreakdown !== null"
-                class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
-            >
-                <div class="mb-3 flex items-center justify-between gap-2">
-                    <h2
-                        class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                    >
-                        Run / Walk / Idle Breakdown
-                    </h2>
-                    <span
-                        class="font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
-                    >
-                        {{
-                            formatDurationHuman(
-                                modules.pace.runWalkBreakdown.total_seconds,
-                            )
-                        }}
-                        tracked
-                    </span>
-                </div>
-
-                <div
-                    class="flex h-3 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
-                >
-                    <div
-                        v-if="modules.pace.runWalkBreakdown.run_pct > 0"
-                        class="h-full bg-amber-500 transition-all"
-                        :style="{
-                            width: `${modules.pace.runWalkBreakdown.run_pct}%`,
-                        }"
-                    />
-                    <div
-                        v-if="modules.pace.runWalkBreakdown.walk_pct > 0"
-                        class="h-full bg-sky-500 transition-all"
-                        :style="{
-                            width: `${modules.pace.runWalkBreakdown.walk_pct}%`,
-                        }"
-                    />
-                    <div
-                        v-if="modules.pace.runWalkBreakdown.idle_pct > 0"
-                        class="h-full bg-zinc-400 transition-all dark:bg-zinc-600"
-                        :style="{
-                            width: `${modules.pace.runWalkBreakdown.idle_pct}%`,
-                        }"
-                    />
-                </div>
-
-                <div
-                    class="mt-3 grid grid-cols-1 gap-3 tabular-nums sm:grid-cols-3"
-                >
-                    <div
-                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                    >
-                        <div
-                            class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            <span class="size-1.5 rounded-full bg-amber-500" />
-                            Run
-                        </div>
-                        <div
-                            class="mt-0.5 flex items-baseline justify-between gap-2"
-                        >
-                            <span
-                                class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                {{
-                                    formatNumber(
-                                        modules.pace.runWalkBreakdown.run_pct,
-                                        1,
-                                    )
-                                }}%
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{
-                                    formatDurationHuman(
-                                        modules.pace.runWalkBreakdown
-                                            .run_seconds,
-                                    )
-                                }}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div
-                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                    >
-                        <div
-                            class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            <span class="size-1.5 rounded-full bg-sky-500" />
-                            Walk
-                        </div>
-                        <div
-                            class="mt-0.5 flex items-baseline justify-between gap-2"
-                        >
-                            <span
-                                class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                {{
-                                    formatNumber(
-                                        modules.pace.runWalkBreakdown.walk_pct,
-                                        1,
-                                    )
-                                }}%
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{
-                                    formatDurationHuman(
-                                        modules.pace.runWalkBreakdown
-                                            .walk_seconds,
-                                    )
-                                }}
-                            </span>
-                        </div>
-                    </div>
-
-                    <div
-                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
-                    >
-                        <div
-                            class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
-                        >
-                            <span
-                                class="size-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500"
-                            />
-                            Idle
-                        </div>
-                        <div
-                            class="mt-0.5 flex items-baseline justify-between gap-2"
-                        >
-                            <span
-                                class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
-                            >
-                                {{
-                                    formatNumber(
-                                        modules.pace.runWalkBreakdown.idle_pct,
-                                        1,
-                                    )
-                                }}%
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                            >
-                                {{
-                                    formatDurationHuman(
-                                        modules.pace.runWalkBreakdown
-                                            .idle_seconds,
-                                    )
-                                }}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-            </section>
         </template>
 
         <!-- ========================================================= -->
@@ -5344,9 +4994,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <span class="absolute top-0 left-0 h-0.5 w-10 bg-sky-500" />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        FTP &amp; W/kg
+                        <span>FTP &amp; W/kg</span>
+                        <InfoPopover topic="ftp_wkg" />
                     </p>
                     <div class="mt-1.5 flex items-baseline gap-2 tabular-nums">
                         <span
@@ -5383,9 +5034,10 @@ const recentHasOffroad = computed<boolean>(() =>
                     <span class="absolute top-0 left-0 h-0.5 w-10 bg-sky-500" />
                     <div class="flex items-center justify-between gap-2">
                         <span
-                            class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Fitness / Form
+                            <span>Fitness / Form</span>
+                            <InfoPopover topic="tsb" />
                         </span>
                         <span
                             class="font-mono text-[10px] font-medium"
@@ -5428,9 +5080,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-indigo-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg NP / IF / VI
+                        <span>Avg NP / IF / VI</span>
+                        <InfoPopover topic="normalized_power" />
                     </p>
                     <p
                         class="mt-1.5 text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -5498,6 +5151,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         >
                             Mean Maximal Power Curve
                         </h2>
+                        <InfoPopover topic="mmp_curve" />
                     </div>
 
                     <div
@@ -5584,9 +5238,13 @@ const recentHasOffroad = computed<boolean>(() =>
                     class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                 >
                     <h2
-                        class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        180-Day Fitness, Fatigue &amp; Form (CTL / ATL / TSB)
+                        <span>
+                            180-Day Fitness, Fatigue &amp; Form (CTL / ATL /
+                            TSB)
+                        </span>
+                        <InfoPopover topic="tsb" />
                     </h2>
                     <div
                         class="flex flex-wrap items-center gap-3 font-mono text-xs tabular-nums"
@@ -5614,9 +5272,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="mb-4 flex items-center justify-between gap-2">
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Weekly TSS &amp; Distance
+                            <span>Weekly TSS &amp; Distance</span>
+                            <InfoPopover topic="weekly_tss" />
                         </h2>
                         <span
                             class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"
@@ -5647,9 +5306,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="mb-4 flex items-center justify-between gap-2">
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            FTP &amp; 20-Min Power History
+                            <span>FTP &amp; 20-Min Power History</span>
+                            <InfoPopover topic="ftp_wkg" />
                         </h2>
                         <span
                             v-if="modules.power.ftp !== null"
@@ -5689,9 +5349,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="mb-4 flex items-center justify-between">
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Power Zones Distribution
+                            <span>Power Zones Distribution</span>
+                            <InfoPopover topic="power_zones" />
                         </h2>
                         <span
                             class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
@@ -6105,6 +5766,366 @@ const recentHasOffroad = computed<boolean>(() =>
             </section>
         </template>
 
+        <!-- Eddington Number Card -->
+        <section
+            v-if="eddington && activeEddington"
+            class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+        >
+            <span
+                class="absolute top-0 left-0 h-0.5 w-12"
+                :style="{ backgroundColor: accentHex }"
+            />
+
+            <div class="grid gap-5 lg:grid-cols-12 lg:items-center">
+                <!-- Left: Headline E = N, Progress Bar & Longest Day -->
+                <div class="space-y-4 lg:col-span-7">
+                    <div
+                        class="flex flex-wrap items-start justify-between gap-3"
+                    >
+                        <div>
+                            <p
+                                class="flex items-center gap-1.5 font-mono text-[10px] tracking-widest uppercase"
+                                :style="{ color: accentHex }"
+                            >
+                                <span>
+                                    Eddington Number · Daily Distance
+                                    Consistency
+                                </span>
+                                <InfoPopover topic="eddington" />
+                            </p>
+                            <div
+                                class="mt-1.5 flex items-baseline gap-2.5 tabular-nums"
+                            >
+                                <span
+                                    class="font-mono text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-100"
+                                >
+                                    E =
+                                    {{
+                                        formatNumber(activeEddington.number, 0)
+                                    }}
+                                </span>
+                                <span
+                                    class="rounded-md border border-zinc-200/90 bg-[#f7f7f5] px-2 py-0.5 font-mono text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-300"
+                                >
+                                    {{ activeEddington.unit }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div
+                            class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"
+                        >
+                            <div
+                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            >
+                                <span
+                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Longest Day
+                                </span>
+                                <p
+                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{
+                                        eddington.max_single_day_meters > 0
+                                            ? units.formatDistanceCompact(
+                                                  eddington.max_single_day_meters,
+                                                  1,
+                                              )
+                                            : '—'
+                                    }}
+                                </p>
+                            </div>
+                            <div
+                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            >
+                                <span
+                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Active Days
+                                </span>
+                                <p
+                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{ formatNumber(eddington.active_days, 0) }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress Toward E + 1 -->
+                    <div class="space-y-2">
+                        <div
+                            class="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums"
+                        >
+                            <span class="text-zinc-700 dark:text-zinc-300">
+                                <strong
+                                    class="font-semibold text-zinc-950 dark:text-white"
+                                >
+                                    {{
+                                        formatNumber(
+                                            activeEddington.days_needed_for_next,
+                                            0,
+                                        )
+                                    }}
+                                </strong>
+                                more
+                                {{
+                                    activeEddington.days_needed_for_next === 1
+                                        ? 'day'
+                                        : 'days'
+                                }}
+                                of ≥ {{ activeEddington.next_target }}
+                                {{ activeEddington.unit }} to reach E =
+                                {{ activeEddington.next_target }}
+                            </span>
+                            <span
+                                class="text-[11px] text-zinc-500 dark:text-zinc-400"
+                            >
+                                {{ activeEddington.completed_for_next }} /
+                                {{ activeEddington.next_target }} days
+                            </span>
+                        </div>
+
+                        <div
+                            class="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+                        >
+                            <div
+                                class="h-full rounded-full transition-all duration-300"
+                                :style="{
+                                    width: `${eddingtonNextProgressPct}%`,
+                                    backgroundColor: accentHex,
+                                }"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Next 3 Milestones Mini-Table -->
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/60 p-3.5 lg:col-span-5 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div class="mb-2.5 flex items-center justify-between gap-2">
+                        <span
+                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Next Targets
+                        </span>
+                        <Target
+                            class="size-3.5"
+                            :style="{ color: accentHex }"
+                        />
+                    </div>
+
+                    <div
+                        class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
+                    >
+                        <div
+                            v-for="row in activeEddington.next_targets"
+                            :key="row.target"
+                            class="grid grid-cols-1 gap-1.5 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0 sm:grid-cols-[4.5rem_1fr_auto] sm:items-center sm:gap-3"
+                        >
+                            <span
+                                class="font-semibold text-zinc-900 dark:text-zinc-100"
+                            >
+                                E = {{ row.target }}
+                            </span>
+
+                            <div class="flex items-center gap-2">
+                                <div
+                                    class="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800"
+                                >
+                                    <div
+                                        class="h-full rounded-full"
+                                        :style="{
+                                            width: `${clampPct((row.completed_days / row.target) * 100)}%`,
+                                            backgroundColor: accentHex,
+                                        }"
+                                    />
+                                </div>
+                                <span
+                                    class="text-[11px] text-zinc-500 dark:text-zinc-400"
+                                >
+                                    {{ row.completed_days }}/{{ row.target }}
+                                </span>
+                            </div>
+
+                            <span
+                                class="text-left text-[11px] font-medium text-zinc-700 sm:text-right dark:text-zinc-300"
+                            >
+                                +{{ row.remaining_days }}
+                                {{ row.remaining_days === 1 ? 'day' : 'days' }}
+                                <span class="text-zinc-500 dark:text-zinc-400">
+                                    ≥ {{ row.target }}
+                                    {{ activeEddington.unit }}
+                                </span>
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Run / Walk / Idle Proportion Bar -->
+        <section
+            v-if="
+                modules.pace !== null && modules.pace.runWalkBreakdown !== null
+            "
+            class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+        >
+            <div class="mb-3 flex items-center justify-between gap-2">
+                <h2
+                    class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                >
+                    Run / Walk / Idle Breakdown
+                </h2>
+                <span
+                    class="font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
+                >
+                    {{
+                        formatDurationHuman(
+                            modules.pace.runWalkBreakdown.total_seconds,
+                        )
+                    }}
+                    tracked
+                </span>
+            </div>
+
+            <div
+                class="flex h-3 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+            >
+                <div
+                    v-if="modules.pace.runWalkBreakdown.run_pct > 0"
+                    class="h-full bg-amber-500 transition-all"
+                    :style="{
+                        width: `${modules.pace.runWalkBreakdown.run_pct}%`,
+                    }"
+                />
+                <div
+                    v-if="modules.pace.runWalkBreakdown.walk_pct > 0"
+                    class="h-full bg-sky-500 transition-all"
+                    :style="{
+                        width: `${modules.pace.runWalkBreakdown.walk_pct}%`,
+                    }"
+                />
+                <div
+                    v-if="modules.pace.runWalkBreakdown.idle_pct > 0"
+                    class="h-full bg-zinc-400 transition-all dark:bg-zinc-600"
+                    :style="{
+                        width: `${modules.pace.runWalkBreakdown.idle_pct}%`,
+                    }"
+                />
+            </div>
+
+            <div
+                class="mt-3 grid grid-cols-1 gap-3 tabular-nums sm:grid-cols-3"
+            >
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        <span class="size-1.5 rounded-full bg-amber-500" />
+                        Run
+                    </div>
+                    <div
+                        class="mt-0.5 flex items-baseline justify-between gap-2"
+                    >
+                        <span
+                            class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            {{
+                                formatNumber(
+                                    modules.pace.runWalkBreakdown.run_pct,
+                                    1,
+                                )
+                            }}%
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            {{
+                                formatDurationHuman(
+                                    modules.pace.runWalkBreakdown.run_seconds,
+                                )
+                            }}
+                        </span>
+                    </div>
+                </div>
+
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        <span class="size-1.5 rounded-full bg-sky-500" />
+                        Walk
+                    </div>
+                    <div
+                        class="mt-0.5 flex items-baseline justify-between gap-2"
+                    >
+                        <span
+                            class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            {{
+                                formatNumber(
+                                    modules.pace.runWalkBreakdown.walk_pct,
+                                    1,
+                                )
+                            }}%
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            {{
+                                formatDurationHuman(
+                                    modules.pace.runWalkBreakdown.walk_seconds,
+                                )
+                            }}
+                        </span>
+                    </div>
+                </div>
+
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div
+                        class="flex items-center gap-1.5 font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        <span
+                            class="size-1.5 rounded-full bg-zinc-400 dark:bg-zinc-500"
+                        />
+                        Idle
+                    </div>
+                    <div
+                        class="mt-0.5 flex items-baseline justify-between gap-2"
+                    >
+                        <span
+                            class="font-mono text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            {{
+                                formatNumber(
+                                    modules.pace.runWalkBreakdown.idle_pct,
+                                    1,
+                                )
+                            }}%
+                        </span>
+                        <span
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            {{
+                                formatDurationHuman(
+                                    modules.pace.runWalkBreakdown.idle_seconds,
+                                )
+                            }}
+                        </span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- ========================================================= -->
         <!-- MODULE 3: CLIMBING & REGIONS (modules.climbing !== null)  -->
         <!-- ========================================================= -->
@@ -6151,9 +6172,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-emerald-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg Climb Density
+                        <span>Avg Climb Density</span>
+                        <InfoPopover topic="climb_density" />
                     </p>
                     <p
                         class="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6173,9 +6195,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-emerald-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg VAM
+                        <span>Avg VAM</span>
+                        <InfoPopover topic="vam" />
                     </p>
                     <p
                         class="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6191,9 +6214,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-emerald-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Peak VAM
+                        <span>Peak VAM</span>
+                        <InfoPopover topic="vam" />
                     </p>
                     <p
                         class="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6498,9 +6522,13 @@ const recentHasOffroad = computed<boolean>(() =>
                         :class="card.barClass"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        {{ card.label }}
+                        <span>{{ card.label }}</span>
+                        <InfoPopover
+                            v-if="card.infoTopic"
+                            :topic="card.infoTopic"
+                        />
                     </p>
                     <p
                         class="mt-1.5 text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6535,9 +6563,12 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
                     >
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Off-Road Dynamics · Grit &amp; Flow Trend
+                            <span
+                                >Off-Road Dynamics · Grit &amp; Flow Trend</span
+                            >
+                            <InfoPopover topic="grit_flow" />
                         </h2>
                         <span
                             class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"

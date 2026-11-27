@@ -79,6 +79,7 @@ Route::delete('/gear/{gearItem}', [GearController::class, 'destroy'])->name('gea
 
 Route::post('/sync', [SyncController::class, 'store'])->name('sync.store');
 Route::post('/sync/backfill', [SyncController::class, 'backfill'])->name('sync.backfill');
+Route::post('/sync/enrichments', [SyncController::class, 'queueEnrichments'])->name('sync.enrichments');
 Route::get('/sync/status', [SyncController::class, 'status'])->name('sync.status');
 
 require __DIR__.'/settings.php';

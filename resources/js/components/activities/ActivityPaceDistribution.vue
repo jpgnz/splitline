@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import { formatDurationClock } from '@/lib/format';
 import { KM_TO_MI, useUnits } from '@/lib/units';
 import type { PaceDistributionPayload, PaceZoneBucket } from '@/types/activity';
@@ -81,33 +82,36 @@ const formattedAnchor5k = computed<string>(() =>
                 </p>
             </div>
 
-            <div
-                class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-            >
-                <button
-                    type="button"
-                    class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                    :class="
-                        mode === 'gap'
-                            ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    "
-                    @click="mode = 'gap'"
+            <div class="inline-flex items-center gap-1.5">
+                <div
+                    class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
                 >
-                    GAP
-                </button>
-                <button
-                    type="button"
-                    class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                    :class="
-                        mode === 'pace'
-                            ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    "
-                    @click="mode = 'pace'"
-                >
-                    Raw Pace
-                </button>
+                    <button
+                        type="button"
+                        class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
+                        :class="
+                            mode === 'gap'
+                                ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                        "
+                        @click="mode = 'gap'"
+                    >
+                        GAP
+                    </button>
+                    <button
+                        type="button"
+                        class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
+                        :class="
+                            mode === 'pace'
+                                ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                        "
+                        @click="mode = 'pace'"
+                    >
+                        Raw Pace
+                    </button>
+                </div>
+                <InfoPopover topic="gap" />
             </div>
         </div>
 

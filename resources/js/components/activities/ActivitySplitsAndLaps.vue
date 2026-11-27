@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import { formatDurationClock, formatNumber } from '@/lib/format';
 import { computeSplitsFromSeries, KM_TO_MI, useUnits } from '@/lib/units';
 import type { KmSplitItem, SplitItem, StreamPoint } from '@/types/activity';
@@ -245,7 +246,12 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                             v-if="splitsHaveGap"
                             class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
                         >
-                            GAP
+                            <span
+                                class="inline-flex items-center justify-end gap-1"
+                            >
+                                <span>GAP</span>
+                                <InfoPopover topic="gap" />
+                            </span>
                         </th>
                         <th
                             class="hidden w-36 px-4 py-2.5 font-medium whitespace-nowrap sm:table-cell"
@@ -443,7 +449,12 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                             v-if="lapsHaveGap"
                             class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
                         >
-                            GAP
+                            <span
+                                class="inline-flex items-center justify-end gap-1"
+                            >
+                                <span>GAP</span>
+                                <InfoPopover topic="gap" />
+                            </span>
                         </th>
                         <th
                             class="px-4 py-2.5 text-right font-medium whitespace-nowrap"

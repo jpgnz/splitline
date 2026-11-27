@@ -12,6 +12,7 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption } from 'echarts';
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
 import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
@@ -1533,13 +1534,8 @@ const hrSparklineOption = computed<EChartsOption>(() => {
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div>
-                <p
-                    class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    {{ dateLabel }}
-                </p>
                 <h1
-                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
                 >
                     Health Overview
                 </h1>
@@ -1670,11 +1666,6 @@ const hrSparklineOption = computed<EChartsOption>(() => {
             class="flex flex-col gap-4 rounded-xl border border-emerald-500/25 bg-white p-5 sm:flex-row sm:items-center sm:justify-between dark:border-emerald-500/25 dark:bg-[#141417]"
         >
             <div class="space-y-1">
-                <p
-                    class="font-mono text-[10px] tracking-widest text-emerald-600 uppercase dark:text-emerald-400"
-                >
-                    Getting Started
-                </p>
                 <h2
                     class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                 >
@@ -1723,16 +1714,23 @@ const hrSparklineOption = computed<EChartsOption>(() => {
         <!-- In Focus Bento Grid (2x2) -->
         <div class="grid gap-4 md:grid-cols-2">
             <!-- Body Battery -->
-            <Link
-                :href="healthShow.url('body-battery')"
-                class="group flex flex-col justify-between rounded-xl border border-zinc-200/90 bg-white p-5 transition-colors hover:border-zinc-300 dark:border-zinc-800/90 dark:bg-[#141417] dark:hover:border-zinc-700"
+            <div
+                class="group relative flex flex-col justify-between rounded-xl border border-zinc-200/90 bg-white p-5 transition-colors hover:border-zinc-300 dark:border-zinc-800/90 dark:bg-[#141417] dark:hover:border-zinc-700"
             >
+                <Link
+                    :href="healthShow.url('body-battery')"
+                    aria-label="View Body Battery details"
+                    class="absolute inset-0 rounded-xl focus-visible:ring-2 focus-visible:ring-zinc-400/70 focus-visible:outline-none dark:focus-visible:ring-zinc-500/70"
+                />
                 <div>
                     <div class="flex items-center justify-between gap-2">
                         <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Body Battery
+                            <span>Body Battery</span>
+                            <span class="relative z-10 inline-flex">
+                                <InfoPopover topic="body_battery" />
+                            </span>
                         </span>
                         <div class="flex items-center gap-2">
                             <span
@@ -1780,7 +1778,12 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     </div>
                 </div>
 
-                <div class="mt-4">
+                <Link
+                    :href="healthShow.url('body-battery')"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    class="relative z-10 mt-4 block"
+                >
                     <template v-if="bodyBattery.series.length > 0">
                         <BaseChart
                             :option="bodyBatteryChartOption"
@@ -1802,8 +1805,8 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     >
                         No intraday curve recorded
                     </div>
-                </div>
-            </Link>
+                </Link>
+            </div>
 
             <!-- Sleep -->
             <Link
@@ -1916,16 +1919,23 @@ const hrSparklineOption = computed<EChartsOption>(() => {
             </Link>
 
             <!-- HRV Status -->
-            <Link
-                :href="healthShow.url('hrv')"
-                class="group flex flex-col justify-between rounded-xl border border-zinc-200/90 bg-white p-5 transition-colors hover:border-zinc-300 dark:border-zinc-800/90 dark:bg-[#141417] dark:hover:border-zinc-700"
+            <div
+                class="group relative flex flex-col justify-between rounded-xl border border-zinc-200/90 bg-white p-5 transition-colors hover:border-zinc-300 dark:border-zinc-800/90 dark:bg-[#141417] dark:hover:border-zinc-700"
             >
+                <Link
+                    :href="healthShow.url('hrv')"
+                    aria-label="View HRV Status details"
+                    class="absolute inset-0 rounded-xl focus-visible:ring-2 focus-visible:ring-zinc-400/70 focus-visible:outline-none dark:focus-visible:ring-zinc-500/70"
+                />
                 <div>
                     <div class="flex items-center justify-between gap-2">
                         <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            HRV Status
+                            <span>HRV Status</span>
+                            <span class="relative z-10 inline-flex">
+                                <InfoPopover topic="hrv_status" />
+                            </span>
                         </span>
                         <div class="flex items-center gap-2">
                             <span
@@ -1973,7 +1983,12 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     </div>
                 </div>
 
-                <div class="mt-4">
+                <Link
+                    :href="healthShow.url('hrv')"
+                    tabindex="-1"
+                    aria-hidden="true"
+                    class="relative z-10 mt-4 block"
+                >
                     <BaseChart
                         v-if="hasHrvTrend"
                         :option="hrvChartOption"
@@ -1985,8 +2000,8 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     >
                         No 28-day HRV trend recorded
                     </div>
-                </div>
-            </Link>
+                </Link>
+            </div>
 
             <!-- Training Readiness (Estimated locally from Garmin's 6 factors) -->
             <div
@@ -1994,12 +2009,12 @@ const hrSparklineOption = computed<EChartsOption>(() => {
             >
                 <div class="flex items-center justify-between gap-2">
                     <span
-                        class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Training Readiness
+                        <span>Training Readiness</span>
+                        <InfoPopover topic="training_readiness" />
                     </span>
                     <span
-                        title="Estimated locally from Sleep, Recovery Time, HRV Status, 10d Acute Load, 3-night Sleep History, and 3-day Stress History"
                         class="rounded-full bg-zinc-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Est.
@@ -2711,19 +2726,26 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                 </Link>
 
                 <!-- 6. VO2 Max -->
-                <Link
-                    :href="healthShow.url('vo2-max')"
+                <div
                     class="group relative flex flex-col justify-between overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-4 transition-colors hover:border-zinc-300 dark:border-zinc-800/90 dark:bg-[#141417] dark:hover:border-zinc-700"
                 >
+                    <Link
+                        :href="healthShow.url('vo2-max')"
+                        aria-label="View VO2 Max details"
+                        class="absolute inset-0 rounded-xl focus-visible:ring-2 focus-visible:ring-zinc-400/70 focus-visible:outline-none focus-visible:ring-inset dark:focus-visible:ring-zinc-500/70"
+                    />
                     <span
                         class="absolute top-0 left-0 h-0.5 w-10 bg-indigo-500"
                     />
                     <div>
                         <div class="flex items-center justify-between">
                             <span
-                                class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                                class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
-                                VO2 Max
+                                <span>VO2 Max</span>
+                                <span class="relative z-10 inline-flex">
+                                    <InfoPopover topic="vo2_max" />
+                                </span>
                             </span>
                             <ArrowUpRight
                                 class="size-3.5 text-zinc-300 transition-colors group-hover:text-zinc-600 dark:text-zinc-700 dark:group-hover:text-zinc-300"
@@ -2741,7 +2763,7 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     >
                         {{ vo2Meta }}
                     </div>
-                </Link>
+                </div>
 
                 <!-- 7. Fitness Age (Dedicated) -->
                 <Link
@@ -2829,12 +2851,12 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     <div>
                         <div class="flex items-center justify-between gap-2">
                             <span
-                                class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                                class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
-                                Health Status
+                                <span>Health Status</span>
+                                <InfoPopover topic="health_status" />
                             </span>
                             <span
-                                title="Evaluated locally against your personal 28-day baselines for HRV, Resting HR, Respiration, and SpO2"
                                 class="rounded-full bg-zinc-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Est.
