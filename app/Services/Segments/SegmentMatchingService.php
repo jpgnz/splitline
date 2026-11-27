@@ -51,6 +51,43 @@ use InvalidArgumentException;
  *     climbs_created: int,
  *     segments_total: int
  * }
+ * @phpstan-type ClimbObservation array{
+ *     activity_id: int,
+ *     activity_location: ?string,
+ *     climb: array{
+ *         distance_meters: float,
+ *         elevation_gain: float,
+ *         elevation_loss: float,
+ *         avg_grade_pct: float,
+ *         max_grade_pct: float,
+ *         fiets_score: float,
+ *         climb_category: string
+ *     },
+ *     start_lat: float,
+ *     start_lng: float,
+ *     end_lat: float,
+ *     end_lng: float,
+ *     bbox_min_lat: float,
+ *     bbox_max_lat: float,
+ *     bbox_min_lng: float,
+ *     bbox_max_lng: float,
+ *     waypoints: list<array{0: float, 1: float}>,
+ *     encoded_polyline: string
+ * }
+ * @phpstan-type ClimbCluster array{
+ *     rep_distance: float,
+ *     rep_start_lat: float,
+ *     rep_start_lng: float,
+ *     rep_end_lat: float,
+ *     rep_end_lng: float,
+ *     rep_bbox_min_lat: float,
+ *     rep_bbox_max_lat: float,
+ *     rep_bbox_min_lng: float,
+ *     rep_bbox_max_lng: float,
+ *     rep_dedup_poly: list<array{0: float, 1: float}>,
+ *     rep_dedup_cum: list<float>,
+ *     observations: non-empty-list<ClimbObservation>
+ * }
  */
 class SegmentMatchingService
 {
@@ -704,42 +741,7 @@ class SegmentMatchingService
         /**
          * Newly discovered climb clusters accumulated during Pass 1 before choosing consensus geometry.
          *
-         * @var array<string, list<array{
-         *     rep_distance: float,
-         *     rep_start_lat: float,
-         *     rep_start_lng: float,
-         *     rep_end_lat: float,
-         *     rep_end_lng: float,
-         *     rep_bbox_min_lat: float,
-         *     rep_bbox_max_lat: float,
-         *     rep_bbox_min_lng: float,
-         *     rep_bbox_max_lng: float,
-         *     rep_dedup_poly: list<array{0: float, 1: float}>,
-         *     rep_dedup_cum: list<float>,
-         *     observations: list<array{
-         *         activity_id: int,
-         *         activity_location: ?string,
-         *         climb: array{
-         *             distance_meters: float,
-         *             elevation_gain: float,
-         *             elevation_loss: float,
-         *             avg_grade_pct: float,
-         *             max_grade_pct: float,
-         *             fiets_score: float,
-         *             climb_category: string
-         *         },
-         *         start_lat: float,
-         *         start_lng: float,
-         *         end_lat: float,
-         *         end_lng: float,
-         *         bbox_min_lat: float,
-         *         bbox_max_lat: float,
-         *         bbox_min_lng: float,
-         *         bbox_max_lng: float,
-         *         waypoints: list<array{0: float, 1: float}>,
-         *         encoded_polyline: string
-         *     }>
-         * }>> $newClustersBySport
+         * @var array<string, list<ClimbCluster>> $newClustersBySport
          */
         $newClustersBySport = [];
         /** @var array<string, true> $sportsTouched */
@@ -909,7 +911,9 @@ class SegmentMatchingService
                     }
 
                     if ($bestNewIdx !== null) {
-                        $newClustersBySport[$sport][$bestNewIdx]['observations'][] = $observation;
+                        $matchedCluster = $newClustersBySport[$sport][$bestNewIdx];
+                        $matchedCluster['observations'][] = $observation;
+                        $newClustersBySport[$sport][$bestNewIdx] = $matchedCluster;
 
                         continue;
                     }
@@ -1934,16 +1938,8 @@ class SegmentMatchingService
      * Pick the consensus observation in a climb cluster whose start/end endpoints are most central
      * (medoid) across all observations, breaking ties by proximity to median distance.
      *
-     * @template TObs of array{
-     *     climb: array{distance_meters: float},
-     *     start_lat: float,
-     *     start_lng: float,
-     *     end_lat: float,
-     *     end_lng: float
-     * }
-     *
-     * @param  non-empty-list<TObs>  $observations
-     * @return TObs
+     * @param  non-empty-list<ClimbObservation>  $observations
+     * @return ClimbObservation
      */
     private function selectConsensusObservation(array $observations): array
     {
@@ -2013,8 +2009,8 @@ class SegmentMatchingService
     /**
      * Merge any in-batch climb clusters whose medoid canonical geometries overlap above threshold.
      *
-     * @param  list<array<string, mixed>>  $clusters
-     * @return list<array<string, mixed>>
+     * @param  list<ClimbCluster>  $clusters
+     * @return list<ClimbCluster>
      */
     private function consolidateNewClusters(array $clusters): array
     {
@@ -2025,7 +2021,7 @@ class SegmentMatchingService
         );
 
         /** @var list<array{
-         *     cluster: array<string, mixed>,
+         *     cluster: ClimbCluster,
          *     distance: float,
          *     start_lat: float,
          *     start_lng: float,
@@ -2085,10 +2081,12 @@ class SegmentMatchingService
             }
 
             if ($bestTargetIdx !== null) {
-                $merged[$bestTargetIdx]['cluster']['observations'] = array_merge(
-                    $merged[$bestTargetIdx]['cluster']['observations'],
-                    $cluster['observations'],
-                );
+                $target = $merged[$bestTargetIdx];
+                $target['cluster']['observations'] = [
+                    ...$target['cluster']['observations'],
+                    ...$cluster['observations'],
+                ];
+                $merged[$bestTargetIdx] = $target;
 
                 continue;
             }

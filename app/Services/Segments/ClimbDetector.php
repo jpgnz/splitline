@@ -118,7 +118,7 @@ class ClimbDetector
         }
 
         $minDistance = self::MIN_DISTANCE_BY_SPORT[$sportCategory];
-        $maxAvgGrade = self::MAX_AVG_GRADE_BY_SPORT[$sportCategory] ?? 40.0;
+        $maxAvgGrade = self::MAX_AVG_GRADE_BY_SPORT[$sportCategory];
         $points = $this->extractValidPoints($series);
         $count = count($points);
 
