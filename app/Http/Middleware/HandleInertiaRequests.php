@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\SyncRun;
+use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\AppVersion;
 use App\Support\SportRegistry;
@@ -16,6 +17,7 @@ class HandleInertiaRequests extends Middleware
         private readonly AppSettings $settings,
         private readonly AppVersion $appVersion,
         private readonly SportRegistry $sports,
+        private readonly QueueStatusService $queueStatus,
     ) {}
 
     /**
@@ -74,12 +76,17 @@ class HandleInertiaRequests extends Middleware
      *     until_date: ?string,
      *     last_synced_at: ?string,
      *     error_message: ?string,
-     *     provider_configured: bool
+     *     provider_configured: bool,
+     *     enrichments: array{
+     *         jobs: array{default: int, streams: int, weather: int, total: int},
+     *         has_active_work: bool
+     *     }
      * }
      */
     private function latestSyncSummary(): array
     {
         $providerConfigured = trim((string) config('services.garmin.key', '')) !== '';
+        $enrichments = $this->queueStatus->activeJobs();
 
         if (! Schema::hasTable('sync_runs')) {
             return [
@@ -94,6 +101,7 @@ class HandleInertiaRequests extends Middleware
                 'last_synced_at' => null,
                 'error_message' => null,
                 'provider_configured' => $providerConfigured,
+                'enrichments' => $enrichments,
             ];
         }
 
@@ -116,6 +124,7 @@ class HandleInertiaRequests extends Middleware
             'last_synced_at' => $lastCompleted?->finished_at?->toIso8601String(),
             'error_message' => $latest?->error_message,
             'provider_configured' => $providerConfigured,
+            'enrichments' => $enrichments,
         ];
     }
 }

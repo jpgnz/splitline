@@ -6,11 +6,21 @@ use App\Models\Activity;
 use App\Models\DailyMetric;
 use App\Models\HrvRecord;
 use App\Models\SleepRecord;
+use App\Support\HealthSourceRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 
 class TrainingReadinessService
 {
+    public function __construct(
+        private readonly ?HealthSourceRegistry $healthSources = null,
+    ) {}
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
+    }
+
     /**
      * Weight hierarchy aligned with Garmin's Training Readiness documentation:
      * last night's sleep and residual recovery time are primary drivers, followed by
@@ -216,7 +226,7 @@ class TrainingReadinessService
         ?int $lastNightScore,
         string $timezone,
     ): array {
-        $priorRecords = SleepRecord::query()
+        $priorRecords = $this->healthSources()->applyScope(SleepRecord::query(), 'sleep')
             ->whereBetween('calendar_date', [
                 $selectedDate->subDays(4)->format('Y-m-d'),
                 $selectedDate->subDay()->format('Y-m-d'),
@@ -307,7 +317,7 @@ class TrainingReadinessService
      */
     private function evaluateRecentStress(CarbonImmutable $selectedDate, ?DailyMetric $dailyMetric): array
     {
-        $priorStress = DailyMetric::query()
+        $priorStress = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->whereBetween('calendar_date', [
                 $selectedDate->subDays(3)->format('Y-m-d'),
                 $selectedDate->subDay()->format('Y-m-d'),
@@ -359,7 +369,7 @@ class TrainingReadinessService
         $record = $hrvRecord;
 
         if ($record === null || ($record->status === null && $record->weekly_avg === null && $record->last_night_avg === null)) {
-            $record = HrvRecord::query()
+            $record = $this->healthSources()->applyScope(HrvRecord::query(), 'hrv')
                 ->whereBetween('calendar_date', [
                     $selectedDate->subDays(2)->format('Y-m-d'),
                     $selectedDate->format('Y-m-d'),

@@ -6,6 +6,7 @@ use App\Http\Requests\StartBackfillRequest;
 use App\Jobs\SyncGarminBackfillJob;
 use App\Jobs\SyncGarminJob;
 use App\Models\SyncRun;
+use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -16,6 +17,10 @@ use Illuminate\Http\Request;
 
 class SyncController extends Controller
 {
+    public function __construct(
+        private readonly QueueStatusService $queueStatus = new QueueStatusService,
+    ) {}
+
     public function store(Request $request): RedirectResponse|JsonResponse
     {
         if (! $this->isProviderConfigured()) {
@@ -181,7 +186,11 @@ class SyncController extends Controller
      *     items_synced: int,
      *     error_message: ?string,
      *     last_synced_at: ?string,
-     *     provider_configured: bool
+     *     provider_configured: bool,
+     *     enrichments: array{
+     *         jobs: array{default: int, streams: int, weather: int, total: int},
+     *         has_active_work: bool
+     *     }
      * }
      */
     private function buildStatusPayload(?SyncRun $latestRun): array
@@ -207,6 +216,7 @@ class SyncController extends Controller
             'error_message' => $latestRun?->error_message !== null ? (string) $latestRun->error_message : null,
             'last_synced_at' => $this->formatTimestamp($lastCompletedAt),
             'provider_configured' => $this->isProviderConfigured(),
+            'enrichments' => $this->queueStatus->activeJobs(),
         ];
     }
 

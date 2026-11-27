@@ -4,11 +4,21 @@ namespace App\Services\Health;
 
 use App\Models\DailyMetric;
 use App\Models\HrvRecord;
+use App\Support\HealthSourceRegistry;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Collection;
 
 class HealthStatusService
 {
+    public function __construct(
+        private readonly ?HealthSourceRegistry $healthSources = null,
+    ) {}
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
+    }
+
     /**
      * Evaluate whether core overnight & resting physiological metrics are within personal baselines.
      *
@@ -29,7 +39,7 @@ class HealthStatusService
         $baselineStart = $selectedDate->subDays(28)->format('Y-m-d');
         $baselineEnd = $selectedDate->subDay()->format('Y-m-d');
 
-        $history = DailyMetric::query()
+        $history = $this->healthSources()->applyScope(DailyMetric::query(), 'daily_metrics')
             ->whereBetween('calendar_date', [$baselineStart, $baselineEnd])
             ->get(['resting_hr', 'avg_respiration', 'avg_spo2']);
 
@@ -39,7 +49,7 @@ class HealthStatusService
         $effectiveHrv = $hrvRecord;
 
         if ($effectiveHrv === null || ($effectiveHrv->status === null && $effectiveHrv->last_night_avg === null)) {
-            $effectiveHrv = HrvRecord::query()
+            $effectiveHrv = $this->healthSources()->applyScope(HrvRecord::query(), 'hrv')
                 ->whereBetween('calendar_date', [
                     $selectedDate->subDays(2)->format('Y-m-d'),
                     $selectedDate->format('Y-m-d'),

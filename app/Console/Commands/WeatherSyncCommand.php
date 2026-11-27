@@ -8,7 +8,6 @@ use App\Models\SyncRun;
 use App\Services\Weather\ActivityWeatherSyncService;
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
-use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Splitline\Weather\OpenMeteoClient;
 use Throwable;
@@ -216,22 +215,7 @@ class WeatherSyncCommand extends Command
             ));
         }
 
-        $query = Activity::query()
-            ->where('is_indoor', false)
-            ->where(function (Builder $coordinateQuery): void {
-                $coordinateQuery
-                    ->where(function (Builder $startCoords): void {
-                        $startCoords
-                            ->whereNotNull('start_lat')
-                            ->whereNotNull('start_lng');
-                    })
-                    ->orWhereExists(function (QueryBuilder $streamSub): void {
-                        $streamSub
-                            ->selectRaw('1')
-                            ->from('activity_streams')
-                            ->whereColumn('activity_streams.activity_id', 'activities.id');
-                    });
-            });
+        $query = Activity::query()->withWeatherCoordinates();
 
         if ($upgradeOnly) {
             $query

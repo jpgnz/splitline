@@ -4,6 +4,7 @@ namespace App\Services\Activities;
 
 use App\Models\Activity;
 use App\Models\HeartRateZone;
+use App\Support\HealthSourceRegistry;
 use Carbon\CarbonInterface;
 
 /**
@@ -62,6 +63,15 @@ use Carbon\CarbonInterface;
  */
 class ActivityEffortService
 {
+    public function __construct(
+        private readonly ?HealthSourceRegistry $healthSources = null,
+    ) {}
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
+    }
+
     /**
      * Exponentially weighted HR-zone multipliers per minute (Z1–Z5).
      *
@@ -110,7 +120,7 @@ class ActivityEffortService
             ->orderBy('id')
             ->get();
 
-        $defaultZone = HeartRateZone::query()
+        $defaultZone = $this->healthSources()->applyScope(HeartRateZone::query(), 'heart_rate_zones')
             ->where('sport', 'DEFAULT')
             ->first(['max_hr', 'resting_hr']);
 
