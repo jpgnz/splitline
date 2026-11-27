@@ -18,6 +18,7 @@ import {
 import type { EChartsOption } from 'echarts';
 import { computed, nextTick, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart, {
     type ChartPointClickPayload,
 } from '@/components/charts/BaseChart.vue';
@@ -743,10 +744,10 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     </span>
                     <span
                         v-if="segment.fiets_score !== null"
-                        title="FIETS climb difficulty index (elevation gain, grade, and length)"
-                        class="cursor-help underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:decoration-zinc-600"
+                        class="inline-flex items-center gap-1"
                     >
-                        FIETS {{ segment.fiets_score.toFixed(2) }}
+                        <span>FIETS {{ segment.fiets_score.toFixed(2) }}</span>
+                        <InfoPopover topic="fiets" />
                     </span>
                 </div>
             </div>
@@ -866,9 +867,10 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                 class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
                 <p
-                    class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Best VAM
+                    <span>Best VAM</span>
+                    <InfoPopover topic="vam" />
                 </p>
                 <p
                     class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -890,9 +892,10 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                 class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
                 <p
-                    class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Best Power / W/kg
+                    <span>Best Power / W/kg</span>
+                    <InfoPopover topic="w_per_kg" />
                 </p>
                 <p
                     class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -1071,7 +1074,12 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                 {{ usesPace ? 'Pace' : 'Speed' }}
                             </th>
                             <th v-if="hasAnyVam" class="px-4 py-2.5 text-right">
-                                VAM
+                                <span
+                                    class="inline-flex items-center justify-end gap-1"
+                                >
+                                    <span>VAM</span>
+                                    <InfoPopover topic="vam" />
+                                </span>
                             </th>
                             <th
                                 v-if="hasAnyPower"

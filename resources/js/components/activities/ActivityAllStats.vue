@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import { formatDurationClock, formatNumber } from '@/lib/format';
+import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import { useUnits } from '@/lib/units';
 import { formatCompass } from '@/lib/wind';
 import type { ActivityDetail, ActivityWeatherPayload } from '@/types/activity';
@@ -35,6 +37,7 @@ interface StatRow {
     label: string;
     value: string;
     sub?: string | null;
+    infoTopic?: MetricGlossaryTopic;
 }
 
 interface StatGroup {
@@ -249,6 +252,7 @@ const statGroups = computed<StatGroup[]>(() => {
                     ? 'Avg Grade-Adjusted Pace'
                     : 'Avg Grade-Adjusted Speed',
             value: formatSpeedOrPace(a.avg_grade_adjusted_speed),
+            infoTopic: 'gap',
         });
     }
     if (paceRows.length > 0) {
@@ -435,22 +439,29 @@ const statGroups = computed<StatGroup[]>(() => {
         powerRows.push({
             label: 'Normalized Power',
             value: `${Math.round(a.normalized_power)} W`,
+            infoTopic: 'normalized_power',
         });
     }
     if (a.ftp !== null || a.threshold_power !== null) {
         powerRows.push({
             label: a.sport_category === 'running' ? 'Threshold Power' : 'FTP',
             value: `${Math.round((a.ftp ?? a.threshold_power)!)} W`,
+            infoTopic: 'ftp_wkg',
         });
     }
     if (a.intensity_factor !== null) {
         powerRows.push({
             label: 'Intensity Factor',
             value: a.intensity_factor.toFixed(2),
+            infoTopic: 'intensity_factor',
         });
     }
     if (a.tss !== null) {
-        powerRows.push({ label: 'TSS', value: formatNumber(a.tss, 0) });
+        powerRows.push({
+            label: 'TSS',
+            value: formatNumber(a.tss, 0),
+            infoTopic: 'tss',
+        });
     }
     if (a.max_20min_power !== null) {
         powerRows.push({
@@ -510,13 +521,18 @@ const statGroups = computed<StatGroup[]>(() => {
         (a.avg_flow !== null && a.avg_flow > 0) ||
         (a.jump_count !== null && a.jump_count > 0);
     if (a.grit !== null && a.grit > 0) {
-        mtbRows.push({ label: 'Garmin Grit', value: formatNumber(a.grit, 1) });
+        mtbRows.push({
+            label: 'Garmin Grit',
+            value: formatNumber(a.grit, 1),
+            infoTopic: 'grit_flow',
+        });
     }
     if (a.avg_flow !== null && a.avg_flow > 0) {
         mtbRows.push({
             label: 'Avg Flow',
             value: formatNumber(a.avg_flow, 1),
             sub: 'Lower is smoother',
+            infoTopic: 'grit_flow',
         });
     }
     if (a.jump_count !== null && a.jump_count > 0) {
@@ -855,6 +871,7 @@ const statGroups = computed<StatGroup[]>(() => {
             weatherRows.push({
                 label: 'Head / Cross / Tail',
                 value: `${Math.round(w.headwind_pct)}% / ${Math.round(w.crosswind_pct)}% / ${Math.round(w.tailwind_pct)}%`,
+                infoTopic: 'wind_impact',
             });
         }
 
@@ -869,6 +886,7 @@ const statGroups = computed<StatGroup[]>(() => {
                 label: 'Avg Effective Wind',
                 value: formatSignedWindKmh(w.avg_effective_wind_kmh),
                 sub: netLabel,
+                infoTopic: 'wind_impact',
             });
         }
 
@@ -996,9 +1014,13 @@ const statGroups = computed<StatGroup[]>(() => {
             >
                 <div v-for="row in group.rows" :key="row.label">
                     <dt
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        {{ row.label }}
+                        <span>{{ row.label }}</span>
+                        <InfoPopover
+                            v-if="row.infoTopic"
+                            :topic="row.infoTopic"
+                        />
                     </dt>
                     <dd
                         class="mt-0.5 font-mono text-base font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"

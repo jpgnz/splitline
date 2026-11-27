@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts';
 import { computed, ref, watch } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { formatDurationClock } from '@/lib/format';
@@ -731,34 +732,36 @@ const canRender = computed<boolean>(
                 </div>
 
                 <!-- Pace vs GAP Toggle (Running) -->
-                <div
-                    v-if="hasGap"
-                    class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-                >
-                    <button
-                        type="button"
-                        class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                        :class="
-                            paceMode === 'pace'
-                                ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                        "
-                        @click="paceMode = 'pace'"
+                <div v-if="hasGap" class="inline-flex items-center gap-1.5">
+                    <div
+                        class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
                     >
-                        Pace
-                    </button>
-                    <button
-                        type="button"
-                        class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                        :class="
-                            paceMode === 'gap'
-                                ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                        "
-                        @click="paceMode = 'gap'"
-                    >
-                        GAP
-                    </button>
+                        <button
+                            type="button"
+                            class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
+                            :class="
+                                paceMode === 'pace'
+                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                            "
+                            @click="paceMode = 'pace'"
+                        >
+                            Pace
+                        </button>
+                        <button
+                            type="button"
+                            class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
+                            :class="
+                                paceMode === 'gap'
+                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+                            "
+                            @click="paceMode = 'gap'"
+                        >
+                            GAP
+                        </button>
+                    </div>
+                    <InfoPopover topic="gap" />
                 </div>
             </div>
         </div>

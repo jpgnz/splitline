@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { Link } from '@inertiajs/vue3';
 import type { EChartsOption } from 'echarts';
-import { Info } from '@lucide/vue';
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
@@ -247,15 +247,17 @@ const trendOption = computed<EChartsOption>(() => {
                 </h2>
                 <span
                     class="inline-flex items-center gap-1 rounded border border-zinc-200/80 bg-[#f7f7f5] px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400"
-                    title="HR-zone weighted Training Impulse (TRIMP), inspired by Dr. Eric Banister's model. Portable across any heart-rate monitor."
                 >
-                    <Info class="size-2.5" />
                     {{
                         metric === 'trimp'
                             ? 'Banister HR-Zone TRIMP'
                             : 'Garmin Exercise Load'
                     }}
                 </span>
+                <InfoPopover
+                    topic="trimp"
+                    label="More info about HR Effort (TRIMP) and Exercise Load"
+                />
             </div>
 
             <div

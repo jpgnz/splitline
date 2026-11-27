@@ -13,7 +13,9 @@ import {
     Wind,
 } from '@lucide/vue';
 import { type Component, computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import { formatNumber } from '@/lib/format';
+import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import { useUnits } from '@/lib/units';
 import { formatCompass } from '@/lib/wind';
 import type {
@@ -25,6 +27,7 @@ export interface SnapshotTelemetryCell {
     label: string;
     value: string;
     sub?: string | null;
+    infoTopic?: MetricGlossaryTopic;
 }
 
 const props = withDefaults(
@@ -96,7 +99,7 @@ const showDerivedCard = computed<boolean>(
 const metricMeta = computed<{
     code: string;
     efUnit: string;
-    tooltip: string;
+    basisDescription: string;
 }>(() => {
     const metric = props.derivedMetrics?.decoupling_metric;
 
@@ -104,8 +107,7 @@ const metricMeta = computed<{
         return {
             code: 'Pw:Hr',
             efUnit: 'W/bpm',
-            tooltip:
-                'Power-to-Heart-Rate aerobic decoupling: compares watts per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+            basisDescription: 'Normalized Power ÷ Avg HR (W/bpm)',
         };
     }
 
@@ -115,16 +117,14 @@ const metricMeta = computed<{
         return {
             code: 'Pa:Hr',
             efUnit: paceEfUnit,
-            tooltip:
-                'Grade-Adjusted Pace-to-Heart-Rate aerobic decoupling: compares output per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+            basisDescription: `Grade-Adjusted Pace ÷ Avg HR (${paceEfUnit})`,
         };
     }
 
     return {
         code: 'Spd:Hr',
         efUnit: paceEfUnit,
-        tooltip:
-            'Speed-to-Heart-Rate aerobic decoupling: compares speed per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+        basisDescription: `Raw Speed ÷ Avg HR (${paceEfUnit})`,
     };
 });
 
@@ -385,14 +385,28 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     </h2>
                 </div>
 
-                <span
-                    v-if="decouplingBadge"
-                    :title="metricMeta.tooltip"
-                    class="cursor-help rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium"
-                    :class="decouplingBadge.badgeClass"
-                >
-                    {{ decouplingBadge.label }}
-                </span>
+                <div v-if="decouplingBadge" class="flex items-center gap-1">
+                    <span
+                        class="rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium"
+                        :class="decouplingBadge.badgeClass"
+                    >
+                        {{ decouplingBadge.label }}
+                    </span>
+                    <InfoPopover
+                        topic="decoupling"
+                        label="More info about Aerobic Decoupling"
+                    >
+                        <div
+                            class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1 font-mono text-[10.5px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-300"
+                        >
+                            This session uses
+                            <strong class="text-zinc-900 dark:text-zinc-100">
+                                {{ metricMeta.code }}
+                            </strong>
+                            · {{ metricMeta.basisDescription }}
+                        </div>
+                    </InfoPopover>
+                </div>
             </div>
 
             <div class="grid grid-cols-2 gap-2.5">
@@ -403,11 +417,26 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     <div
                         class="flex items-center justify-between gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        <span class="truncate">Decoupling</span>
-                        <span
-                            :title="metricMeta.tooltip"
-                            class="shrink-0 cursor-help text-zinc-400 dark:text-zinc-500"
-                        >
+                        <span class="inline-flex min-w-0 items-center gap-1">
+                            <span class="truncate">Decoupling</span>
+                            <InfoPopover
+                                topic="decoupling"
+                                label="More info about Aerobic Decoupling"
+                            >
+                                <div
+                                    class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1 font-mono text-[10.5px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-300"
+                                >
+                                    This session uses
+                                    <strong
+                                        class="text-zinc-900 dark:text-zinc-100"
+                                    >
+                                        {{ metricMeta.code }}
+                                    </strong>
+                                    · {{ metricMeta.basisDescription }}
+                                </div>
+                            </InfoPopover>
+                        </span>
+                        <span class="shrink-0 text-zinc-400 dark:text-zinc-500">
                             {{ metricMeta.code }}
                         </span>
                     </div>
@@ -449,9 +478,10 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 p-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
                 >
                     <div
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Split Pacing
+                        <span class="truncate">Split Pacing</span>
+                        <InfoPopover topic="pacing_strategy" />
                     </div>
                     <div
                         class="mt-1 font-mono text-base font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -476,9 +506,10 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 p-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
                 >
                     <div
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Efficiency Factor
+                        <span class="truncate">Efficiency Factor</span>
+                        <InfoPopover topic="efficiency_factor" />
                     </div>
                     <div
                         class="mt-1 flex items-baseline gap-1 font-mono tabular-nums"
@@ -503,10 +534,13 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     </div>
                     <div
                         v-if="derivedMetrics.pace_cv_pct !== null"
-                        class="mt-0.5 truncate font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="mt-0.5 flex items-center gap-1 font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
                     >
-                        {{ formatNumber(derivedMetrics.pace_cv_pct, 1) }}% split
-                        CV
+                        <span class="truncate">
+                            {{ formatNumber(derivedMetrics.pace_cv_pct, 1) }}%
+                            split CV
+                        </span>
+                        <InfoPopover topic="pace_cv" />
                     </div>
                 </div>
 
@@ -515,9 +549,10 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 p-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
                 >
                     <div
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        HR Intensity
+                        <span class="truncate">HR Intensity</span>
+                        <InfoPopover topic="hr_intensity_split" />
                     </div>
                     <div
                         class="mt-2.5 flex h-2 w-full overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800"
@@ -731,10 +766,13 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     <div
                         class="mt-1.5 flex items-center justify-between gap-2 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
-                        <span>
-                            {{ windImpactSegments.head }}% Head ·
-                            {{ windImpactSegments.cross }}% Cross ·
-                            {{ windImpactSegments.tail }}% Tail
+                        <span class="inline-flex items-center gap-1">
+                            <span>
+                                {{ windImpactSegments.head }}% Head ·
+                                {{ windImpactSegments.cross }}% Cross ·
+                                {{ windImpactSegments.tail }}% Tail
+                            </span>
+                            <InfoPopover topic="wind_impact" />
                         </span>
                         <span
                             v-if="netEffectiveWind"
@@ -797,9 +835,13 @@ const highlightedDisciplineCells = computed<SnapshotTelemetryCell[]>(() => {
                     class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 px-2.5 py-2 dark:border-zinc-800/70 dark:bg-zinc-900/40"
                 >
                     <div
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        {{ cell.label }}
+                        <span class="truncate">{{ cell.label }}</span>
+                        <InfoPopover
+                            v-if="cell.infoTopic"
+                            :topic="cell.infoTopic"
+                        />
                     </div>
                     <div
                         class="mt-0.5 font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"

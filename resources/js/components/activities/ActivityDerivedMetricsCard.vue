@@ -7,6 +7,7 @@ import {
     TrendingUp,
 } from '@lucide/vue';
 import { computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import { formatNumber } from '@/lib/format';
 import { useUnits } from '@/lib/units';
 import type { ActivityDerivedMetricsPayload } from '@/types/activity';
@@ -81,7 +82,7 @@ const metricMeta = computed<{
     code: string;
     efUnit: string;
     subtitle: string;
-    tooltip: string;
+    basisDescription: string;
 }>(() => {
     const metric = props.derivedMetrics?.decoupling_metric;
 
@@ -90,8 +91,7 @@ const metricMeta = computed<{
             code: 'Pw:Hr',
             efUnit: 'W/bpm',
             subtitle: 'Power vs Heart Rate',
-            tooltip:
-                'Power-to-Heart-Rate aerobic decoupling: compares watts per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+            basisDescription: 'Normalized Power ÷ Avg HR (W/bpm)',
         };
     }
 
@@ -102,8 +102,7 @@ const metricMeta = computed<{
             code: 'Pa:Hr',
             efUnit: paceEfUnit,
             subtitle: 'Grade-Adjusted Pace vs HR',
-            tooltip:
-                'Grade-Adjusted Pace-to-Heart-Rate aerobic decoupling: compares output per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+            basisDescription: `Grade-Adjusted Pace ÷ Avg HR (${paceEfUnit})`,
         };
     }
 
@@ -111,8 +110,7 @@ const metricMeta = computed<{
         code: 'Spd:Hr',
         efUnit: paceEfUnit,
         subtitle: 'Speed vs Heart Rate',
-        tooltip:
-            'Speed-to-Heart-Rate aerobic decoupling: compares speed per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+        basisDescription: `Raw Speed ÷ Avg HR (${paceEfUnit})`,
     };
 });
 
@@ -303,13 +301,25 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
             >
                 <div class="flex items-center justify-between gap-2">
                     <span
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Aerobic Decoupling
+                        <span>Aerobic Decoupling</span>
+                        <InfoPopover topic="decoupling">
+                            <div
+                                class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1 font-mono text-[10.5px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-300"
+                            >
+                                This session uses
+                                <strong
+                                    class="text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{ metricMeta.code }}
+                                </strong>
+                                · {{ metricMeta.basisDescription }}
+                            </div>
+                        </InfoPopover>
                     </span>
                     <span
-                        :title="metricMeta.tooltip"
-                        class="cursor-help rounded bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 underline decoration-zinc-400/70 decoration-dotted underline-offset-2 dark:bg-zinc-800 dark:text-zinc-300"
+                        class="rounded bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                     >
                         {{ metricMeta.code }}
                     </span>
@@ -368,9 +378,10 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
             >
                 <div class="flex items-center justify-between gap-2">
                     <span
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Efficiency Factor
+                        <span>Efficiency Factor</span>
+                        <InfoPopover topic="efficiency_factor" />
                     </span>
                     <Gauge class="size-3.5 text-zinc-400 dark:text-zinc-500" />
                 </div>
@@ -407,9 +418,10 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
             >
                 <div class="flex items-center justify-between gap-2">
                     <span
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Split Pacing
+                        <span>Split Pacing</span>
+                        <InfoPopover topic="pacing_strategy" />
                     </span>
                     <span
                         v-if="pacingBadge"
@@ -432,8 +444,7 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                     class="mt-1.5 flex flex-wrap items-baseline gap-x-2 tabular-nums"
                 >
                     <span
-                        title="Ratio of 2nd-half speed to 1st-half speed (>1.000× = negative split, faster 2nd half)"
-                        class="cursor-help font-mono text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        class="font-mono text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                     >
                         {{
                             derivedMetrics.split_ratio !== null
@@ -454,15 +465,13 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                 </div>
                 <div
                     v-if="derivedMetrics.pace_cv_pct !== null"
-                    class="mt-1 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
+                    class="mt-1 flex items-center gap-1 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
-                    <span
-                        title="Coefficient of Variation of split paces — lower means steadier, more even pacing"
-                        class="cursor-help underline decoration-zinc-400/70 decoration-dotted underline-offset-2"
-                    >
-                        {{ formatNumber(derivedMetrics.pace_cv_pct, 1) }}% CV
+                    <span>
+                        {{ formatNumber(derivedMetrics.pace_cv_pct, 1) }}% CV ·
+                        Split pace variability
                     </span>
-                    <span> · Split pace variability</span>
+                    <InfoPopover topic="pace_cv" />
                 </div>
             </div>
 
@@ -473,9 +482,10 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
             >
                 <div class="flex items-center justify-between gap-2">
                     <span
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        HR Intensity Split
+                        <span>HR Intensity Split</span>
+                        <InfoPopover topic="hr_intensity_split" />
                     </span>
                     <HeartPulse
                         class="size-3.5 text-rose-500/80 dark:text-rose-400/80"

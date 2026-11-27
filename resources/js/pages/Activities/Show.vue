@@ -16,6 +16,8 @@ import {
     X,
 } from '@lucide/vue';
 import { computed, ref, watch } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
+import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import {
     syncWeather,
     toggleFavorite as toggleFavoriteAction,
@@ -356,6 +358,7 @@ const primaryKpis = computed<
         sub: string | null;
         accentClass?: string;
         accentHex?: string;
+        infoTopic?: MetricGlossaryTopic;
     }>
 >(() => {
     const a = props.activity;
@@ -454,6 +457,7 @@ const primaryKpis = computed<
                         : `Load ${formatNumber(a.training_load, 0)}`
                     : teLabel,
             accentClass: 'bg-indigo-500',
+            infoTopic: 'trimp',
         },
     ];
 });
@@ -463,6 +467,7 @@ interface TelemetryCell {
     label: string;
     value: string;
     sub?: string | null;
+    infoTopic?: MetricGlossaryTopic;
 }
 
 function appendCommonPerformanceCells(
@@ -519,6 +524,7 @@ function appendCommonPerformanceCells(
                     ? `${a.body_battery_diff > 0 ? '+' : ''}${a.body_battery_diff}`
                     : range,
             sub: a.body_battery_diff !== null ? range : null,
+            infoTopic: 'body_battery',
         });
     }
 }
@@ -656,6 +662,7 @@ const disciplineTelemetryCells = computed<TelemetryCell[]>(() => {
                     a.intensity_factor !== null
                         ? `IF ${a.intensity_factor.toFixed(2)}`
                         : null,
+                infoTopic: 'normalized_power',
             });
         }
 
@@ -664,6 +671,7 @@ const disciplineTelemetryCells = computed<TelemetryCell[]>(() => {
                 label: 'TSS / FTP',
                 value: a.tss !== null ? formatNumber(a.tss, 0) : '—',
                 sub: a.ftp !== null ? `FTP ${Math.round(a.ftp)} W` : null,
+                infoTopic: 'tss',
             });
         }
 
@@ -688,6 +696,7 @@ const disciplineTelemetryCells = computed<TelemetryCell[]>(() => {
                 label: 'Garmin Grit',
                 value: formatNumber(a.grit, 1),
                 sub: 'Trail difficulty',
+                infoTopic: 'grit_flow',
             });
         }
 
@@ -696,6 +705,7 @@ const disciplineTelemetryCells = computed<TelemetryCell[]>(() => {
                 label: 'Avg Flow',
                 value: formatNumber(a.avg_flow, 1),
                 sub: 'Lower is smoother',
+                infoTopic: 'grit_flow',
             });
         }
 
@@ -1380,9 +1390,10 @@ const tabs = computed<
                     "
                 />
                 <div
-                    class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    {{ kpi.label }}
+                    <span class="truncate">{{ kpi.label }}</span>
+                    <InfoPopover v-if="kpi.infoTopic" :topic="kpi.infoTopic" />
                 </div>
                 <div
                     class="mt-1 text-lg font-semibold tracking-tight text-zinc-900 tabular-nums sm:text-xl dark:text-zinc-100"
@@ -1707,9 +1718,13 @@ const tabs = computed<
                         class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 px-3 py-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
                     >
                         <div
-                            class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            {{ cell.label }}
+                            <span class="truncate">{{ cell.label }}</span>
+                            <InfoPopover
+                                v-if="cell.infoTopic"
+                                :topic="cell.infoTopic"
+                            />
                         </div>
                         <div
                             class="mt-1 font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
