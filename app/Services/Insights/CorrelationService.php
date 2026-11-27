@@ -9,6 +9,7 @@ use App\Models\SleepRecord;
 use App\Support\DateWindowResolver;
 use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
+use App\Support\Statistics;
 use Carbon\CarbonImmutable;
 use stdClass;
 
@@ -31,6 +32,8 @@ use stdClass;
  * @phpstan-type CorrelationStat array{
  *     r: ?float,
  *     n: int,
+ *     p_value: ?float,
+ *     significant: bool,
  *     strength: ?string
  * }
  * @phpstan-type PerformanceBucket array{
@@ -156,7 +159,10 @@ use stdClass;
  * }
  * @phpstan-type CorrelationSummary array{
  *     total_activities: int,
+ *     training_days: int,
  *     with_derived_metrics: int,
+ *     ef_metric: ?string,
+ *     ef_excluded_sessions: int,
  *     with_sleep: int,
  *     with_hrv: int,
  *     with_weather: int,
@@ -229,7 +235,26 @@ use stdClass;
  */
 class CorrelationService
 {
-    private const int MIN_CORRELATION_SAMPLES = 5;
+    /** Minimum paired observations before a Pearson r (and its p-value) is reported. */
+    private const int MIN_CORRELATION_SAMPLES = 10;
+
+    /** Two-sided significance level required before directional or strength wording is used. */
+    private const float SIGNIFICANCE_LEVEL = 0.05;
+
+    /** Minimum observations an analysis needs before any takeaway sentence is produced. */
+    private const int MIN_TAKEAWAY_SAMPLES = 5;
+
+    /** Minimum observations per bucket before it can headline or be compared against another bucket. */
+    private const int MIN_BUCKET_SAMPLES = 3;
+
+    /** Minimum prior nights required for the 28-day rolling HRV baseline fallback. */
+    private const int MIN_ROLLING_BASELINE_NIGHTS = 5;
+
+    /** Nights before the target night used for the trailing HRV baseline. */
+    private const int HRV_TRAILING_BASELINE_NIGHTS = 7;
+
+    /** Minimum prior nights required for the trailing HRV baseline. */
+    private const int MIN_HRV_TRAILING_NIGHTS = 3;
 
     private const int MAX_SCATTER_POINTS = 250;
 
@@ -290,8 +315,15 @@ class CorrelationService
     /** @var array<string, string> */
     private const array RECOVERY_TIME_BUCKETS = [
         'morning' => 'Morning (<12:00)',
-        'afternoon' => 'Afternoon (12:00–17:00)',
-        'evening' => 'Evening (17:00+)',
+        'afternoon' => 'Afternoon (12:00–18:00)',
+        'evening' => 'Evening (18:00+)',
+    ];
+
+    /** @var array<string, int> */
+    private const array INTENSITY_RANK = [
+        'easy' => 0,
+        'moderate' => 1,
+        'hard' => 2,
     ];
 
     /** @var array<string, string> */
@@ -325,10 +357,15 @@ class CorrelationService
         private readonly SportRegistry $sports,
         private readonly DateWindowResolver $dateWindows,
         private readonly HealthSourceRegistry $healthSources,
+        private readonly Statistics $statistics,
     ) {}
 
     /**
      * Build the full Health ↔ Performance Correlation Explorer payload.
+     *
+     * Day-level health telemetry (sleep, HRV, RHR) is matched against one row per calendar day so
+     * that multi-session days do not count the same night twice. Efficiency Factor is restricted
+     * to a single output basis (power vs speed) because W/bpm and m/min/bpm are not comparable.
      *
      * @return CorrelationPayload
      */
@@ -353,11 +390,14 @@ class CorrelationService
                 'activities.name',
                 'activities.started_at_local',
                 'activities.distance_meters',
+                'activities.duration_seconds',
+                'activities.moving_duration_seconds',
                 'activities.avg_speed',
                 'activities.avg_hr',
                 'activities.training_load',
                 'activities.tss',
                 'activity_derived_metrics.efficiency_factor as adm_efficiency_factor',
+                'activity_derived_metrics.decoupling_metric as adm_decoupling_metric',
                 'activity_derived_metrics.decoupling_pct as adm_decoupling_pct',
                 'activity_derived_metrics.hr_high_pct as adm_hr_high_pct',
                 'activity_weathers.temperature_c as aw_temperature_c',
@@ -413,6 +453,11 @@ class CorrelationService
                 $maxDate = $localDate;
             }
 
+            $trainingLoad = $this->toPositiveFloat($row->training_load ?? null);
+            $tss = $this->toPositiveFloat($row->tss ?? null);
+            $hrHighPct = $this->toFloat($row->adm_hr_high_pct ?? null);
+            $effectiveLoad = $tss ?? $trainingLoad;
+
             $parsedRows[] = [
                 'id' => (int) $row->id,
                 'name' => is_string($row->name ?? null) ? $row->name : 'Activity',
@@ -422,13 +467,17 @@ class CorrelationService
                 'hour_decimal' => round($startedAt->hour + ($startedAt->minute / 60.0), 2),
                 'day_of_week_iso' => $startedAt->dayOfWeekIso,
                 'distance_meters' => $this->toFloat($row->distance_meters ?? null) ?? 0.0,
+                'duration_seconds' => $this->toPositiveFloat($row->moving_duration_seconds ?? null)
+                    ?? $this->toPositiveFloat($row->duration_seconds ?? null)
+                    ?? 0.0,
                 'avg_speed' => $this->toPositiveFloat($row->avg_speed ?? null),
                 'avg_hr' => $this->toPositiveInt($row->avg_hr ?? null),
-                'training_load' => $this->toPositiveFloat($row->training_load ?? null),
-                'tss' => $this->toPositiveFloat($row->tss ?? null),
+                'effective_load' => $effectiveLoad,
+                'hr_high_pct' => $hrHighPct,
+                'intensity' => $this->classifyWorkoutIntensity($effectiveLoad, $hrHighPct),
                 'efficiency_factor' => $this->toPositiveFloat($row->adm_efficiency_factor ?? null),
+                'ef_basis' => $this->efBasis($row->adm_decoupling_metric ?? null),
                 'decoupling_pct' => $this->toFloat($row->adm_decoupling_pct ?? null),
-                'hr_high_pct' => $this->toFloat($row->adm_hr_high_pct ?? null),
                 'temperature_c' => $this->toFloat($row->aw_temperature_c ?? null),
                 'dew_point_c' => $this->toFloat($row->aw_dew_point_c ?? null),
                 'apparent_temperature_c' => $this->toFloat($row->aw_apparent_temperature_c ?? null),
@@ -447,6 +496,10 @@ class CorrelationService
             );
         }
 
+        [$parsedRows, $efMetric, $efExcludedSessions] = $this->restrictEfToDominantBasis($parsedRows);
+        $primaryDailySessions = $this->collapseToPrimaryDailySessions($parsedRows);
+        $trainingDays = $this->collapseToTrainingDays($parsedRows);
+
         $maxDatePlusOne = CarbonImmutable::parse($maxDate, $timezone)->addDay()->format('Y-m-d');
         $hrvLookbackStart = CarbonImmutable::parse($minDate, $timezone)->subDays(28)->format('Y-m-d');
 
@@ -454,11 +507,10 @@ class CorrelationService
         $hrvByDate = $this->loadHrvRecords($hrvLookbackStart, $maxDatePlusOne);
         $dailyByDate = $this->loadDailyMetrics($minDate, $maxDate);
 
-        // Compute the 5 analyses
-        $sleepAnalysis = $this->computeSleepAnalysis($parsedRows, $sleepByDate);
-        $hrvAnalysis = $this->computeHrvAnalysis($parsedRows, $hrvByDate, $dailyByDate, $timezone);
+        $sleepAnalysis = $this->computeSleepAnalysis($primaryDailySessions, $sleepByDate);
+        $hrvAnalysis = $this->computeHrvAnalysis($primaryDailySessions, $hrvByDate, $dailyByDate, $timezone);
         $weatherAnalysis = $this->computeWeatherAnalysis($parsedRows);
-        $recoveryAnalysis = $this->computeWorkoutToRecoveryAnalysis($parsedRows, $sleepByDate, $hrvByDate);
+        $recoveryAnalysis = $this->computeWorkoutToRecoveryAnalysis($trainingDays, $sleepByDate, $hrvByDate, $timezone);
         $scheduleAnalysis = $this->computeSchedulePatterns($parsedRows);
 
         $withDerivedMetrics = 0;
@@ -493,7 +545,10 @@ class CorrelationService
             'has_data' => true,
             'summary' => [
                 'total_activities' => count($parsedRows),
+                'training_days' => count($primaryDailySessions),
                 'with_derived_metrics' => $withDerivedMetrics,
+                'ef_metric' => $efMetric,
+                'ef_excluded_sessions' => $efExcludedSessions,
                 'with_sleep' => $sleepAnalysis['n'],
                 'with_hrv' => $hrvAnalysis['n'],
                 'with_weather' => $weatherAnalysis['n'],
@@ -510,47 +565,171 @@ class CorrelationService
     }
 
     /**
-     * Compute Pearson product-moment correlation coefficient when n >= 5 and variance is non-zero.
-     *
-     * @param  list<float>  $xs
-     * @param  list<float>  $ys
+     * Map a derived-metric output basis onto its Efficiency Factor unit family: power-based EF is
+     * W/bpm while speed- and GAP-based EF are both (m/min)/bpm.
      */
-    public function pearsonR(array $xs, array $ys): ?float
+    private function efBasis(mixed $decouplingMetric): ?string
     {
-        $n = count($xs);
-
-        if ($n < self::MIN_CORRELATION_SAMPLES || $n !== count($ys)) {
-            return null;
-        }
-
-        $meanX = array_sum($xs) / $n;
-        $meanY = array_sum($ys) / $n;
-
-        $sumXY = 0.0;
-        $sumX2 = 0.0;
-        $sumY2 = 0.0;
-
-        for ($i = 0; $i < $n; $i++) {
-            $dx = $xs[$i] - $meanX;
-            $dy = $ys[$i] - $meanY;
-            $sumXY += $dx * $dy;
-            $sumX2 += $dx * $dx;
-            $sumY2 += $dy * $dy;
-        }
-
-        $denominator = sqrt($sumX2 * $sumY2);
-
-        if ($denominator <= 1e-12) {
-            return null;
-        }
-
-        $r = max(-1.0, min(1.0, $sumXY / $denominator));
-
-        return round($r, 3);
+        return match ($decouplingMetric) {
+            'power' => 'power',
+            'speed', 'gap' => 'speed',
+            default => null,
+        };
     }
 
     /**
-     * Analysis 1: Sleep duration & score vs. same-day performance.
+     * Keep Efficiency Factor only for sessions sharing the dominant output basis (power vs speed),
+     * because pooling W/bpm with (m/min)/bpm turns every EF comparison into a sport-mix artefact.
+     * Decoupling is a dimensionless drift percentage and stays pooled.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return array{0: list<array<string, mixed>>, 1: ?string, 2: int}
+     */
+    private function restrictEfToDominantBasis(array $rows): array
+    {
+        $basisCounts = ['power' => 0, 'speed' => 0];
+
+        foreach ($rows as $row) {
+            if ($row['efficiency_factor'] !== null && is_string($row['ef_basis'])) {
+                $basisCounts[$row['ef_basis']]++;
+            }
+        }
+
+        if ($basisCounts['power'] === 0 && $basisCounts['speed'] === 0) {
+            return [$rows, null, 0];
+        }
+
+        $dominantBasis = $basisCounts['power'] >= $basisCounts['speed'] ? 'power' : 'speed';
+        $excluded = 0;
+
+        foreach ($rows as $index => $row) {
+            if ($row['efficiency_factor'] !== null && $row['ef_basis'] !== $dominantBasis) {
+                $rows[$index]['efficiency_factor'] = null;
+                $excluded++;
+            }
+        }
+
+        return [$rows, $dominantBasis, $excluded];
+    }
+
+    /**
+     * Reduce sessions to one primary session per calendar day so that day-level health readings
+     * (one sleep/HRV/RHR value per night) are not replicated across multi-session days. The primary
+     * session is the longest one with derived aerobic metrics, falling back to the longest overall.
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array<string, mixed>>
+     */
+    private function collapseToPrimaryDailySessions(array $rows): array
+    {
+        /** @var array<string, array<string, mixed>> $byDate */
+        $byDate = [];
+
+        foreach ($rows as $row) {
+            /** @var string $date */
+            $date = $row['date'];
+            $current = $byDate[$date] ?? null;
+
+            if ($current === null || $this->primarySessionScore($row) > $this->primarySessionScore($current)) {
+                $byDate[$date] = $row;
+            }
+        }
+
+        return array_values($byDate);
+    }
+
+    /**
+     * @param  array<string, mixed>  $row
+     * @return array{0: int, 1: float, 2: float}
+     */
+    private function primarySessionScore(array $row): array
+    {
+        $hasDerived = $row['efficiency_factor'] !== null || $row['decoupling_pct'] !== null;
+
+        return [
+            $hasDerived ? 1 : 0,
+            (float) $row['duration_seconds'],
+            (float) $row['distance_meters'],
+        ];
+    }
+
+    /**
+     * Reduce sessions to one training-day row for next-night recovery matching. The day's load is the
+     * sum of every session's load, intensity uses that total and the highest high-HR share, and the
+     * start time is taken from the day's hardest session (ties favour the later start, which sits
+     * closest to the night being measured).
+     *
+     * @param  list<array<string, mixed>>  $rows
+     * @return list<array{date: string, next_date: string, hour: int, hour_decimal: float, effective_load: ?float, intensity: string}>
+     */
+    private function collapseToTrainingDays(array $rows): array
+    {
+        /** @var array<string, list<array<string, mixed>>> $sessionsByDate */
+        $sessionsByDate = [];
+
+        foreach ($rows as $row) {
+            /** @var string $date */
+            $date = $row['date'];
+            $sessionsByDate[$date][] = $row;
+        }
+
+        $days = [];
+
+        foreach ($sessionsByDate as $date => $sessions) {
+            $hardest = null;
+            $totalLoad = null;
+            $maxHrHighPct = null;
+
+            foreach ($sessions as $session) {
+                /** @var ?float $load */
+                $load = $session['effective_load'];
+                /** @var ?float $hrHighPct */
+                $hrHighPct = $session['hr_high_pct'];
+
+                if ($load !== null) {
+                    $totalLoad = ($totalLoad ?? 0.0) + $load;
+                }
+
+                if ($hrHighPct !== null) {
+                    $maxHrHighPct = max($maxHrHighPct ?? $hrHighPct, $hrHighPct);
+                }
+
+                if ($hardest === null || $this->sessionHardnessScore($session) >= $this->sessionHardnessScore($hardest)) {
+                    $hardest = $session;
+                }
+            }
+
+            /** @var array<string, mixed> $hardest */
+            $days[] = [
+                'date' => $date,
+                'next_date' => (string) $hardest['next_date'],
+                'hour' => (int) $hardest['hour'],
+                'hour_decimal' => (float) $hardest['hour_decimal'],
+                'effective_load' => $totalLoad,
+                'intensity' => $this->classifyWorkoutIntensity($totalLoad, $maxHrHighPct),
+            ];
+        }
+
+        return $days;
+    }
+
+    /**
+     * @param  array<string, mixed>  $session
+     * @return array{0: int, 1: float}
+     */
+    private function sessionHardnessScore(array $session): array
+    {
+        /** @var string $intensity */
+        $intensity = $session['intensity'];
+
+        return [
+            self::INTENSITY_RANK[$intensity] ?? 0,
+            (float) ($session['effective_load'] ?? 0.0),
+        ];
+    }
+
+    /**
+     * Analysis 1: Sleep duration & score vs. same-day performance (one primary session per day).
      *
      * @param  list<array<string, mixed>>  $rows
      * @param  array<string, array{sleep_seconds: ?int, deep_seconds: ?int, sleep_score: ?int}>  $sleepByDate
@@ -586,6 +765,8 @@ class CorrelationService
         $hoursEfX = [];
         /** @var list<float> $hoursEfY */
         $hoursEfY = [];
+        /** @var array<string, list<float>> $durationEfSamples */
+        $durationEfSamples = [];
 
         $matchedCount = 0;
 
@@ -632,6 +813,7 @@ class CorrelationService
                 if ($ef !== null) {
                     $hoursEfX[] = $sleepHours;
                     $hoursEfY[] = $ef;
+                    $durationEfSamples[$durationKey][] = $ef;
                 }
             }
 
@@ -665,7 +847,7 @@ class CorrelationService
         $hoursVsDec = $this->buildCorrelationStat($hoursDecX, $hoursDecY);
         $hoursVsEf = $this->buildCorrelationStat($hoursEfX, $hoursEfY);
 
-        $takeaway = $this->buildSleepTakeaway($matchedCount, $durationBuckets, $scoreVsEf, $hoursVsDec);
+        $takeaway = $this->buildSleepTakeaway($matchedCount, $durationBuckets, $durationEfSamples, $scoreVsEf, $hoursVsDec);
 
         return [
             'n' => $matchedCount,
@@ -682,7 +864,7 @@ class CorrelationService
     }
 
     /**
-     * Analysis 2: HRV status, baseline balance, and resting HR vs. performance.
+     * Analysis 2: HRV status, baseline balance, and resting HR vs. performance (one primary session per day).
      *
      * @param  list<array<string, mixed>>  $rows
      * @param  array<string, array{last_night_avg: ?int, weekly_avg: ?int, status: ?string, baseline_balanced_low: ?int, baseline_balanced_upper: ?int}>  $hrvByDate
@@ -723,6 +905,10 @@ class CorrelationService
         $rhrEfX = [];
         /** @var list<float> $rhrEfY */
         $rhrEfY = [];
+        /** @var array<string, list<float>> $statusEfSamples */
+        $statusEfSamples = [];
+        /** @var array<string, list<float>> $baselineEfSamples */
+        $baselineEfSamples = [];
 
         $matchedCount = 0;
 
@@ -764,6 +950,10 @@ class CorrelationService
 
             if ($statusKey !== null) {
                 $this->pushHrvSample($statusAcc[$statusKey], $ef, $decoupling, $avgHr, $hrvVal, $rhrVal);
+
+                if ($ef !== null) {
+                    $statusEfSamples[$statusKey][] = $ef;
+                }
             }
 
             $baselineKey = $hrvRecord !== null && $hrvVal !== null
@@ -772,6 +962,10 @@ class CorrelationService
 
             if ($baselineKey !== null) {
                 $this->pushHrvSample($baselineAcc[$baselineKey], $ef, $decoupling, $avgHr, $hrvVal, $rhrVal);
+
+                if ($ef !== null) {
+                    $baselineEfSamples[$baselineKey][] = $ef;
+                }
             }
 
             if ($hrvVal !== null) {
@@ -809,7 +1003,15 @@ class CorrelationService
         $hrvVsDec = $this->buildCorrelationStat($hrvDecX, $hrvDecY);
         $rhrVsEf = $this->buildCorrelationStat($rhrEfX, $rhrEfY);
 
-        $takeaway = $this->buildHrvTakeaway($matchedCount, $statusBuckets, $baselineBuckets, $hrvVsEf, $hrvVsDec);
+        $takeaway = $this->buildHrvTakeaway(
+            $matchedCount,
+            $statusBuckets,
+            $statusEfSamples,
+            $baselineBuckets,
+            $baselineEfSamples,
+            $hrvVsEf,
+            $hrvVsDec,
+        );
 
         return [
             'n' => $matchedCount,
@@ -894,6 +1096,8 @@ class CorrelationService
         $tempDecX = [];
         /** @var list<float> $tempDecY */
         $tempDecY = [];
+        /** @var array<string, list<float>> $tempEfSamples */
+        $tempEfSamples = [];
 
         $tempCount = 0;
         $windCount = 0;
@@ -930,6 +1134,7 @@ class CorrelationService
                     $tempAcc[$tempKey]['ef_count']++;
                     $tempEfX[] = $tempC;
                     $tempEfY[] = $ef;
+                    $tempEfSamples[$tempKey][] = $ef;
                 }
 
                 if ($decoupling !== null) {
@@ -1031,7 +1236,7 @@ class CorrelationService
 
         $tempVsEf = $this->buildCorrelationStat($tempEfX, $tempEfY);
         $tempVsDec = $this->buildCorrelationStat($tempDecX, $tempDecY);
-        $takeaway = $this->buildWeatherTakeaway($tempCount, $temperatureBuckets, $tempVsEf, $tempVsDec);
+        $takeaway = $this->buildWeatherTakeaway($tempCount, $temperatureBuckets, $tempEfSamples, $tempVsEf, $tempVsDec);
 
         return [
             'n' => $tempCount,
@@ -1049,8 +1254,9 @@ class CorrelationService
 
     /**
      * Analysis 4: Workout start time & intensity vs. following night's (date + 1) Sleep & HRV recovery.
+     * Each training day contributes once; HRV delta compares the night against the trailing nights before it.
      *
-     * @param  list<array<string, mixed>>  $rows
+     * @param  list<array{date: string, next_date: string, hour: int, hour_decimal: float, effective_load: ?float, intensity: string}>  $trainingDays
      * @param  array<string, array{sleep_seconds: ?int, deep_seconds: ?int, sleep_score: ?int}>  $sleepByDate
      * @param  array<string, array{last_night_avg: ?int, weekly_avg: ?int, status: ?string, baseline_balanced_low: ?int, baseline_balanced_upper: ?int}>  $hrvByDate
      * @return array{
@@ -1067,9 +1273,10 @@ class CorrelationService
      * }
      */
     private function computeWorkoutToRecoveryAnalysis(
-        array $rows,
+        array $trainingDays,
         array $sleepByDate,
         array $hrvByDate,
+        string $timezone,
     ): array {
         $timeAcc = $this->initRecoveryAccumulators(self::RECOVERY_TIME_BUCKETS);
         $intensityAcc = $this->initRecoveryAccumulators(self::INTENSITY_BUCKETS);
@@ -1109,12 +1316,15 @@ class CorrelationService
         $loadHrvDeltaX = [];
         /** @var list<float> $loadHrvDeltaY */
         $loadHrvDeltaY = [];
+        /** @var array<string, list<float>> $timeHrvDeltaSamples */
+        $timeHrvDeltaSamples = [];
+        /** @var array<string, list<float>> $cellHrvDeltaSamples */
+        $cellHrvDeltaSamples = [];
 
         $matchedCount = 0;
 
-        foreach ($rows as $item) {
-            /** @var string $nextDate */
-            $nextDate = $item['next_date'];
+        foreach ($trainingDays as $day) {
+            $nextDate = $day['next_date'];
             $nextSleep = $sleepByDate[$nextDate] ?? null;
             $nextHrv = $hrvByDate[$nextDate] ?? null;
 
@@ -1127,8 +1337,11 @@ class CorrelationService
             $hrvVal = ($nextHrv !== null && $nextHrv['last_night_avg'] !== null && $nextHrv['last_night_avg'] > 0)
                 ? $nextHrv['last_night_avg']
                 : null;
-            $hrvDelta = ($hrvVal !== null && $nextHrv['weekly_avg'] !== null && $nextHrv['weekly_avg'] > 0)
-                ? (float) ($hrvVal - $nextHrv['weekly_avg'])
+            $trailingBaseline = $hrvVal !== null
+                ? $this->trailingHrvBaseline($nextDate, $hrvByDate, $timezone)
+                : null;
+            $hrvDelta = ($hrvVal !== null && $trailingBaseline !== null)
+                ? round($hrvVal - $trailingBaseline, 2)
                 : null;
 
             if ($sleepScore === null && $deepMinutes === null && $hrvVal === null) {
@@ -1137,19 +1350,11 @@ class CorrelationService
 
             $matchedCount++;
 
-            /** @var int $hour */
-            $hour = $item['hour'];
-            /** @var float $hourDecimal */
-            $hourDecimal = $item['hour_decimal'];
-            /** @var ?float $trainingLoad */
-            $trainingLoad = $item['training_load'];
-            /** @var ?float $tss */
-            $tss = $item['tss'];
-            /** @var ?float $hrHighPct */
-            $hrHighPct = $item['hr_high_pct'];
+            $hourDecimal = $day['hour_decimal'];
+            $effectiveLoad = $day['effective_load'];
 
-            $timeKey = $this->classifyRecoveryTimeSlot($hour);
-            $intensityKey = $this->classifyWorkoutIntensity($trainingLoad, $tss, $hrHighPct);
+            $timeKey = $this->classifyRecoveryTimeSlot($day['hour']);
+            $intensityKey = $day['intensity'];
             $cellKey = "{$timeKey}:{$intensityKey}";
 
             $this->pushRecoverySample($timeAcc[$timeKey], $sleepScore, $deepMinutes, $hrvVal, $hrvDelta);
@@ -1159,8 +1364,8 @@ class CorrelationService
             if ($hrvDelta !== null) {
                 $hourHrvDeltaX[] = $hourDecimal;
                 $hourHrvDeltaY[] = $hrvDelta;
-
-                $effectiveLoad = $tss ?? $trainingLoad;
+                $timeHrvDeltaSamples[$timeKey][] = $hrvDelta;
+                $cellHrvDeltaSamples[$cellKey][] = $hrvDelta;
 
                 if ($effectiveLoad !== null) {
                     $loadHrvDeltaX[] = $effectiveLoad;
@@ -1206,7 +1411,15 @@ class CorrelationService
         $hourVsSleep = $this->buildCorrelationStat($hourSleepX, $hourSleepY);
         $loadVsHrvDelta = $this->buildCorrelationStat($loadHrvDeltaX, $loadHrvDeltaY);
 
-        $takeaway = $this->buildRecoveryTakeaway($matchedCount, $byTimeOfDay, $matrix, $hourVsHrvDelta, $hourVsSleep);
+        $takeaway = $this->buildRecoveryTakeaway(
+            $matchedCount,
+            $byTimeOfDay,
+            $timeHrvDeltaSamples,
+            $matrix,
+            $cellHrvDeltaSamples,
+            $hourVsHrvDelta,
+            $hourVsSleep,
+        );
 
         return [
             'n' => $matchedCount,
@@ -1243,6 +1456,8 @@ class CorrelationService
 
         $dayAcc = $this->initScheduleAccumulators($dayLabels);
         $timeAcc = $this->initScheduleAccumulators(self::SCHEDULE_TIME_BUCKETS);
+        /** @var array<string, list<float>> $timeEfSamples */
+        $timeEfSamples = [];
 
         foreach ($rows as $item) {
             /** @var int $dowIso */
@@ -1266,13 +1481,17 @@ class CorrelationService
 
             $this->pushScheduleSample($dayAcc[$dayKey], $distance, $ef, $decoupling, $avgHr, $avgSpeed);
             $this->pushScheduleSample($timeAcc[$timeKey], $distance, $ef, $decoupling, $avgHr, $avgSpeed);
+
+            if ($ef !== null) {
+                $timeEfSamples[$timeKey][] = $ef;
+            }
         }
 
         $byDayOfWeek = $this->finalizeScheduleBuckets($dayAcc);
         $byTimeOfDay = $this->finalizeScheduleBuckets($timeAcc);
         $totalCount = count($rows);
 
-        $takeaway = $this->buildScheduleTakeaway($totalCount, $byDayOfWeek, $byTimeOfDay);
+        $takeaway = $this->buildScheduleTakeaway($totalCount, $byDayOfWeek, $byTimeOfDay, $timeEfSamples);
 
         return [
             'n' => $totalCount,
@@ -1472,23 +1691,10 @@ class CorrelationService
             return 'in_baseline';
         }
 
-        $cursor = CarbonImmutable::parse($date, $timezone)->subDays(28);
-        $endDay = CarbonImmutable::parse($date, $timezone)->subDay();
-        $priorValues = [];
-
-        while ($cursor->lessThanOrEqualTo($endDay)) {
-            $priorRecord = $hrvByDate[$cursor->format('Y-m-d')] ?? null;
-
-            if ($priorRecord !== null && $priorRecord['last_night_avg'] !== null && $priorRecord['last_night_avg'] > 0) {
-                $priorValues[] = (float) $priorRecord['last_night_avg'];
-            }
-
-            $cursor = $cursor->addDay();
-        }
-
+        $priorValues = $this->priorHrvValues($date, $hrvByDate, 28, $timezone);
         $priorCount = count($priorValues);
 
-        if ($priorCount >= self::MIN_CORRELATION_SAMPLES) {
+        if ($priorCount >= self::MIN_ROLLING_BASELINE_NIGHTS) {
             $mean = array_sum($priorValues) / $priorCount;
             $varianceSum = 0.0;
 
@@ -1525,6 +1731,45 @@ class CorrelationService
         }
 
         return null;
+    }
+
+    /**
+     * Mean overnight HRV across the nights strictly before `$date`, so the night being evaluated does
+     * not dilute its own baseline (Garmin's `weekly_avg` already includes that night).
+     *
+     * @param  array<string, array{last_night_avg: ?int, weekly_avg: ?int, status: ?string, baseline_balanced_low: ?int, baseline_balanced_upper: ?int}>  $hrvByDate
+     */
+    private function trailingHrvBaseline(string $date, array $hrvByDate, string $timezone): ?float
+    {
+        $priorValues = $this->priorHrvValues($date, $hrvByDate, self::HRV_TRAILING_BASELINE_NIGHTS, $timezone);
+
+        if (count($priorValues) < self::MIN_HRV_TRAILING_NIGHTS) {
+            return null;
+        }
+
+        return array_sum($priorValues) / count($priorValues);
+    }
+
+    /**
+     * Overnight HRV readings for the `$nights` calendar days immediately before `$date`.
+     *
+     * @param  array<string, array{last_night_avg: ?int, weekly_avg: ?int, status: ?string, baseline_balanced_low: ?int, baseline_balanced_upper: ?int}>  $hrvByDate
+     * @return list<float>
+     */
+    private function priorHrvValues(string $date, array $hrvByDate, int $nights, string $timezone): array
+    {
+        $anchor = CarbonImmutable::parse($date, $timezone)->startOfDay();
+        $values = [];
+
+        for ($offset = $nights; $offset >= 1; $offset--) {
+            $priorRecord = $hrvByDate[$anchor->subDays($offset)->format('Y-m-d')] ?? null;
+
+            if ($priorRecord !== null && $priorRecord['last_night_avg'] !== null && $priorRecord['last_night_avg'] > 0) {
+                $values[] = (float) $priorRecord['last_night_avg'];
+            }
+        }
+
+        return $values;
     }
 
     private function classifyTemperature(float $tempC): string
@@ -1588,17 +1833,15 @@ class CorrelationService
             return 'morning';
         }
 
-        if ($hour < 17) {
+        if ($hour < 18) {
             return 'afternoon';
         }
 
         return 'evening';
     }
 
-    private function classifyWorkoutIntensity(?float $trainingLoad, ?float $tss, ?float $hrHighPct): string
+    private function classifyWorkoutIntensity(?float $effectiveLoad, ?float $hrHighPct): string
     {
-        $effectiveLoad = $tss ?? $trainingLoad;
-
         if (($hrHighPct !== null && $hrHighPct >= 20.0) || ($effectiveLoad !== null && $effectiveLoad >= 100.0)) {
             return 'hard';
         }
@@ -1639,19 +1882,31 @@ class CorrelationService
     private function buildCorrelationStat(array $xs, array $ys): array
     {
         $n = min(count($xs), count($ys));
-        $r = $this->pearsonR($xs, $ys);
+        $r = $n >= self::MIN_CORRELATION_SAMPLES ? $this->statistics->pearson($xs, $ys) : null;
+        $pValue = $r !== null ? $this->statistics->correlationPValue($r, $n) : null;
+        $significant = $pValue !== null && $pValue < self::SIGNIFICANCE_LEVEL;
 
         return [
-            'r' => $r,
+            'r' => $r !== null ? round($r, 3) : null,
             'n' => $n,
-            'strength' => $this->correlationStrength($r),
+            'p_value' => $pValue !== null ? round($pValue, 4) : null,
+            'significant' => $significant,
+            'strength' => $this->correlationStrength($r, $significant),
         ];
     }
 
-    private function correlationStrength(?float $r): ?string
+    /**
+     * Magnitude label for a significant correlation; non-significant coefficients are reported as
+     * "inconclusive" so the UI never calls sampling noise "strong".
+     */
+    private function correlationStrength(?float $r, bool $significant): ?string
     {
         if ($r === null) {
             return null;
+        }
+
+        if (! $significant) {
+            return 'inconclusive';
         }
 
         $abs = abs($r);
@@ -1671,91 +1926,152 @@ class CorrelationService
         return 'negligible';
     }
 
+    private function formatPValue(float $pValue): string
+    {
+        return $pValue < 0.001 ? 'p < 0.001' : sprintf('p = %.3f', $pValue);
+    }
+
+    /**
+     * Compare the highest- and lowest-scoring buckets on `$field` with Welch's t-test and return them
+     * only when the difference is statistically significant.
+     *
+     * @template TBucket of array{key: string, label: string, count: int}
+     *
+     * @param  list<TBucket>  $buckets
+     * @param  array<string, list<float>>  $samplesByKey
+     * @return ?array{best: TBucket, worst: TBucket, p_value: float}
+     */
+    private function significantBucketSpread(array $buckets, array $samplesByKey, string $field): ?array
+    {
+        $eligible = array_values(array_filter(
+            $buckets,
+            static fn (array $bucket): bool => ($bucket[$field] ?? null) !== null
+                && count($samplesByKey[$bucket['key']] ?? []) >= self::MIN_BUCKET_SAMPLES,
+        ));
+
+        if (count($eligible) < 2) {
+            return null;
+        }
+
+        usort($eligible, static fn (array $a, array $b): int => $b[$field] <=> $a[$field]);
+        $best = $eligible[0];
+        $worst = $eligible[count($eligible) - 1];
+        $pValue = $this->significantDifference($samplesByKey[$best['key']], $samplesByKey[$worst['key']]);
+
+        return $pValue === null ? null : ['best' => $best, 'worst' => $worst, 'p_value' => $pValue];
+    }
+
+    /**
+     * Welch's t-test p-value when both samples are large enough and differ significantly, otherwise null.
+     *
+     * @param  list<float>  $a
+     * @param  list<float>  $b
+     */
+    private function significantDifference(array $a, array $b): ?float
+    {
+        if (count($a) < self::MIN_BUCKET_SAMPLES || count($b) < self::MIN_BUCKET_SAMPLES) {
+            return null;
+        }
+
+        $pValue = $this->statistics->welchTTestPValue($a, $b);
+
+        return $pValue !== null && $pValue < self::SIGNIFICANCE_LEVEL ? $pValue : null;
+    }
+
+    /**
+     * Directional sentence for a significant correlation, or null when it is not significant.
+     *
+     * @param  CorrelationStat  $stat
+     */
+    private function describeSignificantCorrelation(array $stat, string $template, string $positiveWord, string $negativeWord, string $unit): ?string
+    {
+        if (! $stat['significant'] || $stat['r'] === null || $stat['p_value'] === null || $stat['strength'] === null) {
+            return null;
+        }
+
+        return sprintf(
+            $template.' (r = %+.2f, %s, n = %d %s).',
+            $stat['strength'],
+            $stat['r'] >= 0 ? $positiveWord : $negativeWord,
+            $stat['r'],
+            $this->formatPValue($stat['p_value']),
+            $stat['n'],
+            $unit,
+        );
+    }
+
     /**
      * @param  list<PerformanceBucket>  $durationBuckets
+     * @param  array<string, list<float>>  $durationEfSamples
      * @param  CorrelationStat  $scoreVsEf
      * @param  CorrelationStat  $hoursVsDec
      */
     private function buildSleepTakeaway(
         int $n,
         array $durationBuckets,
+        array $durationEfSamples,
         array $scoreVsEf,
         array $hoursVsDec,
     ): ?string {
-        if ($n < self::MIN_CORRELATION_SAMPLES) {
+        if ($n < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
-        $eligible = array_values(array_filter(
-            $durationBuckets,
-            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 2,
-        ));
+        $spread = $this->significantBucketSpread($durationBuckets, $durationEfSamples, 'avg_ef');
 
-        if (count($eligible) >= 2) {
-            usort($eligible, static fn (array $a, array $b): int => $b['avg_ef'] <=> $a['avg_ef']);
-            $best = $eligible[0];
-            $worst = $eligible[count($eligible) - 1];
-
-            if ($best['key'] !== $worst['key'] && $worst['avg_ef'] > 0) {
-                $pctGain = (($best['avg_ef'] - $worst['avg_ef']) / $worst['avg_ef']) * 100.0;
-                $rSuffix = $scoreVsEf['r'] !== null
-                    ? sprintf('; sleep score vs EF r = %+.2f', $scoreVsEf['r'])
-                    : '';
-
-                return sprintf(
-                    'Sessions after %s sleep average %.2f EF vs %.2f EF after %s (%+.1f%% across %d sessions%s).',
-                    $best['label'],
-                    $best['avg_ef'],
-                    $worst['avg_ef'],
-                    $worst['label'],
-                    $pctGain,
-                    $n,
-                    $rSuffix,
-                );
-            }
-        }
-
-        if ($scoreVsEf['r'] !== null && $scoreVsEf['strength'] !== null) {
-            $direction = $scoreVsEf['r'] >= 0 ? 'positive' : 'negative';
+        if ($spread !== null && $spread['worst']['avg_ef'] > 0) {
+            $best = $spread['best'];
+            $worst = $spread['worst'];
 
             return sprintf(
-                'Sleep score shows a %s %s correlation with Efficiency Factor (r = %+.2f, n = %d).',
-                $scoreVsEf['strength'],
-                $direction,
-                $scoreVsEf['r'],
-                $scoreVsEf['n'],
+                'Days after %s sleep average %.2f EF vs %.2f EF after %s (%+.1f%%, %s, n = %d days).',
+                $best['label'],
+                $best['avg_ef'],
+                $worst['avg_ef'],
+                $worst['label'],
+                (($best['avg_ef'] - $worst['avg_ef']) / $worst['avg_ef']) * 100.0,
+                $this->formatPValue($spread['p_value']),
+                $n,
             );
         }
 
-        if ($hoursVsDec['r'] !== null && $hoursVsDec['strength'] !== null) {
-            $direction = $hoursVsDec['r'] <= 0 ? 'lower' : 'higher';
-
-            return sprintf(
-                'Longer sleep duration shows a %s link to %s cardiac decoupling (r = %+.2f, n = %d).',
-                $hoursVsDec['strength'],
-                $direction,
-                $hoursVsDec['r'],
-                $hoursVsDec['n'],
-            );
-        }
-
-        return sprintf('%d matched sleep sessions analyzed — sync more streamed activities with Efficiency Factor for deeper trends.', $n);
+        return $this->describeSignificantCorrelation(
+            $scoreVsEf,
+            'Sleep score shows a %s %s correlation with Efficiency Factor',
+            'positive',
+            'negative',
+            'days',
+        ) ?? $this->describeSignificantCorrelation(
+            $hoursVsDec,
+            'Longer sleep shows a %s link to %s cardiac decoupling',
+            'higher',
+            'lower',
+            'days',
+        ) ?? sprintf(
+            'No statistically significant link between sleep and same-day performance yet (%d days analyzed; effects need p < 0.05 across at least %d paired days).',
+            $n,
+            self::MIN_CORRELATION_SAMPLES,
+        );
     }
 
     /**
      * @param  list<HrvBucket>  $statusBuckets
+     * @param  array<string, list<float>>  $statusEfSamples
      * @param  list<HrvBucket>  $baselineBuckets
+     * @param  array<string, list<float>>  $baselineEfSamples
      * @param  CorrelationStat  $hrvVsEf
      * @param  CorrelationStat  $hrvVsDec
      */
     private function buildHrvTakeaway(
         int $n,
         array $statusBuckets,
+        array $statusEfSamples,
         array $baselineBuckets,
+        array $baselineEfSamples,
         array $hrvVsEf,
         array $hrvVsDec,
     ): ?string {
-        if ($n < self::MIN_CORRELATION_SAMPLES) {
+        if ($n < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
@@ -1766,29 +2082,26 @@ class CorrelationService
         }
 
         $below = $baselineByKey['below'] ?? null;
-        $above = $baselineByKey['above'] ?? null;
-        $inBaseline = $baselineByKey['in_baseline'] ?? null;
+        $comparisonKey = count($baselineEfSamples['above'] ?? []) >= self::MIN_BUCKET_SAMPLES ? 'above' : 'in_baseline';
+        $inOrAbove = $baselineByKey[$comparisonKey] ?? null;
+        $baselinePValue = $this->significantDifference(
+            $baselineEfSamples[$comparisonKey] ?? [],
+            $baselineEfSamples['below'] ?? [],
+        );
 
-        $inOrAbove = null;
-
-        if ($above !== null && $above['avg_ef'] !== null && $above['count'] >= 2) {
-            $inOrAbove = $above;
-        } elseif ($inBaseline !== null && $inBaseline['avg_ef'] !== null && $inBaseline['count'] >= 2) {
-            $inOrAbove = $inBaseline;
-        }
-
-        if ($below !== null && $inOrAbove !== null && $below['avg_ef'] !== null && $below['count'] >= 2 && $below['avg_ef'] > 0) {
-            $pctDiff = (($inOrAbove['avg_ef'] - $below['avg_ef']) / $below['avg_ef']) * 100.0;
-            $rSuffix = $hrvVsEf['r'] !== null ? sprintf('; HRV vs EF r = %+.2f', $hrvVsEf['r']) : '';
-
+        if (
+            $baselinePValue !== null
+            && $below !== null && $inOrAbove !== null
+            && $below['avg_ef'] !== null && $inOrAbove['avg_ef'] !== null && $below['avg_ef'] > 0
+        ) {
             return sprintf(
-                'When HRV is %s, sessions average %.2f EF vs %.2f EF when Below Baseline (%+.1f%%, n = %d%s).',
+                'When HRV is %s, sessions average %.2f EF vs %.2f EF when Below Baseline (%+.1f%%, %s, n = %d days).',
                 strtolower($inOrAbove['label']),
                 $inOrAbove['avg_ef'],
                 $below['avg_ef'],
-                $pctDiff,
+                (($inOrAbove['avg_ef'] - $below['avg_ef']) / $below['avg_ef']) * 100.0,
+                $this->formatPValue($baselinePValue),
                 $n,
-                $rSuffix,
             );
         }
 
@@ -1799,147 +2112,119 @@ class CorrelationService
         }
 
         $balanced = $statusByKey['balanced'] ?? null;
-        $lowStatus = $statusByKey['low'] ?? null;
-        $unbalancedStatus = $statusByKey['unbalanced'] ?? null;
+        $suppressedKey = count($statusEfSamples['low'] ?? []) >= self::MIN_BUCKET_SAMPLES ? 'low' : 'unbalanced';
+        $suppressed = $statusByKey[$suppressedKey] ?? null;
+        $statusPValue = $this->significantDifference(
+            $statusEfSamples['balanced'] ?? [],
+            $statusEfSamples[$suppressedKey] ?? [],
+        );
 
-        $suppressed = null;
-
-        if ($lowStatus !== null && $lowStatus['avg_ef'] !== null && $lowStatus['count'] >= 2) {
-            $suppressed = $lowStatus;
-        } elseif ($unbalancedStatus !== null && $unbalancedStatus['avg_ef'] !== null && $unbalancedStatus['count'] >= 2) {
-            $suppressed = $unbalancedStatus;
-        }
-
-        if ($balanced !== null && $suppressed !== null && $balanced['avg_ef'] !== null && $balanced['count'] >= 2 && $suppressed['avg_ef'] > 0) {
-            $pctDiff = (($balanced['avg_ef'] - $suppressed['avg_ef']) / $suppressed['avg_ef']) * 100.0;
-
+        if (
+            $statusPValue !== null
+            && $balanced !== null && $suppressed !== null
+            && $balanced['avg_ef'] !== null && $suppressed['avg_ef'] !== null && $suppressed['avg_ef'] > 0
+        ) {
             return sprintf(
-                'Balanced HRV days average %.2f EF vs %.2f EF on %s HRV days (%+.1f%%, n = %d).',
+                'Balanced HRV days average %.2f EF vs %.2f EF on %s HRV days (%+.1f%%, %s, n = %d days).',
                 $balanced['avg_ef'],
                 $suppressed['avg_ef'],
                 $suppressed['label'],
-                $pctDiff,
+                (($balanced['avg_ef'] - $suppressed['avg_ef']) / $suppressed['avg_ef']) * 100.0,
+                $this->formatPValue($statusPValue),
                 $n,
             );
         }
 
-        if ($hrvVsEf['r'] !== null && $hrvVsEf['strength'] !== null) {
-            $direction = $hrvVsEf['r'] >= 0 ? 'positive' : 'negative';
-
-            return sprintf(
-                'Overnight HRV shows a %s %s relationship with Efficiency Factor (r = %+.2f, n = %d).',
-                $hrvVsEf['strength'],
-                $direction,
-                $hrvVsEf['r'],
-                $hrvVsEf['n'],
-            );
-        }
-
-        if ($hrvVsDec['r'] !== null && $hrvVsDec['strength'] !== null) {
-            $direction = $hrvVsDec['r'] <= 0 ? 'lower' : 'higher';
-
-            return sprintf(
-                'Higher overnight HRV shows a %s link to %s cardiac drift (r = %+.2f, n = %d).',
-                $hrvVsDec['strength'],
-                $direction,
-                $hrvVsDec['r'],
-                $hrvVsDec['n'],
-            );
-        }
-
-        return sprintf('%d HRV-matched sessions analyzed — keep logging sessions across varied recovery states for stronger signal.', $n);
+        return $this->describeSignificantCorrelation(
+            $hrvVsEf,
+            'Overnight HRV shows a %s %s relationship with Efficiency Factor',
+            'positive',
+            'negative',
+            'days',
+        ) ?? $this->describeSignificantCorrelation(
+            $hrvVsDec,
+            'Higher overnight HRV shows a %s link to %s cardiac drift',
+            'higher',
+            'lower',
+            'days',
+        ) ?? sprintf(
+            'No statistically significant link between overnight HRV and same-day performance yet (%d days analyzed).',
+            $n,
+        );
     }
 
     /**
      * @param  list<TempBucket>  $tempBuckets
+     * @param  array<string, list<float>>  $tempEfSamples
      * @param  CorrelationStat  $tempVsEf
      * @param  CorrelationStat  $tempVsDec
      */
     private function buildWeatherTakeaway(
         int $n,
         array $tempBuckets,
+        array $tempEfSamples,
         array $tempVsEf,
         array $tempVsDec,
     ): ?string {
-        if ($n < self::MIN_CORRELATION_SAMPLES) {
+        if ($n < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
-        $eligible = array_values(array_filter(
-            $tempBuckets,
-            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 2,
-        ));
+        $spread = $this->significantBucketSpread($tempBuckets, $tempEfSamples, 'avg_ef');
 
-        if (count($eligible) >= 2) {
-            usort($eligible, static fn (array $a, array $b): int => $b['avg_ef'] <=> $a['avg_ef']);
-            $best = $eligible[0];
-            $worst = $eligible[count($eligible) - 1];
-
-            if ($best['key'] !== $worst['key'] && $best['avg_ef'] > 0) {
-                $pctDrop = (($best['avg_ef'] - $worst['avg_ef']) / $best['avg_ef']) * 100.0;
-                $rSuffix = $tempVsEf['r'] !== null ? sprintf('; temp vs EF r = %+.2f', $tempVsEf['r']) : '';
-
-                return sprintf(
-                    'Aerobic efficiency peaks in %s (%.2f EF) and is %.1f%% lower in %s (%.2f EF, n = %d%s).',
-                    $best['label'],
-                    $best['avg_ef'],
-                    $pctDrop,
-                    $worst['label'],
-                    $worst['avg_ef'],
-                    $n,
-                    $rSuffix,
-                );
-            }
-        }
-
-        if ($tempVsEf['r'] !== null && $tempVsEf['strength'] !== null) {
-            $direction = $tempVsEf['r'] <= 0 ? 'lower' : 'higher';
+        if ($spread !== null && $spread['best']['avg_ef'] > 0) {
+            $best = $spread['best'];
+            $worst = $spread['worst'];
 
             return sprintf(
-                'Warmer conditions show a %s link to %s Efficiency Factor (r = %+.2f, n = %d).',
-                $tempVsEf['strength'],
-                $direction,
-                $tempVsEf['r'],
-                $tempVsEf['n'],
+                'Aerobic efficiency peaks in %s (%.2f EF) and is %.1f%% lower in %s (%.2f EF, %s, n = %d sessions).',
+                $best['label'],
+                $best['avg_ef'],
+                (($best['avg_ef'] - $worst['avg_ef']) / $best['avg_ef']) * 100.0,
+                $worst['label'],
+                $worst['avg_ef'],
+                $this->formatPValue($spread['p_value']),
+                $n,
             );
         }
 
-        if ($tempVsDec['r'] !== null && $tempVsDec['strength'] !== null) {
-            $direction = $tempVsDec['r'] >= 0 ? 'higher' : 'lower';
-
-            return sprintf(
-                'Warmer temperatures show a %s link to %s aerobic decoupling (r = %+.2f, n = %d).',
-                $tempVsDec['strength'],
-                $direction,
-                $tempVsDec['r'],
-                $tempVsDec['n'],
-            );
-        }
-
-        return sprintf('%d weather-matched sessions analyzed across this date window.', $n);
+        return $this->describeSignificantCorrelation(
+            $tempVsEf,
+            'Warmer conditions show a %s link to %s Efficiency Factor',
+            'higher',
+            'lower',
+            'sessions',
+        ) ?? $this->describeSignificantCorrelation(
+            $tempVsDec,
+            'Warmer temperatures show a %s link to %s aerobic decoupling',
+            'higher',
+            'lower',
+            'sessions',
+        ) ?? sprintf(
+            'No statistically significant temperature effect on performance yet (%d weather-matched sessions analyzed).',
+            $n,
+        );
     }
 
     /**
      * @param  list<RecoveryBucket>  $byTimeOfDay
+     * @param  array<string, list<float>>  $timeHrvDeltaSamples
      * @param  list<RecoveryMatrixCell>  $matrix
+     * @param  array<string, list<float>>  $cellHrvDeltaSamples
      * @param  CorrelationStat  $hourVsHrvDelta
      * @param  CorrelationStat  $hourVsSleep
      */
     private function buildRecoveryTakeaway(
         int $n,
         array $byTimeOfDay,
+        array $timeHrvDeltaSamples,
         array $matrix,
+        array $cellHrvDeltaSamples,
         array $hourVsHrvDelta,
         array $hourVsSleep,
     ): ?string {
-        if ($n < self::MIN_CORRELATION_SAMPLES) {
+        if ($n < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
-        }
-
-        $timeByKey = [];
-
-        foreach ($byTimeOfDay as $bucket) {
-            $timeByKey[$bucket['key']] = $bucket;
         }
 
         $eveningHard = null;
@@ -1953,92 +2238,95 @@ class CorrelationService
             }
         }
 
+        $hardPValue = $this->significantDifference(
+            $cellHrvDeltaSamples['evening:hard'] ?? [],
+            $cellHrvDeltaSamples['morning:hard'] ?? [],
+        );
+
         if (
-            $eveningHard !== null
-            && $morningHard !== null
-            && $eveningHard['count'] >= 2
-            && $morningHard['count'] >= 2
-            && $eveningHard['avg_hrv_delta'] !== null
-            && $morningHard['avg_hrv_delta'] !== null
+            $hardPValue !== null
+            && $eveningHard !== null && $morningHard !== null
+            && $eveningHard['avg_hrv_delta'] !== null && $morningHard['avg_hrv_delta'] !== null
         ) {
             $sleepNote = ($eveningHard['avg_sleep_score'] !== null && $morningHard['avg_sleep_score'] !== null)
                 ? sprintf(' and %.0f vs %.0f sleep score', $eveningHard['avg_sleep_score'], $morningHard['avg_sleep_score'])
                 : '';
 
             return sprintf(
-                'Hard evening sessions average %+.1f ms next-night HRV vs %+.1f ms after hard morning sessions%s (n = %d).',
+                'Hard evening sessions average %+.1f ms next-night HRV vs %+.1f ms after hard morning sessions%s (%s, n = %d days).',
                 $eveningHard['avg_hrv_delta'],
                 $morningHard['avg_hrv_delta'],
                 $sleepNote,
+                $this->formatPValue($hardPValue),
                 $n,
             );
+        }
+
+        $timeByKey = [];
+
+        foreach ($byTimeOfDay as $bucket) {
+            $timeByKey[$bucket['key']] = $bucket;
         }
 
         $evening = $timeByKey['evening'] ?? null;
         $morning = $timeByKey['morning'] ?? null;
+        $timePValue = $this->significantDifference(
+            $timeHrvDeltaSamples['evening'] ?? [],
+            $timeHrvDeltaSamples['morning'] ?? [],
+        );
 
         if (
-            $evening !== null
-            && $morning !== null
-            && $evening['count'] >= 2
-            && $morning['count'] >= 2
-            && $evening['avg_hrv_delta'] !== null
-            && $morning['avg_hrv_delta'] !== null
+            $timePValue !== null
+            && $evening !== null && $morning !== null
+            && $evening['avg_hrv_delta'] !== null && $morning['avg_hrv_delta'] !== null
         ) {
             $sleepNote = ($evening['avg_sleep_score'] !== null && $morning['avg_sleep_score'] !== null)
-                ? sprintf(' (sleep score %.0f vs %.0f)', $evening['avg_sleep_score'], $morning['avg_sleep_score'])
+                ? sprintf('; sleep score %.0f vs %.0f', $evening['avg_sleep_score'], $morning['avg_sleep_score'])
                 : '';
 
             return sprintf(
-                'Evening workouts average %+.1f ms next-night HRV vs %+.1f ms after morning workouts%s across %d sessions.',
+                'Evening workouts average %+.1f ms next-night HRV vs %+.1f ms after morning workouts (%s%s, n = %d days).',
                 $evening['avg_hrv_delta'],
                 $morning['avg_hrv_delta'],
+                $this->formatPValue($timePValue),
                 $sleepNote,
                 $n,
             );
         }
 
-        if ($hourVsHrvDelta['r'] !== null && $hourVsHrvDelta['strength'] !== null) {
-            $direction = $hourVsHrvDelta['r'] < 0 ? 'lower' : 'higher';
-
-            return sprintf(
-                'Later workout start times show a %s link to %s overnight HRV vs weekly baseline (r = %+.2f, n = %d).',
-                $hourVsHrvDelta['strength'],
-                $direction,
-                $hourVsHrvDelta['r'],
-                $hourVsHrvDelta['n'],
-            );
-        }
-
-        if ($hourVsSleep['r'] !== null && $hourVsSleep['strength'] !== null) {
-            $direction = $hourVsSleep['r'] < 0 ? 'lower' : 'higher';
-
-            return sprintf(
-                'Later workout start times show a %s link to %s next-night sleep scores (r = %+.2f, n = %d).',
-                $hourVsSleep['strength'],
-                $direction,
-                $hourVsSleep['r'],
-                $hourVsSleep['n'],
-            );
-        }
-
-        return sprintf('%d sessions matched to next-night recovery data.', $n);
+        return $this->describeSignificantCorrelation(
+            $hourVsHrvDelta,
+            'Later workout start times show a %s link to %s overnight HRV vs the prior 7 nights',
+            'higher',
+            'lower',
+            'days',
+        ) ?? $this->describeSignificantCorrelation(
+            $hourVsSleep,
+            'Later workout start times show a %s link to %s next-night sleep scores',
+            'higher',
+            'lower',
+            'days',
+        ) ?? sprintf(
+            '%d training days matched to next-night recovery data — no statistically significant timing or intensity effect yet.',
+            $n,
+        );
     }
 
     /**
      * @param  list<ScheduleBucket>  $byDayOfWeek
      * @param  list<ScheduleBucket>  $byTimeOfDay
+     * @param  array<string, list<float>>  $timeEfSamples
      */
     private function buildScheduleTakeaway(
         int $n,
         array $byDayOfWeek,
         array $byTimeOfDay,
+        array $timeEfSamples,
     ): ?string {
-        if ($n < self::MIN_CORRELATION_SAMPLES) {
+        if ($n < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
-        $peakTime = $this->pickHeadlineScheduleBucket($byTimeOfDay, $n);
         $busiestDay = null;
 
         foreach ($byDayOfWeek as $day) {
@@ -2047,27 +2335,31 @@ class CorrelationService
             }
         }
 
-        if ($peakTime !== null && $peakTime['avg_ef'] !== null && $busiestDay !== null) {
+        if ($busiestDay === null) {
+            return null;
+        }
+
+        $spread = $this->significantBucketSpread($byTimeOfDay, $timeEfSamples, 'avg_ef');
+
+        if ($spread !== null) {
             return sprintf(
-                'Peak Efficiency Factor occurs during %s (%.2f EF across %d sessions), while %s is your highest-frequency training day (%d sessions).',
-                $peakTime['label'],
-                $peakTime['avg_ef'],
-                $peakTime['count'],
+                'Efficiency Factor is highest during %s (%.2f EF) vs %s (%.2f EF, %s), while %s is your highest-frequency training day (%d sessions).',
+                $spread['best']['label'],
+                $spread['best']['avg_ef'],
+                $spread['worst']['label'],
+                $spread['worst']['avg_ef'],
+                $this->formatPValue($spread['p_value']),
                 $busiestDay['label'],
                 $busiestDay['count'],
             );
         }
 
-        if ($busiestDay !== null) {
-            return sprintf(
-                '%s is your most active training day (%d of %d sessions in this window).',
-                $busiestDay['label'],
-                $busiestDay['count'],
-                $n,
-            );
-        }
-
-        return null;
+        return sprintf(
+            '%s is your most active training day (%d of %d sessions in this window).',
+            $busiestDay['label'],
+            $busiestDay['count'],
+            $n,
+        );
     }
 
     /**
@@ -2076,21 +2368,14 @@ class CorrelationService
      */
     private function pickHeadlinePerformanceBucket(array $buckets, int $totalN): ?array
     {
-        if ($totalN < self::MIN_CORRELATION_SAMPLES) {
+        if ($totalN < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
         $candidates = array_values(array_filter(
             $buckets,
-            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 2,
+            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= self::MIN_BUCKET_SAMPLES,
         ));
-
-        if ($candidates === []) {
-            $candidates = array_values(array_filter(
-                $buckets,
-                static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 1,
-            ));
-        }
 
         if ($candidates === []) {
             return null;
@@ -2114,21 +2399,14 @@ class CorrelationService
      */
     private function pickHeadlineTempBucket(array $buckets, int $totalN): ?array
     {
-        if ($totalN < self::MIN_CORRELATION_SAMPLES) {
+        if ($totalN < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
         $candidates = array_values(array_filter(
             $buckets,
-            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 2,
+            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= self::MIN_BUCKET_SAMPLES,
         ));
-
-        if ($candidates === []) {
-            $candidates = array_values(array_filter(
-                $buckets,
-                static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 1,
-            ));
-        }
 
         if ($candidates === []) {
             return null;
@@ -2154,21 +2432,14 @@ class CorrelationService
      */
     private function pickHeadlineScheduleBucket(array $buckets, int $totalN): ?array
     {
-        if ($totalN < self::MIN_CORRELATION_SAMPLES) {
+        if ($totalN < self::MIN_TAKEAWAY_SAMPLES) {
             return null;
         }
 
         $candidates = array_values(array_filter(
             $buckets,
-            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 2,
+            static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= self::MIN_BUCKET_SAMPLES,
         ));
-
-        if ($candidates === []) {
-            $candidates = array_values(array_filter(
-                $buckets,
-                static fn (array $b): bool => $b['avg_ef'] !== null && $b['count'] >= 1,
-            ));
-        }
 
         if ($candidates === []) {
             return null;
@@ -2783,62 +3054,15 @@ class CorrelationService
         ?string $to,
         CarbonImmutable $today,
     ): array {
-        $timezone = $today->getTimezone();
-        $parsedFrom = $this->dateWindows->parseDate($from, $timezone);
-        $parsedTo = $this->dateWindows->parseDate($to, $timezone);
-
-        $normalizedRange = $range !== null && in_array($range, self::VALID_RANGES, true)
-            ? $range
-            : (($parsedFrom !== null || $parsedTo !== null) ? 'custom' : self::DEFAULT_RANGE);
-
-        if ($normalizedRange === '180d') {
-            return $this->resolve180DayWindow($end, $today);
-        }
-
         return $this->dateWindows->resolveDayWindow(
-            $normalizedRange,
+            $range,
             $end,
             $from,
             $to,
             $today,
-            ['90d', '1y', 'all', 'custom'],
+            self::VALID_RANGES,
             self::DEFAULT_RANGE,
         );
-    }
-
-    /**
-     * @return DateWindow
-     */
-    private function resolve180DayWindow(?string $end, CarbonImmutable $today): array
-    {
-        $days = 180;
-        $todayDay = $today->startOfDay();
-        $parsedEnd = $this->dateWindows->parseDate($end, $todayDay->getTimezone());
-        $anchorEnd = $parsedEnd !== null && $parsedEnd->lessThan($todayDay) ? $parsedEnd : $todayDay;
-        $windowStart = $anchorEnd->subDays($days - 1);
-        $isLatest = $anchorEnd->greaterThanOrEqualTo($todayDay);
-
-        $prevEnd = $windowStart->subDay()->format('Y-m-d');
-        $nextCandidate = $anchorEnd->addDays($days);
-        $nextEnd = $isLatest
-            ? null
-            : ($nextCandidate->greaterThan($todayDay) ? $todayDay : $nextCandidate)->format('Y-m-d');
-
-        $label = $windowStart->year === $anchorEnd->year
-            ? $windowStart->format('M j').' – '.$anchorEnd->format('M j, Y')
-            : $windowStart->format('M j, Y').' – '.$anchorEnd->format('M j, Y');
-
-        return [
-            'range' => '180d',
-            'start' => $windowStart->format('Y-m-d'),
-            'end' => $anchorEnd->format('Y-m-d'),
-            'from' => null,
-            'to' => null,
-            'prevEnd' => $prevEnd,
-            'nextEnd' => $nextEnd,
-            'isLatest' => $isLatest,
-            'label' => $label,
-        ];
     }
 
     private function timezone(): string
@@ -2896,7 +3120,7 @@ class CorrelationService
         CarbonImmutable $today,
         array $availableSports,
     ): array {
-        $emptyStat = ['r' => null, 'n' => 0, 'strength' => null];
+        $emptyStat = ['r' => null, 'n' => 0, 'p_value' => null, 'significant' => false, 'strength' => null];
 
         $emptyTempBuckets = [];
 
@@ -2964,7 +3188,10 @@ class CorrelationService
             'has_data' => false,
             'summary' => [
                 'total_activities' => 0,
+                'training_days' => 0,
                 'with_derived_metrics' => 0,
+                'ef_metric' => null,
+                'ef_excluded_sessions' => 0,
                 'with_sleep' => 0,
                 'with_hrv' => 0,
                 'with_weather' => 0,
