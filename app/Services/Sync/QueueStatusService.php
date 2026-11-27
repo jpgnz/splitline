@@ -6,14 +6,16 @@ use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Services\Routes\RouteMatchingService;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 /**
  * Inspects queued background enrichment jobs and remaining unenriched activity counts.
  *
+ * @phpstan-type EnrichmentQueueJobs array{
+ *     jobs: array{default: int, streams: int, weather: int, total: int},
+ *     has_active_work: bool
+ * }
  * @phpstan-type EnrichmentQueueSummary array{
  *     jobs: array{default: int, streams: int, weather: int, total: int},
  *     pending: array{streams: int, weather: int, routes: int},
@@ -27,18 +29,32 @@ class QueueStatusService
     ) {}
 
     /**
-     * Build the combined background queue and pending enrichment summary.
+     * Build the lightweight queued-job summary that is cheap enough to share on every request and poll.
+     *
+     * @return EnrichmentQueueJobs
+     */
+    public function activeJobs(): array
+    {
+        $jobs = $this->queuedJobCounts();
+
+        return [
+            'jobs' => $jobs,
+            'has_active_work' => $jobs['total'] > 0,
+        ];
+    }
+
+    /**
+     * Build the combined background queue and pending enrichment summary, including per-activity backlog counts.
      *
      * @return EnrichmentQueueSummary
      */
     public function summary(): array
     {
         $jobs = $this->queuedJobCounts();
-        $pending = $this->pendingEnrichmentCounts();
 
         return [
             'jobs' => $jobs,
-            'pending' => $pending,
+            'pending' => $this->pendingEnrichmentCounts(),
             'has_active_work' => $jobs['total'] > 0,
         ];
     }
@@ -105,60 +121,13 @@ class QueueStatusService
             ->awaitingStreams()
             ->count();
 
-        $hasStreamsTable = Schema::hasTable('activity_streams');
-        $missingWeather = 0;
+        $hasEnrichmentTables = Schema::hasTable('activity_streams') && Schema::hasTable('activity_weathers');
 
-        if (Schema::hasTable('activity_weathers')) {
-            $weatherQuery = Activity::query()
-                ->where('is_indoor', false)
-                ->where(function (Builder $coordQuery) use ($hasStreamsTable): void {
-                    $coordQuery->where(function (Builder $startCoords): void {
-                        $startCoords
-                            ->whereNotNull('start_lat')
-                            ->whereNotNull('start_lng');
-                    });
+        $missingWeather = $hasEnrichmentTables
+            ? Activity::query()->awaitingWeather()->count()
+            : 0;
 
-                    if ($hasStreamsTable) {
-                        $coordQuery->orWhereExists(function (QueryBuilder $streamSub): void {
-                            $streamSub
-                                ->selectRaw('1')
-                                ->from('activity_streams')
-                                ->whereColumn('activity_streams.activity_id', 'activities.id');
-                        });
-                    }
-                })
-                ->where(function (Builder $missingOrUpgradeQuery) use ($hasStreamsTable): void {
-                    $missingOrUpgradeQuery->whereNotExists(function (QueryBuilder $weatherSub): void {
-                        $weatherSub
-                            ->selectRaw('1')
-                            ->from('activity_weathers')
-                            ->whereColumn('activity_weathers.activity_id', 'activities.id');
-                    });
-
-                    if ($hasStreamsTable) {
-                        $missingOrUpgradeQuery->orWhere(function (Builder $upgradeQuery): void {
-                            $upgradeQuery
-                                ->whereExists(function (QueryBuilder $weatherSub): void {
-                                    $weatherSub
-                                        ->selectRaw('1')
-                                        ->from('activity_weathers')
-                                        ->whereColumn('activity_weathers.activity_id', 'activities.id')
-                                        ->where('activity_weathers.sampling_mode', 'start_point');
-                                })
-                                ->whereExists(function (QueryBuilder $streamSub): void {
-                                    $streamSub
-                                        ->selectRaw('1')
-                                        ->from('activity_streams')
-                                        ->whereColumn('activity_streams.activity_id', 'activities.id');
-                                });
-                        });
-                    }
-                });
-
-            $missingWeather = $weatherQuery->count();
-        }
-
-        $unfingerprintedRoutes = ($hasStreamsTable && Schema::hasTable('activity_route_fingerprints'))
+        $unfingerprintedRoutes = ($hasEnrichmentTables && Schema::hasTable('activity_route_fingerprints'))
             ? $this->routeMatchingService->unfingerprintedCount()
             : 0;
 

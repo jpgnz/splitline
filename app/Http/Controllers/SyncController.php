@@ -189,7 +189,6 @@ class SyncController extends Controller
      *     provider_configured: bool,
      *     enrichments: array{
      *         jobs: array{default: int, streams: int, weather: int, total: int},
-     *         pending: array{streams: int, weather: int, routes: int},
      *         has_active_work: bool
      *     }
      * }
@@ -217,7 +216,7 @@ class SyncController extends Controller
             'error_message' => $latestRun?->error_message !== null ? (string) $latestRun->error_message : null,
             'last_synced_at' => $this->formatTimestamp($lastCompletedAt),
             'provider_configured' => $this->isProviderConfigured(),
-            'enrichments' => $this->queueStatus->summary(),
+            'enrichments' => $this->queueStatus->activeJobs(),
         ];
     }
 

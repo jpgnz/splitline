@@ -129,7 +129,7 @@ it('returns zero queued job counts gracefully when queue driver is not database'
     ])->and($summary['has_active_work'])->toBeFalse();
 });
 
-it('exposes enrichments payload on sync status endpoint and settings page', function () {
+it('exposes only cheap queued-job counts on the sync status endpoint and shared props, and full pending counts on the settings page', function () {
     config(['queue.default' => 'database']);
 
     $now = CarbonImmutable::now()->getTimestamp();
@@ -153,10 +153,8 @@ it('exposes enrichments payload on sync status endpoint and settings page', func
         ->assertJsonPath('enrichments.jobs.weather', 1)
         ->assertJsonPath('enrichments.jobs.default', 0)
         ->assertJsonPath('enrichments.jobs.total', 2)
-        ->assertJsonPath('enrichments.pending.streams', 1)
-        ->assertJsonPath('enrichments.pending.weather', 1)
-        ->assertJsonPath('enrichments.pending.routes', 0)
-        ->assertJsonPath('enrichments.has_active_work', true);
+        ->assertJsonPath('enrichments.has_active_work', true)
+        ->assertJsonMissingPath('enrichments.pending');
 
     $this->get(route('settings.index'))
         ->assertOk()
@@ -169,6 +167,7 @@ it('exposes enrichments payload on sync status endpoint and settings page', func
             ->where('enrichment_queue.pending.weather', 1)
             ->where('enrichment_queue.has_active_work', true)
             ->where('sync.enrichments.jobs.total', 2)
-            ->where('sync.enrichments.has_active_work', true),
+            ->where('sync.enrichments.has_active_work', true)
+            ->missing('sync.enrichments.pending'),
         );
 });

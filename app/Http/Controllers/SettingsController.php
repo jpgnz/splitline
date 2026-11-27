@@ -31,7 +31,7 @@ class SettingsController extends Controller
                 'configured' => trim((string) config('services.garmin.key', '')) !== '',
             ],
             'backfill' => $this->backfillSummary(),
-            'enrichment_queue' => $queueStatus->summary(),
+            'enrichment_queue' => fn (): array => $queueStatus->summary(),
             'sports_settings' => $sports->settingsPayload(),
             'health_sources' => $healthSources->settingsPayload(),
         ]);

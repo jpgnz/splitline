@@ -42,7 +42,8 @@ import { index as heatmapIndex } from '@/routes/heatmap';
 import { index as routesIndex } from '@/routes/routes';
 import { index as settingsIndex } from '@/routes/settings';
 import { status as syncStatus, store as syncStore } from '@/routes/sync';
-import type { EnrichmentQueueSummary } from '@/types/global';
+import { useEnrichmentQueueFeed } from '@/composables/useEnrichmentQueueFeed';
+import type { EnrichmentQueueJobs } from '@/types/global';
 
 type StudioNavChild = {
     key: string;
@@ -200,7 +201,9 @@ const currentPath = computed<string>(() => page.url.split('?')[0] || '/');
 
 const sync = computed(() => page.props.sync);
 
-const liveEnrichments = ref<EnrichmentQueueSummary | null>(
+const { publishEnrichments } = useEnrichmentQueueFeed();
+
+const liveEnrichments = ref<EnrichmentQueueJobs | null>(
     page.props.sync?.enrichments ?? null,
 );
 
@@ -353,8 +356,12 @@ function triggerSync(): void {
     );
 }
 
+const SYNC_POLL_INTERVAL_MS = 2500;
+const ENRICHMENT_POLL_INTERVAL_MS = 10000;
+
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollInFlight = false;
+let lastPolledSyncRunning: boolean | null = null;
 
 function stopSyncPolling(): void {
     if (pollTimer !== null) {
@@ -383,22 +390,28 @@ async function pollSyncStatus(): Promise<void> {
 
         const data = (await response.json()) as {
             status?: string;
-            enrichments?: EnrichmentQueueSummary;
+            enrichments?: EnrichmentQueueJobs;
         };
 
-        const wasSyncRunning = isSyncRunning.value;
+        // Page props only refresh once a reload completes, so track the last polled
+        // sync state locally to avoid firing a second reload on the next tick.
+        const wasSyncRunning = lastPolledSyncRunning ?? isSyncRunning.value;
         const wasEnriching = hasActiveEnrichments.value;
 
         if (data.enrichments) {
             liveEnrichments.value = data.enrichments;
+            publishEnrichments(data.enrichments);
         }
 
         const nextSyncRunning =
             data.status === 'running' || data.status === 'queued';
         const nextEnriching = (data.enrichments?.jobs.total ?? 0) > 0;
 
+        lastPolledSyncRunning = nextSyncRunning;
+
         if (!nextSyncRunning && !nextEnriching) {
             stopSyncPolling();
+            lastPolledSyncRunning = null;
 
             if (wasSyncRunning || wasEnriching) {
                 router.reload();
@@ -414,17 +427,25 @@ async function pollSyncStatus(): Promise<void> {
 }
 
 watch(
-    () => isSyncRunning.value || hasActiveEnrichments.value,
-    (active) => {
-        if (active) {
-            if (pollTimer === null) {
-                pollTimer = setInterval(() => {
-                    void pollSyncStatus();
-                }, 2500);
-            }
-        } else {
-            stopSyncPolling();
+    (): number | null => {
+        if (isSyncRunning.value) {
+            return SYNC_POLL_INTERVAL_MS;
         }
+
+        return hasActiveEnrichments.value ? ENRICHMENT_POLL_INTERVAL_MS : null;
+    },
+    (intervalMs) => {
+        stopSyncPolling();
+
+        if (intervalMs === null) {
+            lastPolledSyncRunning = null;
+
+            return;
+        }
+
+        pollTimer = setInterval(() => {
+            void pollSyncStatus();
+        }, intervalMs);
     },
     { immediate: true },
 );

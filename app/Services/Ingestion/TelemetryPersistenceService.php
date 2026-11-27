@@ -149,6 +149,12 @@ class TelemetryPersistenceService
             ? $existing->sport_category_override
             : $dto->sportCategory;
 
+        // A provider discipline (e.g. running "trail") only describes the provider's own category, so it
+        // is dropped when the user has re-categorised the activity; discipline_override covers user intent.
+        $canonicalSportDiscipline = $canonicalSportCategory === $dto->sportCategory
+            ? $dto->sportDiscipline
+            : null;
+
         $canonicalIsFavorite = ($existing !== null && $existing->favorite_override !== null)
             ? $existing->favorite_override
             : $dto->isFavorite;
@@ -162,7 +168,7 @@ class TelemetryPersistenceService
             'activity_type_key' => $dto->activityTypeKey,
             'sport_category' => $canonicalSportCategory,
             'garmin_sport_category' => $dto->sportCategory,
-            'sport_discipline' => $dto->sportDiscipline,
+            'sport_discipline' => $canonicalSportDiscipline,
             'is_indoor' => $dto->isIndoor,
             'started_at_local' => $dto->startedAtLocal,
             'started_at_utc' => $dto->startedAtUtc,

@@ -74,6 +74,7 @@ it('preserves name, sport category, and favorite overrides across Garmin re-sync
         ->and($resynced->garmin_sport_category)->toBe('running')
         ->and($resynced->sport_category)->toBe('hiking')
         ->and($resynced->sport_category_override)->toBe('hiking')
+        ->and($resynced->sport_discipline)->toBeNull()
         ->and($resynced->garmin_is_favorite)->toBeFalse()
         ->and($resynced->is_favorite)->toBeTrue()
         ->and($resynced->favorite_override)->toBeTrue()
@@ -108,9 +109,31 @@ it('falls back to Garmin values when name or category overrides are blank and re
     expect($resynced->name)->toBe('Updated Garmin Run')
         ->and($resynced->garmin_name)->toBe('Updated Garmin Run')
         ->and($resynced->sport_category)->toBe('running')
+        ->and($resynced->sport_discipline)->toBe('road')
         ->and($resynced->is_favorite)->toBeFalse()
         ->and($resynced->garmin_is_favorite)->toBeTrue()
         ->and($resynced->favorite_override)->toBeFalse();
+});
+
+it('keeps the Garmin discipline when a category override matches the Garmin category', function () {
+    $persistence = app(TelemetryPersistenceService::class);
+
+    $activity = $persistence->upsertActivity(makeGarminActivityDto([
+        'externalId' => '88004',
+        'sportCategory' => 'running',
+        'sportDiscipline' => 'road',
+    ]), dispatchEnrichments: false);
+
+    $activity->update(['sport_category_override' => 'running']);
+
+    $resynced = $persistence->upsertActivity(makeGarminActivityDto([
+        'externalId' => '88004',
+        'sportCategory' => 'running',
+        'sportDiscipline' => 'trail',
+    ]), dispatchEnrichments: false);
+
+    expect($resynced->sport_category)->toBe('running')
+        ->and($resynced->sport_discipline)->toBe('trail');
 });
 
 it('sets favorite_override on toggleFavorite so re-syncs preserve the toggle and exposes override metadata in detail', function () {
