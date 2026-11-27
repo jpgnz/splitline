@@ -26,6 +26,7 @@ class ActivityQueryService
         private readonly ?MatchedRouteService $matchedRoutes = null,
         private readonly ?SegmentQueryService $segments = null,
         private readonly ?HealthSourceRegistry $healthSources = null,
+        private readonly ActivityDerivedMetricsService $derivedMetricsService = new ActivityDerivedMetricsService,
     ) {}
 
     private function healthSources(): HealthSourceRegistry
@@ -511,13 +512,7 @@ class ActivityQueryService
                 'pacing_strategy' => $derivedMetrics->pacing_strategy,
                 'split_ratio' => $derivedMetrics->split_ratio,
                 'pace_cv_pct' => $derivedMetrics->pace_cv_pct,
-                'hr_low_pct' => $derivedMetrics->hr_low_pct,
-                'hr_moderate_pct' => $derivedMetrics->hr_moderate_pct,
-                'hr_high_pct' => $derivedMetrics->hr_high_pct,
-                'end_lat' => $derivedMetrics->end_lat,
-                'end_lng' => $derivedMetrics->end_lng,
-                'start_to_end_meters' => $derivedMetrics->start_to_end_meters,
-                'is_loop' => $derivedMetrics->is_loop,
+                ...$this->derivedMetricsService->polarizedHrSplit($activity),
                 'computed_at' => $derivedMetrics->computed_at->toIso8601String(),
             ] : null,
             'bestEfforts' => $bestEfforts,
