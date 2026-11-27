@@ -1,3 +1,4 @@
+import { formatVam as formatVamUnits, type UnitSystem } from '@/lib/units';
 import type { ClimbCategory } from '@/types/segments';
 
 export interface ClimbCategoryMeta {
@@ -55,17 +56,11 @@ export function climbCategoryMeta(
     return CLIMB_CATEGORY_META[category] ?? null;
 }
 
-export function formatVam(vam: number | null | undefined): string {
-    if (
-        vam === null ||
-        vam === undefined ||
-        !Number.isFinite(vam) ||
-        vam <= 0
-    ) {
-        return '—';
-    }
-
-    return `${Math.round(vam).toLocaleString()} m/h`;
+export function formatVam(
+    vam: number | null | undefined,
+    units: UnitSystem = 'metric',
+): string {
+    return formatVamUnits(vam, units);
 }
 
 export function formatGrade(gradePct: number | null | undefined): string {

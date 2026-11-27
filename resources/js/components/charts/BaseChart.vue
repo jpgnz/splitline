@@ -23,11 +23,13 @@ const props = withDefaults(
         overlayOption?: EChartsOption | null;
         height?: number | string;
         group?: string;
+        ariaLabel?: string;
     }>(),
     {
         overlayOption: null,
         height: 240,
         group: undefined,
+        ariaLabel: undefined,
     },
 );
 
@@ -40,14 +42,8 @@ const containerRef = ref<HTMLElement | null>(null);
 let chart: ECharts | null = null;
 let resizeObserver: ResizeObserver | null = null;
 
-const {
-    isDark,
-    textColor,
-    tooltipBg,
-    tooltipBorder,
-    tooltipText,
-    fontFamilyMono,
-} = useChartTheme();
+const { textColor, tooltipBg, tooltipBorder, tooltipText, fontFamilyMono } =
+    useChartTheme();
 
 const containerStyle = computed(() => ({
     height:
@@ -57,6 +53,7 @@ const containerStyle = computed(() => ({
 const mergedOption = computed<EChartsOption>(() => {
     const opt = props.option;
     const baseTooltip = {
+        confine: true,
         backgroundColor: tooltipBg.value,
         borderColor: tooltipBorder.value,
         borderWidth: 1,
@@ -153,7 +150,7 @@ onMounted(() => {
     }
 });
 
-watch([mergedOption, isDark], () => {
+watch(mergedOption, () => {
     renderChart();
 });
 
@@ -196,5 +193,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div ref="containerRef" class="w-full min-w-0" :style="containerStyle" />
+    <div
+        ref="containerRef"
+        class="w-full min-w-0"
+        :style="containerStyle"
+        :role="ariaLabel ? 'img' : undefined"
+        :aria-label="ariaLabel"
+    />
 </template>

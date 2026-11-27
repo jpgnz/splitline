@@ -68,6 +68,7 @@ type StudioNavItem = {
     accentHex?: string;
     exact?: boolean;
     activePrefixes?: string[];
+    excludePrefixes?: string[];
     children?: StudioNavChild[];
 };
 
@@ -106,7 +107,6 @@ const { resolvedAppearance, updateAppearance } = useAppearance();
 const { nav: sportsNav, pinSubDisciplines } = useSports();
 
 const appName = computed<string>(() => page.props.name || 'Splitline');
-const appVersion = computed<string>(() => page.props.appVersion);
 
 const dashboardHref = dashboard.url();
 const settingsHref = settingsIndex.url();
@@ -114,7 +114,7 @@ const settingsHref = settingsIndex.url();
 const navGroups = computed<StudioNavGroup[]>(() => {
     const groups: StudioNavGroup[] = [
         {
-            title: 'Core',
+            title: 'Overview',
             items: [
                 {
                     key: 'dashboard',
@@ -137,10 +137,22 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                     icon: Sparkles,
                 },
                 {
+                    key: 'recap',
+                    label: 'Year in Sport',
+                    href: recapIndex.url(),
+                    icon: Trophy,
+                },
+            ],
+        },
+        {
+            title: 'Explore',
+            items: [
+                {
                     key: 'activities',
                     label: 'All Activities',
                     href: activitiesIndex.url(),
                     icon: ListFilter,
+                    excludePrefixes: ['/activities/compare'],
                 },
                 {
                     key: 'heatmap',
@@ -205,12 +217,6 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                 href: goalsIndex.url(),
                 icon: Target,
             },
-            {
-                key: 'recap',
-                label: 'Year in Sport',
-                href: recapIndex.url(),
-                icon: Trophy,
-            },
             // Gear is hidden for now until Garmin Personal API exposes gear-service
             // (or we decide to maintain equipment manually).
             // {
@@ -228,7 +234,7 @@ const navGroups = computed<StudioNavGroup[]>(() => {
 const mobileDrawerOpen = ref(false);
 const isSyncPosting = ref(false);
 
-const currentPath = computed<string>(() => page.url.split('?')[0] || '/');
+const currentPath = computed<string>(() => page.url.split(/[?#]/)[0] || '/');
 
 const sync = computed(() => page.props.sync);
 
@@ -288,12 +294,12 @@ const enrichmentTooltip = computed<string | undefined>(() => {
     }
 
     if (jobs.default > 0) {
-        parts.push(`${jobs.default} default`);
+        parts.push(`${jobs.default} general`);
     }
 
     return parts.length > 0
-        ? `Background enrichment queue: ${parts.join(', ')}`
-        : `Background enrichment queue: ${jobs.total} queued`;
+        ? `Background processing: ${parts.join(', ')}`
+        : `Background processing: ${jobs.total} queued`;
 });
 
 const isSyncFailed = computed<boolean>(
@@ -334,7 +340,7 @@ const syncDotClass = computed<string>(() => {
 
 const syncButtonTooltip = computed<string | undefined>(() => {
     if (!isProviderConfigured.value) {
-        return 'Set GARMIN_KEY in your environment to enable syncing.';
+        return 'Configure a data provider in Settings to enable syncing.';
     }
 
     return undefined;
@@ -347,8 +353,21 @@ const lastSyncedLabel = computed<string>(() =>
 const isDarkMode = computed<boolean>(() => resolvedAppearance.value === 'dark');
 
 function isNavActive(
-    item: Pick<StudioNavItem, 'href' | 'exact' | 'activePrefixes'>,
+    item: Pick<
+        StudioNavItem,
+        'href' | 'exact' | 'activePrefixes' | 'excludePrefixes' | 'children'
+    >,
 ): boolean {
+    if (
+        item.excludePrefixes?.some(
+            (prefix) =>
+                currentPath.value === prefix ||
+                currentPath.value.startsWith(`${prefix}/`),
+        )
+    ) {
+        return false;
+    }
+
     if (
         item.activePrefixes?.some((prefix) =>
             currentPath.value.startsWith(prefix),
@@ -358,7 +377,26 @@ function isNavActive(
     }
 
     if (item.exact) {
-        return currentPath.value === item.href;
+        if (currentPath.value === item.href) {
+            return true;
+        }
+
+        // If sub-disciplines are pinned, highlight parent when on an unpinned child path
+        if (
+            item.children &&
+            item.children.length > 0 &&
+            currentPath.value.startsWith(`${item.href}/`)
+        ) {
+            const matchesPinnedChild = item.children.some(
+                (child) =>
+                    currentPath.value === child.href ||
+                    currentPath.value.startsWith(`${child.href}/`),
+            );
+
+            return !matchesPinnedChild;
+        }
+
+        return false;
     }
 
     return (
@@ -449,10 +487,18 @@ async function pollSyncStatus(): Promise<void> {
             lastPolledSyncRunning = null;
 
             if (wasSyncRunning || wasEnriching) {
-                router.reload();
+                if (currentPath.value === settingsHref) {
+                    router.reload({ only: ['sync'] });
+                } else {
+                    router.reload();
+                }
             }
         } else if (wasSyncRunning && !nextSyncRunning) {
-            router.reload();
+            if (currentPath.value === settingsHref) {
+                router.reload({ only: ['sync'] });
+            } else {
+                router.reload();
+            }
         }
     } catch {
         // Transient network error while polling; retry on next tick.
@@ -485,8 +531,32 @@ watch(
     { immediate: true },
 );
 
+function handleDrawerKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && mobileDrawerOpen.value) {
+        mobileDrawerOpen.value = false;
+    }
+}
+
+watch(mobileDrawerOpen, (open) => {
+    if (typeof document === 'undefined') {
+        return;
+    }
+
+    if (open) {
+        document.body.style.overflow = 'hidden';
+        document.addEventListener('keydown', handleDrawerKeydown);
+    } else {
+        document.body.style.overflow = '';
+        document.removeEventListener('keydown', handleDrawerKeydown);
+    }
+});
+
 onUnmounted(() => {
     stopSyncPolling();
+    if (typeof document !== 'undefined') {
+        document.body.style.overflow = '';
+        document.removeEventListener('keydown', handleDrawerKeydown);
+    }
 });
 
 watch(
@@ -542,6 +612,20 @@ watch(
             </Link>
 
             <div class="flex items-center gap-1.5">
+                <span
+                    v-if="isSyncing || isSyncFailed || hasActiveEnrichments"
+                    class="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-zinc-50 px-2 py-1 font-mono text-[10px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300"
+                    :title="
+                        isSyncFailed
+                            ? (sync?.error_message ?? 'Sync failed')
+                            : enrichmentTooltip
+                    "
+                >
+                    <span :class="['size-1.5 rounded-full', syncDotClass]" />
+                    <span v-if="isSyncing">Syncing</span>
+                    <span v-else-if="isSyncFailed">Error</span>
+                    <span v-else>{{ activeEnrichmentJobs }}</span>
+                </span>
                 <button
                     type="button"
                     class="inline-flex size-8 cursor-pointer items-center justify-center rounded-md border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
@@ -643,6 +727,11 @@ watch(
                                     <Link
                                         :href="item.href"
                                         prefetch
+                                        :aria-current="
+                                            isNavActive(item)
+                                                ? 'page'
+                                                : undefined
+                                        "
                                         :class="[
                                             'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
                                             isNavActive(item)
@@ -676,6 +765,13 @@ watch(
                                             :key="child.key"
                                             :href="child.href"
                                             prefetch
+                                            :aria-current="
+                                                isNavActive({
+                                                    href: child.href,
+                                                })
+                                                    ? 'page'
+                                                    : undefined
+                                            "
                                             :class="[
                                                 'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
                                                 isNavActive({
@@ -708,7 +804,7 @@ watch(
                 </div>
 
                 <!-- Mobile Rail Footer -->
-                <div class="mt-6 space-y-2.5">
+                <div class="mt-4 space-y-2.5">
                     <div
                         class="rounded-lg border border-zinc-200 bg-[#f7f7f5] p-3 dark:border-zinc-800 dark:bg-zinc-900/60"
                         :title="
@@ -735,25 +831,32 @@ watch(
                                 {{ lastSyncedLabel }}
                             </span>
                         </div>
-                        <div
-                            v-if="hasActiveEnrichments && !isSyncing"
-                            class="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-sky-600 dark:text-sky-400"
+                        <p
+                            v-if="isSyncFailed && sync?.error_message"
+                            class="mt-1.5 line-clamp-2 text-[10px] leading-snug text-rose-600 dark:text-rose-400"
+                        >
+                            {{ sync.error_message }}
+                        </p>
+                        <Link
+                            v-if="hasActiveEnrichments"
+                            :href="settingsHref"
+                            prefetch
+                            class="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
                             :title="enrichmentTooltip"
                         >
                             <span
                                 class="size-1.5 animate-pulse rounded-full bg-sky-500"
                             />
                             <span class="truncate tabular-nums">
-                                Enriching · {{ activeEnrichmentJobs }}
+                                Processing · {{ activeEnrichmentJobs }}
                                 {{
                                     activeEnrichmentJobs === 1 ? 'job' : 'jobs'
                                 }}
                             </span>
-                        </div>
+                        </Link>
                         <button
                             type="button"
                             :disabled="isSyncing || !isProviderConfigured"
-                            :title="syncButtonTooltip"
                             class="mt-2.5 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-zinc-200 bg-white py-1.5 text-xs font-medium text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
                             @click="triggerSync"
                         >
@@ -768,6 +871,11 @@ watch(
                         <Link
                             :href="settingsHref"
                             prefetch
+                            :aria-current="
+                                isNavActive({ href: settingsHref })
+                                    ? 'page'
+                                    : undefined
+                            "
                             :class="[
                                 'flex flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors',
                                 isNavActive({ href: settingsHref })
@@ -778,33 +886,6 @@ watch(
                             <Settings class="size-3.5" />
                             <span>Settings</span>
                         </Link>
-                        <button
-                            type="button"
-                            class="inline-flex size-7 cursor-pointer items-center justify-center rounded-lg border border-zinc-200 bg-white text-zinc-600 transition-colors hover:bg-zinc-50 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-zinc-100"
-                            :aria-label="
-                                isDarkMode
-                                    ? 'Switch to light mode'
-                                    : 'Switch to dark mode'
-                            "
-                            :title="
-                                isDarkMode
-                                    ? 'Switch to light mode'
-                                    : 'Switch to dark mode'
-                            "
-                            @click="toggleTheme"
-                        >
-                            <Sun v-if="isDarkMode" class="size-3.5" />
-                            <Moon v-else class="size-3.5" />
-                        </button>
-                    </div>
-
-                    <div
-                        class="flex items-center justify-between gap-2 px-2.5 pt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
-                    >
-                        <span>Version</span>
-                        <span class="truncate" :title="appVersion">
-                            {{ appVersion }}
-                        </span>
                     </div>
                 </div>
             </aside>
@@ -866,6 +947,9 @@ watch(
                                 <Link
                                     :href="item.href"
                                     prefetch
+                                    :aria-current="
+                                        isNavActive(item) ? 'page' : undefined
+                                    "
                                     :class="[
                                         'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm font-medium transition-colors',
                                         isNavActive(item)
@@ -899,6 +983,11 @@ watch(
                                         :key="child.key"
                                         :href="child.href"
                                         prefetch
+                                        :aria-current="
+                                            isNavActive({ href: child.href })
+                                                ? 'page'
+                                                : undefined
+                                        "
                                         :class="[
                                             'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition-colors',
                                             isNavActive({ href: child.href })
@@ -953,23 +1042,30 @@ watch(
                             {{ lastSyncedLabel }}
                         </span>
                     </div>
-                    <div
-                        v-if="hasActiveEnrichments && !isSyncing"
-                        class="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-sky-600 dark:text-sky-400"
+                    <p
+                        v-if="isSyncFailed && sync?.error_message"
+                        class="mt-1.5 line-clamp-2 text-[10px] leading-snug text-rose-600 dark:text-rose-400"
+                    >
+                        {{ sync.error_message }}
+                    </p>
+                    <Link
+                        v-if="hasActiveEnrichments"
+                        :href="settingsHref"
+                        prefetch
+                        class="mt-1.5 flex items-center gap-1.5 font-mono text-[10px] text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300"
                         :title="enrichmentTooltip"
                     >
                         <span
                             class="size-1.5 animate-pulse rounded-full bg-sky-500"
                         />
                         <span class="truncate tabular-nums">
-                            Enriching · {{ activeEnrichmentJobs }}
+                            Processing · {{ activeEnrichmentJobs }}
                             {{ activeEnrichmentJobs === 1 ? 'job' : 'jobs' }}
                         </span>
-                    </div>
+                    </Link>
                     <button
                         type="button"
                         :disabled="isSyncing || !isProviderConfigured"
-                        :title="syncButtonTooltip"
                         class="mt-2.5 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-md border border-zinc-200 bg-white py-1.5 text-xs font-medium text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
                         @click="triggerSync"
                     >
@@ -984,6 +1080,11 @@ watch(
                     <Link
                         :href="settingsHref"
                         prefetch
+                        :aria-current="
+                            isNavActive({ href: settingsHref })
+                                ? 'page'
+                                : undefined
+                        "
                         :class="[
                             'flex flex-1 items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors',
                             isNavActive({ href: settingsHref })
@@ -1012,15 +1113,6 @@ watch(
                         <Sun v-if="isDarkMode" class="size-3.5" />
                         <Moon v-else class="size-3.5" />
                     </button>
-                </div>
-
-                <div
-                    class="flex items-center justify-between gap-2 px-2.5 pt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
-                >
-                    <span>Version</span>
-                    <span class="truncate" :title="appVersion">
-                        {{ appVersion }}
-                    </span>
                 </div>
             </div>
         </aside>
