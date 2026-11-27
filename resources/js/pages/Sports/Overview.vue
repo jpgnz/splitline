@@ -8,8 +8,10 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed, ref, watch } from 'vue';
+import { toast } from 'vue-sonner';
 import { bulkReclassify } from '@/actions/App/Http/Controllers/SportsController';
 import BaseChart from '@/components/charts/BaseChart.vue';
+import LatestActivityPill from '@/components/activities/LatestActivityPill.vue';
 import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
 import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
 import type { CompactGoalProgress } from '@/components/goals/GoalProgressStrip.vue';
@@ -92,6 +94,19 @@ interface ReclassifyActivityItem {
     location_name: string | null;
 }
 
+interface LatestFamilyActivity {
+    id: number;
+    name: string;
+    sport_category: string;
+    effective_discipline: string | null;
+    started_at_local: string;
+    is_today: boolean;
+    distance_meters: number;
+    duration_seconds: number;
+    avg_speed: number | null;
+    avg_hr: number | null;
+}
+
 interface SportsOverviewProps {
     family: {
         key: string;
@@ -106,6 +121,7 @@ interface SportsOverviewProps {
     weeklyVolume: FamilyWeeklyVolumePoint[];
     annualSummary: AnnualActivitySummaryPayload;
     goals: CompactGoalProgress[];
+    latestActivity?: LatestFamilyActivity | null;
     reclassifyInbox: ReclassifyActivityItem[];
     reclassifyInboxTotal: number;
 }
@@ -115,7 +131,7 @@ type VolumeMetric = 'distance' | 'vertical' | 'load';
 const props = defineProps<SportsOverviewProps>();
 const theme = useChartTheme();
 const units = useUnits();
-const { getSportMeta } = useSports();
+const { getSportMeta, resolveActivitySportKey } = useSports();
 
 const volumeMetric = ref<VolumeMetric>('distance');
 const selectedIds = ref<number[]>([]);
@@ -123,6 +139,21 @@ const isReclassifying = ref<boolean>(false);
 const activeRowId = ref<number | null>(null);
 
 const familyMeta = computed(() => getSportMeta(props.family.key));
+
+const latestActivityMeta = computed(() => {
+    const item = props.latestActivity;
+
+    if (!item) {
+        return null;
+    }
+
+    const sportKey = resolveActivitySportKey(
+        item.sport_category,
+        item.effective_discipline,
+    );
+
+    return getSportMeta(sportKey);
+});
 
 const goalAccent = computed<'amber' | 'sky' | 'emerald' | 'indigo'>(() => {
     const token = familyMeta.value.color_token;
@@ -206,6 +237,15 @@ function toggleItemSelection(id: number): void {
     }
 }
 
+function formatActivityTypeKey(key: string): string {
+    return key
+        .trim()
+        .toLowerCase()
+        .replace(/[_-]+/g, ' ')
+        .replace(/\b\w/g, (char) => char.toUpperCase())
+        .replace(/\bMtb\b/g, 'MTB');
+}
+
 function submitReclassify(
     activityIds: number[],
     discipline: string,
@@ -214,6 +254,12 @@ function submitReclassify(
     if (activityIds.length === 0 || isReclassifying.value) {
         return;
     }
+
+    const disciplineLabel =
+        props.family.discipline_options.find(
+            (option) => option.value === discipline,
+        )?.label ?? formatActivityTypeKey(discipline);
+    const count = activityIds.length;
 
     router.post(
         bulkReclassify.url(),
@@ -231,6 +277,14 @@ function submitReclassify(
                 selectedIds.value = selectedIds.value.filter(
                     (id) => !activityIds.includes(id),
                 );
+                toast.success(
+                    count === 1
+                        ? `Activity reclassified as ${disciplineLabel}.`
+                        : `${formatNumber(count, 0)} activities reclassified as ${disciplineLabel}.`,
+                );
+            },
+            onError: () => {
+                toast.error('Unable to reclassify selected activities.');
             },
             onFinish: () => {
                 isReclassifying.value = false;
@@ -578,31 +632,48 @@ function optionAccentHex(optionValue: string): string {
                 </h1>
             </div>
 
-            <nav
-                v-if="family.tabs.length > 0"
-                aria-label="Discipline navigation"
-                class="inline-flex flex-wrap self-start rounded-lg border border-zinc-200/90 bg-white p-1 lg:self-auto dark:border-zinc-800/90 dark:bg-[#141417]"
-            >
-                <Link
-                    v-for="tab in family.tabs"
-                    :key="tab.key"
-                    :href="tab.href"
-                    prefetch
-                    class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 font-mono text-xs font-medium transition-colors"
-                    :class="
-                        tab.key === family.key
-                            ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                            : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
-                    "
+            <div class="flex flex-wrap items-center gap-2.5 lg:justify-end">
+                <LatestActivityPill
+                    v-if="latestActivity && latestActivityMeta"
+                    :activity-id="latestActivity.id"
+                    :name="latestActivity.name"
+                    :accent-hex="latestActivityMeta.accent_hex"
+                    :is-today="latestActivity.is_today"
+                    :date="latestActivity.started_at_local"
+                    :distance-meters="latestActivity.distance_meters"
+                    :duration-seconds="latestActivity.duration_seconds"
+                    :avg-speed="latestActivity.avg_speed"
+                    :avg-hr="latestActivity.avg_hr"
+                    :metric-mode="latestActivityMeta.metric_mode"
+                    show-date
+                />
+
+                <nav
+                    v-if="family.tabs.length > 0"
+                    aria-label="Discipline navigation"
+                    class="inline-flex flex-wrap self-start rounded-lg border border-zinc-200/90 bg-white p-1 lg:self-auto dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
-                    <span
-                        v-if="tab.key === family.key"
-                        class="size-1.5 rounded-full"
-                        :style="{ backgroundColor: familyMeta.accent_hex }"
-                    />
-                    <span>{{ tab.short_label }}</span>
-                </Link>
-            </nav>
+                    <Link
+                        v-for="tab in family.tabs"
+                        :key="tab.key"
+                        :href="tab.href"
+                        prefetch
+                        class="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 font-mono text-xs font-medium transition-colors"
+                        :class="
+                            tab.key === family.key
+                                ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                                : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                        "
+                    >
+                        <span
+                            v-if="tab.key === family.key"
+                            class="size-1.5 rounded-full"
+                            :style="{ backgroundColor: familyMeta.accent_hex }"
+                        />
+                        <span>{{ tab.short_label }}</span>
+                    </Link>
+                </nav>
+            </div>
         </header>
 
         <!-- Dynamic Grid of Discipline Summary Cards -->
@@ -1070,7 +1141,11 @@ function optionAccentHex(optionValue: string): string {
                                     <span
                                         class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400"
                                     >
-                                        {{ item.activity_type_key }}
+                                        {{
+                                            formatActivityTypeKey(
+                                                item.activity_type_key,
+                                            )
+                                        }}
                                     </span>
                                 </div>
                             </td>

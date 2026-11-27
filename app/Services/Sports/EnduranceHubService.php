@@ -2184,8 +2184,10 @@ class EnduranceHubService
      *         activity_name: string,
      *         achieved_at: string,
      *         effective_seconds: float,
+     *         override_seconds: ?float,
      *         avg_speed: float
-     *     }
+     *     },
+     *     excluded: list<BestEffortBoardEntry>
      * }>
      */
     private function buildCyclingBestEfforts(string $sportKey, string $environment, string $terrain): ?array
@@ -2222,7 +2224,6 @@ class EnduranceHubService
         $efforts = BestEffort::query()
             ->with('activity:id,name,is_indoor')
             ->whereIn('sport', $beSports)
-            ->where('is_excluded', false)
             ->whereIn('distance_key', array_keys(self::CYCLING_DISTANCE_LABELS))
             ->whereHas('activity', function (Builder $query) use ($sportKey, $environment, $terrain): void {
                 $this->sports->applyScope($query, $sportKey, $environment, $terrain);
@@ -2234,8 +2235,16 @@ class EnduranceHubService
 
         /** @var array<string, BestEffort> $bestByKey */
         $bestByKey = [];
+        /** @var array<string, list<BestEffort>> $excludedByKey */
+        $excludedByKey = [];
 
         foreach ($efforts as $effort) {
+            if ($effort->is_excluded) {
+                $excludedByKey[$effort->distance_key][] = $effort;
+
+                continue;
+            }
+
             if (! isset($bestByKey[$effort->distance_key])) {
                 $bestByKey[$effort->distance_key] = $effort;
             }
@@ -2246,6 +2255,10 @@ class EnduranceHubService
         foreach (self::CYCLING_DISTANCE_LABELS as $key => $label) {
             $distanceMeters = BestEffortCalculator::ROAD_BIKING_DISTANCES[$key];
             $best = $bestByKey[$key] ?? null;
+            $excluded = array_map(
+                fn (BestEffort $effort): array => $this->mapBestEffortBoardEntry($effort, $distanceMeters, null),
+                $excludedByKey[$key] ?? [],
+            );
 
             if ($best === null) {
                 $result[] = [
@@ -2253,6 +2266,7 @@ class EnduranceHubService
                     'label' => $label,
                     'distance_meters' => $distanceMeters,
                     'best' => null,
+                    'excluded' => $excluded,
                 ];
 
                 continue;
@@ -2270,10 +2284,12 @@ class EnduranceHubService
                     'activity_name' => $best->activity->name,
                     'achieved_at' => $best->achieved_at->format('Y-m-d'),
                     'effective_seconds' => round($effectiveSeconds, 1),
+                    'override_seconds' => $best->override_seconds !== null ? round($best->override_seconds, 2) : null,
                     'avg_speed' => $effectiveSeconds > 0.0
                         ? round($best->distance_meters / $effectiveSeconds, 3)
                         : 0.0,
                 ],
+                'excluded' => $excluded,
             ];
         }
 
