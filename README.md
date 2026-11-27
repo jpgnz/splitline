@@ -11,10 +11,10 @@ Currently supports the **Garmin Connect Personal API** (`GARMIN_KEY`).
 ## Features
 
 - **Daily Health & Recovery**: Sleep stages, HRV, resting heart rate, Body Battery, stress, SpO2, weight, VO2 Max, training readiness, and trend charts.
-- **FIT Streams & Best Efforts**: Caches original FIT archives locally to parse second-by-second pace, heart rate, cadence, power, elevation, and GNSS streams, with offline Best Efforts recalculation.
+- **FIT Streams & Best Efforts**: Caches original FIT archives locally to parse second-by-second pace, heart rate, cadence, power, elevation, and GPS streams, with offline Best Efforts recalculation.
 - **Sports & Disciplines**: Auto-detected or customizable hubs for Running, Cycling, Hiking, Walking, Swimming, and Strength & Cardio, plus a discipline reclassification inbox.
 - **Historical Weather & Wind Maps**: Route-sampled weather via Open-Meteo (no API key required), with headwind/crosswind/tailwind breakdowns, wind-colored route overlays, and directional wind arrows.
-- **GNSS Route Heatmap**: Interactive MapLibre GL heatmap filterable by sport, discipline, and date range.
+- **GPS Route Heatmap**: Interactive MapLibre GL heatmap filterable by sport, discipline, and date range.
 - **Gear & Goals**: Equipment mileage and retirement tracking, plus distance, elevation, duration, and session goals with streaks.
 - **Units & Appearance**: Metric/Imperial switching and Light, Dark, or System themes.
 
@@ -107,9 +107,9 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 | `php artisan garmin:check [--refresh]`                                                            | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.                   |
 | `php artisan garmin:sync [--days=7]`                                                              | Incremental sync of health summaries and activities (runs every 30 minutes).        |
 | `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                          | Resumable all-time history backfill from Garmin.                                    |
-| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]`  | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.              |
+| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]`  | Download, cache, and parse FIT streams, GPS routes, and Best Efforts.               |
 | `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`       | Fetch and store historical Open-Meteo weather for outdoor activities.               |
-| `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                    | Fingerprint outdoor GNSS polylines and cluster repeated matched routes.             |
+| `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                    | Fingerprint outdoor GPS polylines and cluster repeated matched routes.              |
 | `php artisan segments:scan [--rebuild] [--queue] [--chunk=50]`                                    | Auto-detect climbs and match personal segments across outdoor streams.              |
 | `php artisan activities:compute-derived-metrics [--activity=ID] [--force] [--queue] [--chunk=25]` | Compute aerobic decoupling (Pa:Hr / Pw:Hr), EF, and pacing metrics.                 |
 | `php artisan geocode:sync [--queue] [--limit=50] [--force]`                                       | Reverse-geocode matched routes, segments, and activities missing place names.       |
@@ -125,7 +125,7 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 | `DEFAULT_UNITS`                     | `metric`                              | Initial unit system (`metric` or `imperial`); overridable in Settings.                                                                                                         |
 | `DEFAULT_SPORTS_MODE`               | `auto`                                | Initial Sports & Disciplines navigation mode (`auto` or `custom`).                                                                                                             |
 | `GARMIN_KEY`                        | _(empty)_                             | Garmin Connect Personal API key.                                                                                                                                               |
-| `GARMIN_AUTO_SYNC_STREAMS`          | `true`                                | Automatically queue FIT stream & GNSS route downloads for newly synced activities (caches FIT ZIPs in `splitline_fits`; set to `false` to opt out on initial backfill).        |
+| `GARMIN_AUTO_SYNC_STREAMS`          | `true`                                | Automatically queue FIT stream & GPS route downloads for newly synced activities (caches FIT ZIPs in `splitline_fits`; set to `false` to opt out on initial backfill).         |
 | `TRUSTED_PROXIES`                   | _(empty)_                             | Reverse proxy IP/CIDR list or `*` for forwarded HTTPS headers.                                                                                                                 |
 | `SESSION_SECURE_COOKIE`             | `false`                               | Set to `true` when serving over HTTPS.                                                                                                                                         |
 | `LOG_CHANNEL`                       | `stderr` _(Docker)_ / `stack` _(dev)_ | Log destination (`stderr` for `docker logs`).                                                                                                                                  |

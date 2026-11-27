@@ -675,7 +675,7 @@ function formatDateWithYear(dateStr: string | null): string {
                     repeated routes.
                 </template>
                 <template v-else-if="summary.unfingerprinted_count > 0">
-                    You have {{ summary.unfingerprinted_count }} outdoor GNSS
+                    You have {{ summary.unfingerprinted_count }} outdoor GPS
                     {{
                         summary.unfingerprinted_count === 1
                             ? 'activity'
@@ -685,7 +685,7 @@ function formatDateWithYear(dateStr: string | null): string {
                 </template>
                 <template v-else>
                     Routes appear automatically once you complete the same
-                    outdoor GNSS loop or route two or more times.
+                    outdoor GPS loop or route two or more times.
                 </template>
             </p>
             <div class="mt-5 flex flex-wrap items-center justify-center gap-2">

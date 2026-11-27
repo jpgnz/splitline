@@ -346,7 +346,7 @@ class SegmentMatchingService
         ?string $name = null,
     ): Segment {
         if ($activity->is_indoor) {
-            throw new InvalidArgumentException('Custom segments can only be created from outdoor activities with GNSS data.');
+            throw new InvalidArgumentException('Custom segments can only be created from outdoor activities with GPS data.');
         }
 
         $stream = $activity->relationLoaded('stream')
@@ -367,7 +367,7 @@ class SegmentMatchingService
         $slicePoints = $this->sliceGnssPointsByOrigIndex($allPoints, $startIndex, $endIndex);
 
         if (count($slicePoints) < self::CUSTOM_MIN_GNSS_POINTS) {
-            throw new InvalidArgumentException('Selected range must contain at least '.self::CUSTOM_MIN_GNSS_POINTS.' valid GNSS points.');
+            throw new InvalidArgumentException('Selected range must contain at least '.self::CUSTOM_MIN_GNSS_POINTS.' valid GPS points.');
         }
 
         $coords = $this->pointsToLatLng($slicePoints);

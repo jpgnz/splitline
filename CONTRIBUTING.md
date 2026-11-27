@@ -56,7 +56,7 @@ php artisan test --compact --filter="test name"
 
 ## Conventions
 
-- **Terminology**: Use **GNSS** (never GPS) and **Cycling** (never Biking) in user-facing copy, docs, and new identifiers.
+- **Terminology**: Use **Cycling** (never Biking) in user-facing copy, docs, and new identifiers.
 - **Provider-agnostic core**: Keep core config (`TIMEZONE`, `DEFAULT_UNITS`, `DEFAULT_SPORTS_MODE`) independent of any watch vendor; scope Garmin logic to Garmin integration services.
 - **SI/metric storage**: Store all telemetry in SI/metric units (`meters`, `grams`, `m/s`, `°C`, `ml`) in SQLite and convert in the presentation layer.
 - **Wayfinder routes**: Use generated `@/routes` and `@/actions` helpers instead of hardcoded URLs in Vue components.
@@ -67,4 +67,4 @@ php artisan test --compact --filter="test name"
 1. Fork and branch from `main` with a descriptive name (e.g., `fix/wind-arrow-bearing` or `feat/swim-pace-splits`).
 2. Keep PRs focused on a single change.
 3. Add or update Pest tests for behavior changes, bug fixes, and important failure modes.
-4. Never commit personal data (`.env`, `database/*.sqlite*`, FIT archives, or screenshots containing personal GNSS tracks or health records).
+4. Never commit personal data (`.env`, `database/*.sqlite*`, FIT archives, or screenshots containing personal GPS tracks or health records).
