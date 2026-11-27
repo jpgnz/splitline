@@ -494,7 +494,7 @@ function rankBadgeClass(rank: number | null): string {
                 <span
                     class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
-                    {{ customPreview.pointCount }} GNSS pts
+                    {{ customPreview.pointCount }} GPS pts
                 </span>
             </div>
 
@@ -652,7 +652,7 @@ function rankBadgeClass(rank: number | null): string {
                         class="mt-1 text-xs text-amber-600 dark:text-amber-400"
                     >
                         Select at least
-                        {{ isImperial ? '330 ft' : '100 m' }} and 5 GNSS points
+                        {{ isImperial ? '330 ft' : '100 m' }} and 5 GPS points
                         to create a segment.
                     </p>
                 </div>
@@ -907,7 +907,7 @@ function rankBadgeClass(rank: number | null): string {
             </div>
         </section>
 
-        <!-- Empty State (outdoor activity with GNSS stream but no climbs/segments yet) -->
+        <!-- Empty State (outdoor activity with GPS stream but no climbs/segments yet) -->
         <section
             v-else
             class="rounded-xl border border-dashed border-zinc-300/90 bg-white px-5 py-10 text-center dark:border-zinc-800 dark:bg-[#141417]"

@@ -59,7 +59,7 @@ class HeatmapController extends Controller
         $count = count($ids);
 
         if ($count === 0) {
-            return back()->with('status', 'All outdoor GNSS streams are already synced.');
+            return back()->with('status', 'All outdoor GPS streams are already synced.');
         }
 
         DB::transaction(function () use ($ids): void {
@@ -68,6 +68,6 @@ class HeatmapController extends Controller
             }
         });
 
-        return back()->with('status', "Requested GNSS stream sync for {$count} outdoor activity(ies).");
+        return back()->with('status', "Requested GPS stream sync for {$count} outdoor activity(ies).");
     }
 }

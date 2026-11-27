@@ -943,7 +943,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                         v-else
                         class="flex h-80 items-center justify-center rounded-lg bg-[#f7f7f5] font-mono text-xs text-zinc-500 dark:bg-zinc-900/50 dark:text-zinc-400"
                     >
-                        No GNSS coordinates available
+                        No GPS coordinates available
                     </div>
                 </div>
             </div>
