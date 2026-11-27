@@ -34,6 +34,22 @@ function insightsCreateSession(string $startedAtLocal, array $activity = [], ?ar
 }
 
 /**
+ * HR zone durations (1,000 s total) whose Z4–Z5 share equals `$highPct` percent.
+ *
+ * @return array<string, float>
+ */
+function insightsHrZones(float $highPct): array
+{
+    return [
+        'hr_zone_1_seconds' => 0.0,
+        'hr_zone_2_seconds' => 1000.0 - ($highPct * 10.0),
+        'hr_zone_3_seconds' => 0.0,
+        'hr_zone_4_seconds' => $highPct * 10.0,
+        'hr_zone_5_seconds' => 0.0,
+    ];
+}
+
+/**
  * @param  array<string, int>  $valuesByDate
  */
 function insightsCreateHrvNights(array $valuesByDate): void
@@ -226,28 +242,45 @@ it('collapses multi-session days to one primary session before pairing with day-
 
 it('aggregates each training day once for next-night recovery using total load and the hardest session time', function () {
     // Easy morning + hard evening on one day → one evening/hard training day.
-    insightsCreateSession('2026-11-10 07:00:00', ['training_load' => 30.0], ['hr_high_pct' => 2.0]);
-    insightsCreateSession('2026-11-10 19:00:00', ['training_load' => 120.0], ['hr_high_pct' => 25.0]);
+    insightsCreateSession('2026-11-10 07:00:00', ['training_load' => 30.0, ...insightsHrZones(2.0)]);
+    insightsCreateSession('2026-11-10 19:00:00', ['training_load' => 120.0, ...insightsHrZones(25.0)]);
 
     // Two moderate sessions whose combined load is hard; the heavier morning session sets the time slot.
-    insightsCreateSession('2026-11-12 07:00:00', ['training_load' => 60.0], ['hr_high_pct' => 5.0]);
-    insightsCreateSession('2026-11-12 14:00:00', ['training_load' => 50.0], ['hr_high_pct' => 9.0]);
+    insightsCreateSession('2026-11-12 07:00:00', ['training_load' => 60.0, ...insightsHrZones(5.0)]);
+    insightsCreateSession('2026-11-12 14:00:00', ['training_load' => 50.0, ...insightsHrZones(9.0)]);
+
+    // Low load but 30% of time in Z4–Z5 → hard from the activity's HR zones alone.
+    insightsCreateSession('2026-11-14 18:30:00', ['training_load' => 20.0, ...insightsHrZones(30.0)]);
+
+    // Low load and no HR zone data → easy.
+    insightsCreateSession('2026-11-16 07:00:00', [
+        'training_load' => 20.0,
+        'hr_zone_1_seconds' => null,
+        'hr_zone_2_seconds' => null,
+        'hr_zone_3_seconds' => null,
+        'hr_zone_4_seconds' => null,
+        'hr_zone_5_seconds' => null,
+    ]);
 
     SleepRecord::factory()->create(['calendar_date' => '2026-11-11', 'sleep_score' => 70]);
     SleepRecord::factory()->create(['calendar_date' => '2026-11-13', 'sleep_score' => 82]);
+    SleepRecord::factory()->create(['calendar_date' => '2026-11-15', 'sleep_score' => 74]);
+    SleepRecord::factory()->create(['calendar_date' => '2026-11-17', 'sleep_score' => 88]);
 
     $recovery = app(CorrelationService::class)->build(sport: 'running', range: '90d')['workout_to_recovery'];
     $matrix = collect($recovery['matrix'])->keyBy(fn (array $cell): string => $cell['time_key'].':'.$cell['intensity_key']);
     $byIntensity = collect($recovery['by_intensity'])->keyBy('key');
 
-    expect($recovery['n'])->toBe(2)
-        ->and($byIntensity['hard']['count'])->toBe(2)
-        ->and($byIntensity['easy']['count'])->toBe(0)
+    expect($recovery['n'])->toBe(4)
+        ->and($byIntensity['hard']['count'])->toBe(3)
+        ->and($byIntensity['easy']['count'])->toBe(1)
         ->and($byIntensity['moderate']['count'])->toBe(0)
-        ->and($matrix['evening:hard']['count'])->toBe(1)
-        ->and($matrix['evening:hard']['avg_sleep_score'])->toBe(70.0)
+        ->and($matrix['evening:hard']['count'])->toBe(2)
+        ->and($matrix['evening:hard']['avg_sleep_score'])->toBe(72.0)
         ->and($matrix['morning:hard']['count'])->toBe(1)
-        ->and($matrix['morning:hard']['avg_sleep_score'])->toBe(82.0);
+        ->and($matrix['morning:hard']['avg_sleep_score'])->toBe(82.0)
+        ->and($matrix['morning:easy']['count'])->toBe(1)
+        ->and($matrix['morning:easy']['avg_sleep_score'])->toBe(88.0);
 });
 
 it('never pools power-based and speed-based Efficiency Factor', function () {
@@ -289,7 +322,7 @@ it('never pools power-based and speed-based Efficiency Factor', function () {
 });
 
 it('measures next-night HRV against the trailing seven nights instead of a weekly average that includes the night', function () {
-    insightsCreateSession('2026-11-20 08:00:00', ['training_load' => 120.0], ['hr_high_pct' => 25.0]);
+    insightsCreateSession('2026-11-20 08:00:00', ['training_load' => 120.0, ...insightsHrZones(25.0)]);
 
     // Prior seven nights (Nov 14–20) average 60 ms; Garmin's weekly_avg is deliberately misleading.
     insightsCreateHrvNights([
@@ -303,7 +336,7 @@ it('measures next-night HRV against the trailing seven nights instead of a weekl
     ]);
 
     // Fewer than three prior nights → no delta, but the raw HRV is still reported.
-    insightsCreateSession('2026-11-05 19:00:00', ['training_load' => 120.0], ['hr_high_pct' => 25.0]);
+    insightsCreateSession('2026-11-05 19:00:00', ['training_load' => 120.0, ...insightsHrZones(25.0)]);
     insightsCreateHrvNights(['2026-11-04' => 60, '2026-11-05' => 61]);
     HrvRecord::factory()->create([
         'calendar_date' => '2026-11-06',
@@ -339,7 +372,7 @@ it('reports a significant evening vs morning recovery gap with an 18:00 evening 
     ];
 
     foreach ($workouts as $workout) {
-        insightsCreateSession($workout['date'].' '.$workout['time'], ['training_load' => 130.0], ['hr_high_pct' => 25.0]);
+        insightsCreateSession($workout['date'].' '.$workout['time'], ['training_load' => 130.0, ...insightsHrZones(25.0)]);
 
         $nextDate = CarbonImmutable::parse($workout['date'])->addDay()->format('Y-m-d');
         $nights[$nextDate] = $workout['next_hrv'];
