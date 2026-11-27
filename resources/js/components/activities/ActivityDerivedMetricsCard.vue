@@ -15,7 +15,7 @@ const props = defineProps<{
     derivedMetrics: ActivityDerivedMetricsPayload | null;
 }>();
 
-const { isImperial, elevationUnit, elevationFromMeters } = useUnits();
+const { efficiencyFactorFromMetric, efficiencyFactorUnit } = useUnits();
 
 const hasDecoupling = computed<boolean>(
     () =>
@@ -95,7 +95,7 @@ const metricMeta = computed<{
         };
     }
 
-    const paceEfUnit = `${elevationUnit.value}/min/bpm`;
+    const paceEfUnit = efficiencyFactorUnit(metric);
 
     if (metric === 'gap') {
         return {
@@ -117,18 +117,10 @@ const metricMeta = computed<{
 });
 
 function convertEfValue(value: number | null | undefined): number | null {
-    if (value === null || value === undefined || !Number.isFinite(value)) {
-        return null;
-    }
-
-    if (
-        isImperial.value &&
-        props.derivedMetrics?.decoupling_metric !== 'power'
-    ) {
-        return elevationFromMeters(value);
-    }
-
-    return value;
+    return efficiencyFactorFromMetric(
+        value,
+        props.derivedMetrics?.decoupling_metric,
+    );
 }
 
 const decouplingBadge = computed<{
