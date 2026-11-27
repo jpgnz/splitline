@@ -2,17 +2,24 @@
 import { Head, Link, router } from '@inertiajs/vue3';
 import {
     ArrowLeft,
+    ArrowLeftRight,
     ChevronLeft,
     ChevronRight,
+    CloudSun,
     MapPin,
     RefreshCw,
+    Route as RouteIcon,
     Share2,
+    Star,
     Trophy,
     Wind,
     X,
 } from '@lucide/vue';
 import { computed, ref, watch } from 'vue';
-import { syncWeather } from '@/actions/App/Http/Controllers/ActivityController';
+import {
+    syncWeather,
+    toggleFavorite as toggleFavoriteAction,
+} from '@/actions/App/Http/Controllers/ActivityController';
 import ActivityAllStats from '@/components/activities/ActivityAllStats.vue';
 import ActivityBestEfforts from '@/components/activities/ActivityBestEfforts.vue';
 import ActivityDerivedMetricsCard from '@/components/activities/ActivityDerivedMetricsCard.vue';
@@ -26,6 +33,7 @@ import ActivityMatchedRoute from '@/components/activities/ActivityMatchedRoute.v
 import ActivityPaceAnalysis from '@/components/activities/ActivityPaceAnalysis.vue';
 import ActivityPaceDistribution from '@/components/activities/ActivityPaceDistribution.vue';
 import ActivitySegmentsPanel from '@/components/activities/ActivitySegmentsPanel.vue';
+import ActivitySessionSnapshotRail from '@/components/activities/ActivitySessionSnapshotRail.vue';
 import ActivityShareCardModal from '@/components/activities/ActivityShareCardModal.vue';
 import ActivitySplitsAndLaps from '@/components/activities/ActivitySplitsAndLaps.vue';
 import ActivityStreamsPanel, {
@@ -49,6 +57,7 @@ import {
     interpolateWeatherAt,
 } from '@/lib/wind';
 import {
+    compare as compareActivities,
     index as activitiesIndex,
     show as showActivity,
 } from '@/routes/activities';
@@ -97,12 +106,10 @@ interface ActivityShowProps {
 }
 
 type DetailTab =
-    | 'overview'
-    | 'pace'
-    | 'efforts'
-    | 'segments'
-    | 'effort'
-    | 'route'
+    | 'streams'
+    | 'splits'
+    | 'efforts_segments'
+    | 'context'
     | 'stats';
 
 const props = defineProps<ActivityShowProps>();
@@ -113,6 +120,7 @@ const {
     formatDistance,
     formatElevation,
     formatFluidVolume,
+    formatOscillation,
     formatPace,
     formatPace100m,
     formatSpeed,
@@ -124,7 +132,7 @@ const {
 const headerActionsRef = ref<InstanceType<typeof ActivityHeaderActions> | null>(
     null,
 );
-const activeTab = ref<DetailTab>('overview');
+const activeTab = ref<DetailTab>('streams');
 const activeStreamIndex = ref<number | null>(null);
 const mapColorMode = ref<MapColorMode>('solid');
 const showWindArrows = ref<boolean>(false);
@@ -134,12 +142,13 @@ const verticalMetricMode = ref<'ratio' | 'oscillation'>('ratio');
 const powerUnitMode = ref<'watts' | 'pct'>('watts');
 const isSyncingStreams = ref<boolean>(false);
 const isSyncingWeather = ref<boolean>(false);
+const isTogglingFavorite = ref<boolean>(false);
 const shareModalOpen = ref<boolean>(false);
 
 watch(
     () => props.activity.id,
     () => {
-        activeTab.value = 'overview';
+        activeTab.value = 'streams';
         activeStreamIndex.value = null;
         mapColorMode.value = 'solid';
         showWindArrows.value = false;
@@ -287,6 +296,26 @@ function formatExecutionRating(score: number): string {
     return 'Low';
 }
 
+function toggleFavorite(): void {
+    if (isTogglingFavorite.value) {
+        return;
+    }
+
+    router.post(
+        toggleFavoriteAction.url(props.activity.id),
+        {},
+        {
+            preserveScroll: true,
+            onStart: () => {
+                isTogglingFavorite.value = true;
+            },
+            onFinish: () => {
+                isTogglingFavorite.value = false;
+            },
+        },
+    );
+}
+
 function syncStreams(): void {
     headerActionsRef.value?.syncStreams();
 }
@@ -346,7 +375,7 @@ const primaryKpis = computed<
 
     const elevSub =
         a.min_elevation !== null && a.max_elevation !== null
-            ? `${Math.round(elevationFromMeters(a.min_elevation))}–${formatElevation(a.max_elevation)}`
+            ? `${formatNumber(Math.round(elevationFromMeters(a.min_elevation)), 0)}–${formatElevation(a.max_elevation)}`
             : a.elevation_loss !== null
               ? `-${formatElevation(a.elevation_loss)}`
               : null;
@@ -357,6 +386,8 @@ const primaryKpis = computed<
             : null;
 
     const trimpScore = props.effortContext?.trimp?.activity_score;
+    const hasTrimp = trimpScore !== null && trimpScore !== undefined;
+    const teLabel = formatTrainingEffectLabel(a.training_effect_label);
 
     return [
         {
@@ -410,19 +441,18 @@ const primaryKpis = computed<
             accentClass: 'bg-orange-500',
         },
         {
-            label: 'HR Effort / Load',
-            value:
-                trimpScore !== null && trimpScore !== undefined
-                    ? `${formatNumber(trimpScore, 0)}`
-                    : a.training_load !== null
-                      ? formatNumber(a.training_load, 0)
-                      : '—',
+            label: hasTrimp ? 'TRIMP' : 'Training Load',
+            value: hasTrimp
+                ? `${formatNumber(trimpScore, 0)}`
+                : a.training_load !== null
+                  ? formatNumber(a.training_load, 0)
+                  : '—',
             sub:
-                trimpScore !== null &&
-                trimpScore !== undefined &&
-                a.training_load !== null
-                    ? `Load ${formatNumber(a.training_load, 0)} · ${formatTrainingEffectLabel(a.training_effect_label) ?? 'TRIMP'}`
-                    : formatTrainingEffectLabel(a.training_effect_label),
+                hasTrimp && a.training_load !== null
+                    ? teLabel
+                        ? `Load ${formatNumber(a.training_load, 0)} · ${teLabel}`
+                        : `Load ${formatNumber(a.training_load, 0)}`
+                    : teLabel,
             accentClass: 'bg-indigo-500',
         },
     ];
@@ -552,9 +582,8 @@ const disciplineTelemetryCells = computed<TelemetryCell[]>(() => {
                 label: 'Stride Length',
                 value: formatStride(a.avg_stride_length),
                 sub:
-                    a.avg_vertical_ratio !== null &&
                     a.avg_vertical_oscillation !== null
-                        ? `${a.avg_vertical_ratio.toFixed(1)}% · ${a.avg_vertical_oscillation.toFixed(1)} cm`
+                        ? `Osc ${formatOscillation(a.avg_vertical_oscillation)}`
                         : null,
             },
         ];
@@ -708,12 +737,17 @@ const hasWeatherSamples = computed<boolean>(
     () => props.weather !== null && props.weather.samples.length > 0,
 );
 
+const hasGpsTrack = computed<boolean>(
+    () =>
+        polyline.value.length > 0 ||
+        series.value.some((p) => p.lat !== null && p.lng !== null),
+);
+
 const hasCoordinates = computed<boolean>(
     () =>
         (props.activity.start_lat !== null &&
             props.activity.start_lng !== null) ||
-        polyline.value.length > 0 ||
-        series.value.some((p) => p.lat !== null && p.lng !== null),
+        hasGpsTrack.value,
 );
 
 function selectMapColorMode(mode: MapColorMode): void {
@@ -890,6 +924,9 @@ const hoveredWeatherReadout = computed<{
                 if (effective.classification === 'calm') {
                     effectiveText = 'calm';
                     effectiveToneClass = 'text-zinc-500 dark:text-zinc-400';
+                } else if (effective.classification === 'crosswind') {
+                    effectiveText = `${formatSpeedKmh(effective.crosswindKmh, 0)} cross`;
+                    effectiveToneClass = 'text-amber-600 dark:text-amber-400';
                 } else {
                     const effVal =
                         Math.abs(effective.effectiveKmh) < 0.5
@@ -902,17 +939,13 @@ const hoveredWeatherReadout = computed<{
                     const kind =
                         effective.classification === 'headwind'
                             ? 'head'
-                            : effective.classification === 'tailwind'
-                              ? 'tail'
-                              : 'cross';
+                            : 'tail';
 
                     effectiveText = `${signedSpeed} ${kind}`;
                     effectiveToneClass =
                         effective.classification === 'headwind'
                             ? 'text-rose-600 dark:text-rose-400'
-                            : effective.classification === 'tailwind'
-                              ? 'text-emerald-600 dark:text-emerald-400'
-                              : 'text-amber-600 dark:text-amber-400';
+                            : 'text-emerald-600 dark:text-emerald-400';
                 }
             }
         }
@@ -968,6 +1001,101 @@ const showSegmentsTab = computed<boolean>(
     () => segmentEffortsList.value.length > 0 || hasGnssStreamForSegments.value,
 );
 
+const showEffortsSegmentsTab = computed<boolean>(
+    () => props.bestEfforts.length > 0 || showSegmentsTab.value,
+);
+
+const effortsSegmentsCount = computed<number>(
+    () => props.bestEfforts.length + segmentEffortsList.value.length,
+);
+
+const compareUrl = computed<string>(() =>
+    compareActivities.url({ query: { ids: String(props.activity.id) } }),
+);
+
+const canSyncWeather = computed<boolean>(
+    () =>
+        !props.activity.is_indoor &&
+        (props.weather !== null || hasCoordinates.value),
+);
+
+const hasDerivedMetrics = computed<boolean>(() => {
+    const dm = props.derivedMetrics;
+
+    if (!dm) {
+        return false;
+    }
+
+    return (
+        (dm.decoupling_pct !== null && Number.isFinite(dm.decoupling_pct)) ||
+        (dm.efficiency_factor !== null &&
+            Number.isFinite(dm.efficiency_factor)) ||
+        dm.pacing_strategy !== null ||
+        (dm.hr_low_pct !== null &&
+            dm.hr_moderate_pct !== null &&
+            dm.hr_high_pct !== null)
+    );
+});
+
+const hasSnapshotRail = computed<boolean>(
+    () =>
+        hasDerivedMetrics.value ||
+        canSyncWeather.value ||
+        (disciplineTelemetryTitle.value !== null &&
+            disciplineTelemetryCells.value.length > 0),
+);
+
+const headerWeatherSummary = computed<string | null>(() => {
+    const w = props.weather;
+
+    if (!w || props.activity.is_indoor) {
+        return null;
+    }
+
+    const parts: string[] = [];
+
+    if (w.temperature_c !== null) {
+        parts.push(formatTemp(w.temperature_c, 0));
+    }
+
+    if (w.wind_speed_kmh !== null) {
+        const compass =
+            w.wind_direction_compass ??
+            (w.wind_direction_deg !== null
+                ? formatCompass(w.wind_direction_deg)
+                : null);
+        parts.push(
+            compass
+                ? `${formatSpeedKmh(w.wind_speed_kmh, 0)} ${compass}`
+                : formatSpeedKmh(w.wind_speed_kmh, 0),
+        );
+    }
+
+    return parts.length > 0 ? parts.join(' · ') : w.condition;
+});
+
+const primaryMapColorOptions = computed(() =>
+    mapColorOptions.value.slice(0, 5),
+);
+
+const overflowMapColorOptions = computed(() => mapColorOptions.value.slice(5));
+
+const activeOverflowColorMode = computed<string>(() =>
+    overflowMapColorOptions.value.some((o) => o.value === mapColorMode.value)
+        ? mapColorMode.value
+        : '',
+);
+
+function onOverflowMapColorChange(event: Event): void {
+    const value = (event.target as HTMLSelectElement).value as
+        | MapColorMode
+        | '';
+
+    if (value) {
+        selectMapColorMode(value);
+    }
+}
+
 const tabs = computed<
     Array<{ key: DetailTab; label: string; badge?: string | number }>
 >(() => {
@@ -977,53 +1105,30 @@ const tabs = computed<
         badge?: string | number;
     }> = [
         {
-            key: 'overview',
-            label: 'Overview & Streams',
-            badge:
-                telemetryPanelCount.value > 0
-                    ? telemetryPanelCount.value
-                    : undefined,
+            key: 'streams',
+            label: 'Streams',
         },
         {
-            key: 'pace',
-            label: usesPace.value
-                ? 'Pace, Splits & Zones'
-                : 'Speed, Splits & Zones',
+            key: 'splits',
+            label: 'Splits & Zones',
         },
     ];
 
-    if (props.bestEfforts.length > 0) {
+    if (showEffortsSegmentsTab.value) {
         list.push({
-            key: 'efforts',
-            label: 'Best Efforts',
-            badge: props.bestEfforts.length,
-        });
-    }
-
-    if (showSegmentsTab.value) {
-        list.push({
-            key: 'segments',
-            label: 'Segments & Climbs',
+            key: 'efforts_segments',
+            label: 'Efforts & Segments',
             badge:
-                segmentEffortsList.value.length > 0
-                    ? segmentEffortsList.value.length
+                effortsSegmentsCount.value > 0
+                    ? effortsSegmentsCount.value
                     : undefined,
-        });
-    }
-
-    if (props.matchedRoute) {
-        list.push({
-            key: 'route',
-            label: 'Matched Route',
-            badge: props.matchedRoute.route.activity_count,
         });
     }
 
     list.push(
         {
-            key: 'effort',
-            label: 'Effort Context',
-            badge: props.effortContext?.trimp?.activity_score ?? undefined,
+            key: 'context',
+            label: props.matchedRoute ? 'Route & Effort' : 'Effort Context',
         },
         {
             key: 'stats',
@@ -1054,6 +1159,7 @@ const tabs = computed<
                     v-if="prevActivity"
                     :href="showActivity.url(prevActivity.id)"
                     :title="`Previous: ${prevActivity.name}`"
+                    :aria-label="`Previous activity: ${prevActivity.name}`"
                     class="inline-flex items-center gap-1 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
                 >
                     <ChevronLeft class="size-3.5" />
@@ -1063,6 +1169,8 @@ const tabs = computed<
                 </Link>
                 <span
                     v-else
+                    aria-disabled="true"
+                    aria-label="No previous activity"
                     class="inline-flex items-center rounded-lg border border-zinc-200/60 bg-white/50 px-2 py-1.5 text-zinc-300 dark:border-zinc-800/60 dark:bg-[#141417]/50 dark:text-zinc-700"
                 >
                     <ChevronLeft class="size-3.5" />
@@ -1072,6 +1180,7 @@ const tabs = computed<
                     v-if="nextActivity"
                     :href="showActivity.url(nextActivity.id)"
                     :title="`Next: ${nextActivity.name}`"
+                    :aria-label="`Next activity: ${nextActivity.name}`"
                     class="inline-flex items-center gap-1 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
                 >
                     <span class="hidden max-w-36 truncate sm:inline">
@@ -1081,6 +1190,8 @@ const tabs = computed<
                 </Link>
                 <span
                     v-else
+                    aria-disabled="true"
+                    aria-label="No next activity"
                     class="inline-flex items-center rounded-lg border border-zinc-200/60 bg-white/50 px-2 py-1.5 text-zinc-300 dark:border-zinc-800/60 dark:bg-[#141417]/50 dark:text-zinc-700"
                 >
                     <ChevronRight class="size-3.5" />
@@ -1119,13 +1230,73 @@ const tabs = computed<
                         <Trophy class="size-3 text-amber-500" />
                         PR
                     </span>
+
+                    <button
+                        v-if="matchedRoute"
+                        type="button"
+                        class="inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300"
+                        @click="activeTab = 'context'"
+                    >
+                        <RouteIcon class="size-3 shrink-0" />
+                        <span class="max-w-52 truncate">
+                            {{ matchedRoute.route.name }}
+                        </span>
+                        <span class="shrink-0 tabular-nums opacity-80">
+                            · #{{ matchedRoute.current.rank }}/{{
+                                matchedRoute.current.total_attempts
+                            }}
+                        </span>
+                    </button>
+
+                    <span
+                        v-if="headerWeatherSummary"
+                        class="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-white px-2 py-0.5 font-mono text-[10px] text-zinc-600 tabular-nums dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-400"
+                    >
+                        <CloudSun
+                            class="size-3 shrink-0 text-sky-500 dark:text-sky-400"
+                        />
+                        {{ headerWeatherSummary }}
+                    </span>
                 </div>
 
-                <h1
-                    class="mt-2 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
-                >
-                    {{ activity.name }}
-                </h1>
+                <div class="mt-2 flex items-center gap-2.5">
+                    <h1
+                        class="min-w-0 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    >
+                        {{ activity.name }}
+                    </h1>
+                    <button
+                        type="button"
+                        :disabled="isTogglingFavorite"
+                        :aria-pressed="activity.is_favorite"
+                        :title="
+                            activity.is_favorite
+                                ? 'Remove from favorites'
+                                : 'Mark as favorite'
+                        "
+                        :aria-label="
+                            activity.is_favorite
+                                ? 'Remove from favorites'
+                                : 'Mark as favorite'
+                        "
+                        class="inline-flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg border transition-colors disabled:opacity-60"
+                        :class="
+                            activity.is_favorite
+                                ? 'border-amber-500/50 bg-amber-50 text-amber-500 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-400'
+                                : 'border-zinc-200/90 bg-white text-zinc-400 hover:border-zinc-300 hover:text-amber-500 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-500 dark:hover:border-zinc-700 dark:hover:text-amber-400'
+                        "
+                        @click="toggleFavorite"
+                    >
+                        <Star
+                            class="size-4"
+                            :class="
+                                activity.is_favorite
+                                    ? 'fill-amber-400 text-amber-500 dark:fill-amber-400 dark:text-amber-400'
+                                    : ''
+                            "
+                        />
+                    </button>
+                </div>
 
                 <div
                     class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-xs text-zinc-500 dark:text-zinc-400"
@@ -1138,35 +1309,53 @@ const tabs = computed<
                         <MapPin class="size-3 text-zinc-400" />
                         {{ activity.location_name }}
                     </span>
+                    <span
+                        v-if="gear?.assigned_name"
+                        class="text-zinc-400 dark:text-zinc-500"
+                    >
+                        · {{ gear.assigned_name }}
+                    </span>
                 </div>
             </div>
 
             <!-- Action Controls -->
             <div class="flex flex-wrap items-center gap-2">
+                <Link
+                    :href="compareUrl"
+                    prefetch
+                    class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2.5 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
+                >
+                    <ArrowLeftRight class="size-3.5" />
+                    <span>Compare</span>
+                </Link>
+                <button
+                    type="button"
+                    class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100"
+                    @click="shareModalOpen = true"
+                >
+                    <Share2 class="size-3.5" />
+                    <span>Share</span>
+                </button>
+                <ActivityExportMenu
+                    :activity-id="activity.id"
+                    :has-gps="hasGpsTrack"
+                    :has-original-archive="Boolean(hasOriginalArchive)"
+                />
                 <ActivityHeaderActions
                     ref="headerActionsRef"
                     v-model:syncing-streams="isSyncingStreams"
                     :activity="activity"
                     :gear="gear"
                     :discipline-options="discipline_options"
+                    :can-sync-weather="canSyncWeather"
+                    :has-weather="weather !== null"
+                    :syncing-weather="isSyncingWeather"
+                    @sync-weather="syncActivityWeather"
                 />
-                <ActivityExportMenu
-                    :activity-id="activity.id"
-                    :has-gps="hasCoordinates || polyline.length > 0"
-                    :has-original-archive="Boolean(hasOriginalArchive)"
-                />
-                <button
-                    type="button"
-                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white"
-                    @click="shareModalOpen = true"
-                >
-                    <Share2 class="size-3.5" />
-                    <span>Share Card</span>
-                </button>
             </div>
         </header>
 
-        <!-- Primary KPI Strip -->
+        <!-- Primary KPI Strip (7 Cards) -->
         <section class="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
             <div
                 v-for="kpi in primaryKpis"
@@ -1201,271 +1390,352 @@ const tabs = computed<
             </div>
         </section>
 
-        <!-- Discipline-Specific Telemetry Strip -->
-        <section
-            v-if="
-                disciplineTelemetryTitle && disciplineTelemetryCells.length > 0
-            "
-            class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
-        >
-            <div class="mb-3 flex items-center gap-2">
-                <span
-                    class="size-1.5 rounded-full"
-                    :style="{ backgroundColor: sportMeta.accentHex }"
-                />
-                <h2
-                    class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    {{ disciplineTelemetryTitle }}
-                </h2>
-            </div>
-
-            <div
-                class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
-            >
-                <div
-                    v-for="cell in disciplineTelemetryCells"
-                    :key="cell.label"
-                    class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 px-3 py-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
-                >
-                    <div
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        {{ cell.label }}
-                    </div>
-                    <div
-                        class="mt-1 font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
-                    >
-                        {{ cell.value }}
-                    </div>
-                    <div
-                        v-if="cell.sub"
-                        class="mt-0.5 truncate font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
-                    >
-                        {{ cell.sub }}
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Interactive Route Map -->
+        <!-- Option B: Hero Split (Route Map + Session Snapshot Rail) -->
         <section
             v-if="polyline.length > 0"
-            class="rounded-xl border border-zinc-200/90 bg-white p-4 sm:p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+            class="grid grid-cols-1 gap-6 xl:grid-cols-12"
         >
+            <!-- Interactive Route Map -->
             <div
-                class="mb-2.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
-            >
-                <div class="flex flex-wrap items-center gap-3">
-                    <span
-                        class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        Route
-                    </span>
-
-                    <!-- Active Best Effort Highlight Pill -->
-                    <span
-                        v-if="highlightedRange"
-                        class="inline-flex items-center gap-1.5 rounded-md border border-orange-500/40 bg-orange-50 px-2 py-0.5 font-mono text-[11px] font-medium text-orange-700 dark:bg-orange-500/15 dark:text-orange-300"
-                    >
-                        {{ highlightedRange.label }}
-                        <button
-                            type="button"
-                            class="cursor-pointer rounded hover:text-orange-950 dark:hover:text-orange-100"
-                            aria-label="Clear segment highlight"
-                            @click="highlightedRange = null"
-                        >
-                            <X class="size-3" />
-                        </button>
-                    </span>
-                </div>
-
-                <!-- Color-Mode Pills & Wind Arrows Toggle -->
-                <div class="flex flex-wrap items-center gap-2">
-                    <div
-                        class="inline-flex flex-wrap rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
-                    >
-                        <button
-                            v-for="mode in mapColorOptions"
-                            :key="mode.value"
-                            type="button"
-                            class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
-                            :class="
-                                mapColorMode === mode.value
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
-                                    : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                            "
-                            @click="selectMapColorMode(mode.value)"
-                        >
-                            {{ mode.label }}
-                        </button>
-                    </div>
-
-                    <button
-                        v-if="hasWeatherSamples"
-                        type="button"
-                        :aria-pressed="showWindArrows"
-                        class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-medium transition-colors"
-                        :class="
-                            showWindArrows
-                                ? 'border-sky-500/50 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/15 dark:text-sky-300'
-                                : 'border-zinc-200/90 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
-                        "
-                        @click="showWindArrows = !showWindArrows"
-                    >
-                        <Wind class="size-3.5" />
-                        <span>Wind Arrows</span>
-                    </button>
-                </div>
-            </div>
-
-            <!-- Reserved Single-Line Live Hover Telemetry Strip -->
-            <div
-                class="mb-3 flex h-7 items-center overflow-x-auto rounded-md border border-zinc-200/80 bg-[#f7f7f5] px-2.5 font-mono text-[11px] whitespace-nowrap tabular-nums dark:border-zinc-800 dark:bg-zinc-900/70"
+                :class="hasSnapshotRail ? 'xl:col-span-7' : 'xl:col-span-12'"
+                class="flex h-full flex-col rounded-xl border border-zinc-200/90 bg-white p-4 sm:p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
                 <div
-                    v-if="hoveredPoint"
-                    class="flex items-center gap-2.5 text-zinc-700 dark:text-zinc-300"
+                    class="mb-2.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
                 >
-                    <span v-if="hoveredPoint.distance !== null">
-                        {{ formatDistance(hoveredPoint.distance, 2) }}
-                    </span>
-                    <span>
-                        {{ formatDurationClock(hoveredPoint.time) }}
-                    </span>
-                    <span
-                        v-if="hoveredPoint.speed !== null"
-                        class="text-amber-600 dark:text-amber-400"
-                    >
-                        {{ formatPrimaryPaceOrSpeed(hoveredPoint.speed) }}
-                    </span>
-                    <span
-                        v-if="hoveredPoint.hr !== null"
-                        class="text-rose-600 dark:text-rose-400"
-                    >
-                        {{ Math.round(hoveredPoint.hr) }} bpm
-                    </span>
-                    <span
-                        v-if="hoveredPoint.altitude !== null"
-                        class="text-emerald-600 dark:text-emerald-400"
-                    >
-                        {{ formatElevation(hoveredPoint.altitude) }}
-                    </span>
-                    <span
-                        v-if="hoveredPoint.power !== null"
-                        class="text-sky-600 dark:text-sky-400"
-                    >
-                        {{ Math.round(hoveredPoint.power) }} W
-                    </span>
-                    <span
-                        v-if="
-                            hoveredPoint.stamina !== null &&
-                            hoveredPoint.stamina !== undefined
-                        "
-                        class="text-orange-600 dark:text-orange-400"
-                    >
-                        {{ Math.round(hoveredPoint.stamina) }}% stam
-                    </span>
-                    <span
-                        v-if="hoveredWeatherReadout"
-                        class="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400"
-                    >
-                        <Wind class="size-3 shrink-0" />
-                        <span v-if="hoveredWeatherReadout.windText">
-                            {{ hoveredWeatherReadout.windText }}
+                    <div class="flex flex-wrap items-center gap-2.5">
+                        <div class="flex items-center gap-2">
+                            <span
+                                class="size-1.5 rounded-full"
+                                :style="{
+                                    backgroundColor: sportMeta.accentHex,
+                                }"
+                            />
+                            <h2
+                                class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            >
+                                Route Map
+                            </h2>
+                        </div>
+
+                        <!-- Active Best Effort / Segment Highlight Pill -->
+                        <span
+                            v-if="highlightedRange"
+                            class="inline-flex items-center gap-1.5 rounded-md border border-orange-500/40 bg-orange-50 px-2 py-0.5 font-mono text-[11px] font-medium text-orange-700 dark:bg-orange-500/15 dark:text-orange-300"
+                        >
+                            {{ highlightedRange.label }}
+                            <button
+                                type="button"
+                                class="cursor-pointer rounded hover:text-orange-950 dark:hover:text-orange-100"
+                                aria-label="Clear segment highlight"
+                                @click="highlightedRange = null"
+                            >
+                                <X class="size-3" />
+                            </button>
                         </span>
-                        <template v-if="hoveredWeatherReadout.effectiveText">
-                            <span class="text-zinc-400 dark:text-zinc-500">
-                                ·
-                            </span>
-                            <span
+                    </div>
+
+                    <!-- Compact Color-Mode Switcher & Wind Arrows Toggle -->
+                    <div class="flex flex-wrap items-center gap-1.5">
+                        <div
+                            class="inline-flex flex-wrap items-center rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                        >
+                            <button
+                                v-for="mode in primaryMapColorOptions"
+                                :key="mode.value"
+                                type="button"
+                                class="cursor-pointer rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
-                                    hoveredWeatherReadout.effectiveToneClass
+                                    mapColorMode === mode.value
+                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
+                                @click="selectMapColorMode(mode.value)"
                             >
-                                {{ hoveredWeatherReadout.effectiveText }}
-                            </span>
-                        </template>
-                        <template v-if="hoveredWeatherReadout.tempText">
-                            <span
-                                v-if="
-                                    hoveredWeatherReadout.windText ||
-                                    hoveredWeatherReadout.effectiveText
+                                {{ mode.label }}
+                            </button>
+
+                            <select
+                                v-if="overflowMapColorOptions.length > 0"
+                                :value="activeOverflowColorMode"
+                                aria-label="More map color modes"
+                                class="cursor-pointer rounded-md px-1.5 py-1 font-mono text-[11px] font-medium transition-colors focus:outline-none"
+                                :class="
+                                    activeOverflowColorMode
+                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        : 'bg-transparent text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
-                                class="text-zinc-400 dark:text-zinc-500"
+                                @change="onOverflowMapColorChange"
                             >
-                                ·
+                                <option value="">More…</option>
+                                <option
+                                    v-for="mode in overflowMapColorOptions"
+                                    :key="mode.value"
+                                    :value="mode.value"
+                                >
+                                    {{ mode.label }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <button
+                            v-if="hasWeatherSamples"
+                            type="button"
+                            :aria-pressed="showWindArrows"
+                            class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 font-mono text-[11px] font-medium transition-colors"
+                            :class="
+                                showWindArrows
+                                    ? 'border-sky-500/50 bg-sky-50 text-sky-700 dark:border-sky-500/40 dark:bg-sky-500/15 dark:text-sky-300'
+                                    : 'border-zinc-200/90 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
+                            "
+                            @click="showWindArrows = !showWindArrows"
+                        >
+                            <Wind class="size-3.5" />
+                            <span>Wind</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Reserved Single-Line Live Hover Telemetry Strip -->
+                <div
+                    class="mb-3 flex h-7 items-center overflow-x-auto rounded-md border border-zinc-200/80 bg-[#f7f7f5] px-2.5 font-mono text-[11px] whitespace-nowrap tabular-nums dark:border-zinc-800 dark:bg-zinc-900/70"
+                >
+                    <div
+                        v-if="hoveredPoint"
+                        class="flex items-center gap-2.5 text-zinc-700 dark:text-zinc-300"
+                    >
+                        <span v-if="hoveredPoint.distance !== null">
+                            {{ formatDistance(hoveredPoint.distance, 2) }}
+                        </span>
+                        <span>
+                            {{ formatDurationClock(hoveredPoint.time) }}
+                        </span>
+                        <span
+                            v-if="hoveredPoint.speed !== null"
+                            class="text-amber-600 dark:text-amber-400"
+                        >
+                            {{ formatPrimaryPaceOrSpeed(hoveredPoint.speed) }}
+                        </span>
+                        <span
+                            v-if="hoveredPoint.hr !== null"
+                            class="text-rose-600 dark:text-rose-400"
+                        >
+                            {{ Math.round(hoveredPoint.hr) }} bpm
+                        </span>
+                        <span
+                            v-if="hoveredPoint.altitude !== null"
+                            class="text-emerald-600 dark:text-emerald-400"
+                        >
+                            {{ formatElevation(hoveredPoint.altitude) }}
+                        </span>
+                        <span
+                            v-if="hoveredPoint.power !== null"
+                            class="text-sky-600 dark:text-sky-400"
+                        >
+                            {{ Math.round(hoveredPoint.power) }} W
+                        </span>
+                        <span
+                            v-if="
+                                hoveredPoint.stamina !== null &&
+                                hoveredPoint.stamina !== undefined
+                            "
+                            class="text-orange-600 dark:text-orange-400"
+                        >
+                            {{ Math.round(hoveredPoint.stamina) }}% stamina
+                        </span>
+                        <span
+                            v-if="hoveredWeatherReadout"
+                            class="inline-flex items-center gap-1.5 text-sky-600 dark:text-sky-400"
+                        >
+                            <Wind class="size-3 shrink-0" />
+                            <span v-if="hoveredWeatherReadout.windText">
+                                {{ hoveredWeatherReadout.windText }}
                             </span>
-                            <span class="text-zinc-600 dark:text-zinc-300">
-                                {{ hoveredWeatherReadout.tempText }}
-                            </span>
-                        </template>
+                            <template
+                                v-if="hoveredWeatherReadout.effectiveText"
+                            >
+                                <span class="text-zinc-400 dark:text-zinc-500">
+                                    ·
+                                </span>
+                                <span
+                                    :class="
+                                        hoveredWeatherReadout.effectiveToneClass
+                                    "
+                                >
+                                    {{ hoveredWeatherReadout.effectiveText }}
+                                </span>
+                            </template>
+                            <template v-if="hoveredWeatherReadout.tempText">
+                                <span
+                                    v-if="
+                                        hoveredWeatherReadout.windText ||
+                                        hoveredWeatherReadout.effectiveText
+                                    "
+                                    class="text-zinc-400 dark:text-zinc-500"
+                                >
+                                    ·
+                                </span>
+                                <span class="text-zinc-600 dark:text-zinc-300">
+                                    {{ hoveredWeatherReadout.tempText }}
+                                </span>
+                            </template>
+                        </span>
+                    </div>
+                    <span v-else class="text-zinc-400 dark:text-zinc-500">
+                        Hover the route or telemetry charts to inspect point
+                        metrics
                     </span>
                 </div>
-                <span v-else class="text-zinc-400 dark:text-zinc-500">
-                    Hover the route or telemetry charts to inspect point metrics
-                </span>
+
+                <div class="min-h-[380px] flex-1">
+                    <ActivityMap
+                        :polyline="polyline"
+                        :series="series"
+                        :color-mode="mapColorMode"
+                        :uses-pace="usesPace"
+                        :accent-color="sportMeta.accentHex"
+                        :active-index="activeStreamIndex"
+                        :highlight-range="highlightedRange"
+                        :jumps="jumps"
+                        :weather="weather"
+                        :show-wind-arrows="showWindArrows"
+                        height="100%"
+                        @hover-index="activeStreamIndex = $event"
+                    />
+                </div>
             </div>
 
-            <ActivityMap
-                :polyline="polyline"
-                :series="series"
-                :color-mode="mapColorMode"
-                :accent-color="sportMeta.accentHex"
-                :active-index="activeStreamIndex"
-                :highlight-range="highlightedRange"
-                :jumps="jumps"
-                :weather="weather"
-                :show-wind-arrows="showWindArrows"
-                :height="380"
-                @hover-index="activeStreamIndex = $event"
-            />
-        </section>
-
-        <!-- Missing Stream Notice -->
-        <section
-            v-if="!stream"
-            class="flex flex-col items-center justify-between gap-4 rounded-xl border border-dashed border-zinc-200/90 bg-white/70 p-6 text-center sm:flex-row sm:text-left dark:border-zinc-800/90 dark:bg-[#141417]/70"
-        >
-            <div>
-                <p
-                    class="font-mono text-xs font-medium text-zinc-700 dark:text-zinc-300"
-                >
-                    Detailed FIT streams not synced yet
-                </p>
-                <p
-                    class="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                >
-                    Sync FIT data to view the route map, charts, and splits.
-                </p>
-            </div>
-            <button
-                type="button"
-                :disabled="isSyncingStreams"
-                class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
-                @click="syncStreams"
-            >
-                <RefreshCw
-                    :class="['size-3.5', isSyncingStreams && 'animate-spin']"
+            <!-- Session Snapshot Rail (Derived Metrics + Weather + Top Discipline Highlights) -->
+            <div v-if="hasSnapshotRail" class="xl:col-span-5">
+                <ActivitySessionSnapshotRail
+                    :derived-metrics="derivedMetrics ?? null"
+                    :weather="weather"
+                    :is-indoor="activity.is_indoor"
+                    :has-coordinates="hasCoordinates"
+                    :syncing-weather="isSyncingWeather"
+                    :discipline-title="disciplineTelemetryTitle"
+                    :discipline-cells="disciplineTelemetryCells"
+                    :accent-hex="sportMeta.accentHex"
+                    @sync-weather="syncActivityWeather"
+                    @view-all-stats="activeTab = 'stats'"
                 />
-                {{ isSyncingStreams ? 'Syncing FIT...' : 'Sync FIT Streams' }}
-            </button>
+            </div>
         </section>
 
-        <!-- 5-Tab Analysis Navigation -->
+        <!-- Non-GPS / Indoor Fallback Summary Stack -->
+        <template v-else>
+            <!-- Missing Stream Notice -->
+            <section
+                v-if="!stream"
+                class="flex flex-col items-center justify-between gap-4 rounded-xl border border-dashed border-zinc-200/90 bg-white/70 p-6 text-center sm:flex-row sm:text-left dark:border-zinc-800/90 dark:bg-[#141417]/70"
+            >
+                <div>
+                    <p
+                        class="font-mono text-xs font-medium text-zinc-700 dark:text-zinc-300"
+                    >
+                        Detailed FIT streams not synced yet
+                    </p>
+                    <p
+                        class="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                    >
+                        Sync FIT data to view the route map, charts, and splits.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    :disabled="isSyncingStreams"
+                    class="inline-flex shrink-0 cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                    @click="syncStreams"
+                >
+                    <RefreshCw
+                        :class="[
+                            'size-3.5',
+                            isSyncingStreams && 'animate-spin',
+                        ]"
+                    />
+                    {{
+                        isSyncingStreams ? 'Syncing FIT...' : 'Sync FIT Streams'
+                    }}
+                </button>
+            </section>
+
+            <ActivityDerivedMetricsCard
+                :derived-metrics="derivedMetrics ?? null"
+            />
+
+            <ActivityWeatherCard
+                :weather="weather"
+                :is-indoor="activity.is_indoor"
+                :has-coordinates="hasCoordinates"
+                :syncing="isSyncingWeather"
+                @sync="syncActivityWeather"
+            />
+
+            <section
+                v-if="
+                    disciplineTelemetryTitle &&
+                    disciplineTelemetryCells.length > 0
+                "
+                class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
+            >
+                <div class="mb-3 flex items-center gap-2">
+                    <span
+                        class="size-1.5 rounded-full"
+                        :style="{ backgroundColor: sportMeta.accentHex }"
+                    />
+                    <h2
+                        class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        {{ disciplineTelemetryTitle }}
+                    </h2>
+                </div>
+
+                <div
+                    class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5"
+                >
+                    <div
+                        v-for="cell in disciplineTelemetryCells"
+                        :key="cell.label"
+                        class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 px-3 py-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
+                    >
+                        <div
+                            class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            {{ cell.label }}
+                        </div>
+                        <div
+                            class="mt-1 font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                        >
+                            {{ cell.value }}
+                        </div>
+                        <div
+                            v-if="cell.sub"
+                            class="mt-0.5 truncate font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        >
+                            {{ cell.sub }}
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </template>
+
+        <!-- Underlined Analysis Tabs Navigation (5 Consolidated Tabs) -->
         <nav
+            role="tablist"
             aria-label="Activity analysis sections"
-            class="flex flex-wrap items-center gap-1.5 border-b border-zinc-200/90 pb-3 dark:border-zinc-800/90"
+            class="flex flex-nowrap items-center gap-6 overflow-x-auto border-b border-zinc-200/90 dark:border-zinc-800/90"
         >
             <button
                 v-for="tab in tabs"
                 :key="tab.key"
                 type="button"
-                class="inline-flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-1.5 font-mono text-xs font-medium transition-colors"
+                role="tab"
+                :aria-selected="activeTab === tab.key"
+                class="relative inline-flex shrink-0 cursor-pointer items-center gap-2 pb-3 font-mono text-xs font-medium whitespace-nowrap transition-colors"
                 :class="
                     activeTab === tab.key
-                        ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
-                        : 'border-zinc-200/90 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
+                        ? 'text-zinc-950 dark:text-zinc-50'
+                        : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200'
                 "
                 @click="activeTab = tab.key"
             >
@@ -1475,32 +1745,22 @@ const tabs = computed<
                     class="rounded px-1.5 py-0.5 text-[10px] tabular-nums"
                     :class="
                         activeTab === tab.key
-                            ? 'bg-white/20 text-white dark:bg-zinc-900/15 dark:text-zinc-900'
-                            : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                            ? 'bg-zinc-900/10 text-zinc-900 dark:bg-white/15 dark:text-zinc-100'
+                            : 'bg-zinc-200/70 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
                     "
                 >
                     {{ tab.badge }}
                 </span>
+                <span
+                    v-if="activeTab === tab.key"
+                    class="absolute right-0 bottom-0 left-0 h-0.5 rounded-full"
+                    :style="{ backgroundColor: sportMeta.accentHex }"
+                />
             </button>
         </nav>
 
-        <!-- TAB 1: Overview & Streams -->
-        <div v-if="activeTab === 'overview'" class="space-y-6">
-            <!-- Aerobic Efficiency, Decoupling & Pacing -->
-            <ActivityDerivedMetricsCard
-                :derived-metrics="derivedMetrics ?? null"
-            />
-
-            <!-- Historical Weather & Directional Wind Summary -->
-            <ActivityWeatherCard
-                :weather="weather"
-                :is-indoor="activity.is_indoor"
-                :has-coordinates="hasCoordinates"
-                :syncing="isSyncingWeather"
-                @sync="syncActivityWeather"
-            />
-
-            <!-- Synchronized ECharts Telemetry Panels & MTB Jumps -->
+        <!-- TAB 1: Streams -->
+        <div v-if="activeTab === 'streams'" class="space-y-6">
             <ActivityStreamsPanel
                 v-model:vertical-metric-mode="verticalMetricMode"
                 v-model:power-unit-mode="powerUnitMode"
@@ -1510,16 +1770,25 @@ const tabs = computed<
                 :jumps="jumps"
                 :uses-pace="usesPace"
                 :is-running="isRunning"
+                :is-swimming="isSwimming"
+                :cadence-unit="sportMeta.cadenceUnit"
                 :has-ambient-weather="weather !== null"
                 :weather="weather"
                 :highlight-range="highlightedRange"
                 @hover-index="activeStreamIndex = $event"
                 @select-range="highlightedRange = $event"
             />
+
+            <section
+                v-if="stream && telemetryPanelCount === 0 && jumps.length === 0"
+                class="rounded-xl border border-zinc-200/90 bg-white p-8 text-center font-mono text-xs text-zinc-500 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400"
+            >
+                No telemetry stream channels were recorded for this activity.
+            </section>
         </div>
 
-        <!-- TAB 2: Pace / Speed, Splits & Zones -->
-        <div v-else-if="activeTab === 'pace'" class="space-y-6">
+        <!-- TAB 2: Splits & Zones -->
+        <div v-else-if="activeTab === 'splits'" class="space-y-6">
             <!-- Combined Pace / Speed Analysis Bar Chart over Elevation -->
             <ActivityPaceAnalysis
                 :series="series"
@@ -1536,7 +1805,7 @@ const tabs = computed<
                 :pace-distribution="paceDistribution"
             />
 
-            <!-- HR Zones, Power Zones & Road Power Curve -->
+            <!-- HR Zones, Power Zones & Mean Maximal Power Curve -->
             <ActivityZonesAndPower
                 :hr-zones="hrZones"
                 :power-zones="powerZones"
@@ -1547,7 +1816,7 @@ const tabs = computed<
                 "
             />
 
-            <!-- Splits & Laps Card (placed at bottom since it's often the longest) -->
+            <!-- Splits & Laps Card -->
             <ActivitySplitsAndLaps
                 v-model:splits-tab="splitsTab"
                 :series="series"
@@ -1561,38 +1830,43 @@ const tabs = computed<
             />
         </div>
 
-        <!-- TAB 3: Best Efforts -->
-        <ActivityBestEfforts
-            v-else-if="activeTab === 'efforts' && bestEfforts.length > 0"
-            :best-efforts="bestEfforts"
-            :series="series"
-            :uses-pace="usesPace"
-            @select-range="highlightedRange = $event"
-        />
+        <!-- TAB 3: Efforts & Segments -->
+        <div
+            v-else-if="
+                activeTab === 'efforts_segments' && showEffortsSegmentsTab
+            "
+            class="space-y-6"
+        >
+            <ActivityBestEfforts
+                v-if="bestEfforts.length > 0"
+                :best-efforts="bestEfforts"
+                :series="series"
+                :uses-pace="usesPace"
+                @select-range="highlightedRange = $event"
+            />
 
-        <!-- TAB 4: Segments & Climbs -->
-        <ActivitySegmentsPanel
-            v-else-if="activeTab === 'segments' && showSegmentsTab"
-            :activity-id="activity.id"
-            :is-indoor="activity.is_indoor"
-            :segment-efforts="segmentEffortsList"
-            :series="series"
-            :uses-pace="usesPace"
-            :is-swimming="isSwimming"
-            @select-range="highlightedRange = $event"
-        />
+            <ActivitySegmentsPanel
+                v-if="showSegmentsTab"
+                :activity-id="activity.id"
+                :is-indoor="activity.is_indoor"
+                :segment-efforts="segmentEffortsList"
+                :series="series"
+                :uses-pace="usesPace"
+                :is-swimming="isSwimming"
+                :highlighted-range="highlightedRange"
+                @select-range="highlightedRange = $event"
+            />
+        </div>
 
-        <!-- TAB 5: Matched Route -->
-        <ActivityMatchedRoute
-            v-else-if="activeTab === 'route' && matchedRoute"
-            :matched-route="matchedRoute"
-        />
+        <!-- TAB 4: Route & Effort Context -->
+        <div v-else-if="activeTab === 'context'" class="space-y-6">
+            <ActivityMatchedRoute
+                v-if="matchedRoute"
+                :matched-route="matchedRoute"
+            />
 
-        <!-- TAB 5: Effort Context -->
-        <ActivityEffortContext
-            v-else-if="activeTab === 'effort'"
-            :effort-context="effortContext"
-        />
+            <ActivityEffortContext :effort-context="effortContext" />
+        </div>
 
         <!-- TAB 5: All Stats -->
         <ActivityAllStats

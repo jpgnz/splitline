@@ -11,6 +11,7 @@ const props = defineProps<{
 
 const isOpen = ref<boolean>(false);
 const containerRef = ref<HTMLElement | null>(null);
+const triggerButtonRef = ref<HTMLButtonElement | null>(null);
 
 const hasAnyExport = computed<boolean>(
     () => props.hasGps || props.hasOriginalArchive,
@@ -52,6 +53,7 @@ function handlePointerDown(event: PointerEvent): void {
 function handleKeyDown(event: KeyboardEvent): void {
     if (event.key === 'Escape' && isOpen.value) {
         closeMenu();
+        triggerButtonRef.value?.focus();
     }
 }
 
@@ -69,6 +71,7 @@ onUnmounted(() => {
 <template>
     <div ref="containerRef" class="relative inline-block">
         <button
+            ref="triggerButtonRef"
             type="button"
             :disabled="!hasAnyExport"
             :aria-expanded="isOpen"
@@ -76,9 +79,9 @@ onUnmounted(() => {
             :title="
                 hasAnyExport
                     ? 'Export activity files'
-                    : 'No GPX route or cached FIT archive available'
+                    : 'No GPX route or original FIT file available'
             "
-            class="inline-flex cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80"
+            class="inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100"
             @click="toggleMenu"
         >
             <Download class="size-3.5" />
@@ -93,7 +96,7 @@ onUnmounted(() => {
             v-if="isOpen && hasAnyExport"
             role="menu"
             aria-label="Export activity"
-            class="absolute right-0 z-30 mt-1.5 w-56 origin-top-right rounded-xl border border-zinc-200/90 bg-white p-1.5 shadow-lg dark:border-zinc-800/90 dark:bg-[#141417]"
+            class="absolute left-0 z-40 mt-1.5 w-56 origin-top-left rounded-xl border border-zinc-200/90 bg-white p-1.5 shadow-lg sm:right-0 sm:left-auto sm:origin-top-right dark:border-zinc-800/90 dark:bg-[#141417]"
         >
             <a
                 v-if="props.hasGps"
@@ -136,7 +139,7 @@ onUnmounted(() => {
                         Download Original FIT
                     </p>
                     <p class="text-[11px] text-zinc-500 dark:text-zinc-400">
-                        Cached device archive
+                        Original FIT file
                     </p>
                 </div>
             </a>

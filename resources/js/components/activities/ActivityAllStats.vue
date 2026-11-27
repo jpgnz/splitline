@@ -995,16 +995,16 @@ const statGroups = computed<StatGroup[]>(() => {
                 "
             >
                 <div v-for="row in group.rows" :key="row.label">
-                    <dd
-                        class="font-mono text-base font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
-                    >
-                        {{ row.value }}
-                    </dd>
                     <dt
-                        class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         {{ row.label }}
                     </dt>
+                    <dd
+                        class="mt-0.5 font-mono text-base font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
+                    >
+                        {{ row.value }}
+                    </dd>
                     <div
                         v-if="row.sub"
                         class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
