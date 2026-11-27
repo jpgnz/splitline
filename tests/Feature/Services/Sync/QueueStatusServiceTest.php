@@ -4,6 +4,7 @@ use App\Jobs\GeocodeRouteClusterJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
+use App\Models\ActivityDerivedMetric;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
@@ -105,6 +106,10 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         'route_cluster_id' => $geocodedCluster->id,
     ]);
 
+    ActivityDerivedMetric::factory()->create([
+        'activity_id' => $fullyEnriched->id,
+    ]);
+
     // 5. Matched route cluster awaiting geocoding + segment awaiting geocoding
     RouteCluster::factory()->create([
         'activity_count' => 2,
@@ -139,6 +144,7 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
             'weather' => 2,
             'routes' => 1,
             'segments' => 1,
+            'derived_metrics' => 1,
             'geocoding' => 3,
         ],
         'has_active_work' => true,

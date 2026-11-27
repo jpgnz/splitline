@@ -26,6 +26,7 @@ class ActivityQueryService
         private readonly ?MatchedRouteService $matchedRoutes = null,
         private readonly ?SegmentQueryService $segments = null,
         private readonly ?HealthSourceRegistry $healthSources = null,
+        private readonly ActivityDerivedMetricsService $derivedMetricsService = new ActivityDerivedMetricsService,
     ) {}
 
     private function healthSources(): HealthSourceRegistry
@@ -310,6 +311,7 @@ class ActivityQueryService
      *         jumps: array<int|string, mixed>
      *     },
      *     weather: ?array<string, mixed>,
+     *     derivedMetrics: ?array<string, mixed>,
      *     bestEfforts: list<array<string, mixed>>,
      *     prevActivity: ?array{id: int, name: string},
      *     nextActivity: ?array{id: int, name: string},
@@ -321,7 +323,7 @@ class ActivityQueryService
      */
     public function detail(Activity $activity): array
     {
-        $activity->load(['stream', 'weather', 'bestEfforts', 'routeFingerprint.cluster.representativeActivity']);
+        $activity->load(['stream', 'weather', 'derivedMetrics', 'bestEfforts', 'routeFingerprint.cluster.representativeActivity']);
 
         $startedAtLocal = $activity->started_at_local->format('Y-m-d H:i:s');
 
@@ -355,6 +357,7 @@ class ActivityQueryService
 
         $stream = $activity->stream;
         $weather = $activity->weather;
+        $derivedMetrics = $activity->derivedMetrics;
         $zoneConfig = $this->resolveHrZoneConfig($activity);
         $series = is_array($stream?->series) ? array_values($stream->series) : [];
 
@@ -498,6 +501,19 @@ class ActivityQueryService
                 'avg_effective_wind_kmh' => $weather->avg_effective_wind_kmh,
                 'samples' => $weather->samples,
                 'fetched_at' => $weather->fetched_at->toIso8601String(),
+            ] : null,
+            'derivedMetrics' => $derivedMetrics !== null ? [
+                'decoupling_pct' => $derivedMetrics->decoupling_pct,
+                'decoupling_metric' => $derivedMetrics->decoupling_metric,
+                'decoupling_rating' => $derivedMetrics->decoupling_rating,
+                'efficiency_factor' => $derivedMetrics->efficiency_factor,
+                'first_half_ef' => $derivedMetrics->first_half_ef,
+                'second_half_ef' => $derivedMetrics->second_half_ef,
+                'pacing_strategy' => $derivedMetrics->pacing_strategy,
+                'split_ratio' => $derivedMetrics->split_ratio,
+                'pace_cv_pct' => $derivedMetrics->pace_cv_pct,
+                ...$this->derivedMetricsService->polarizedHrSplit($activity),
+                'computed_at' => $derivedMetrics->computed_at->toIso8601String(),
             ] : null,
             'bestEfforts' => $bestEfforts,
             'prevActivity' => $prev !== null ? ['id' => $prev->id, 'name' => $prev->name] : null,

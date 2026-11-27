@@ -30,6 +30,7 @@ export type EnrichmentQueueSummary = EnrichmentQueueJobs & {
         weather: number;
         routes: number;
         segments: number;
+        derived_metrics: number;
         geocoding: number;
     };
 };

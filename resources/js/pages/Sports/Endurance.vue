@@ -334,6 +334,31 @@ interface EddingtonPayload {
     imperial: EddingtonUnitSummary;
 }
 
+interface AerobicDriftPoint {
+    date: string;
+    activity_id: number;
+    name: string;
+    efficiency_factor: number | null;
+    first_half_ef: number | null;
+    second_half_ef: number | null;
+    decoupling_pct: number | null;
+    decoupling_metric: 'power' | 'gap' | 'speed' | null;
+    decoupling_rating: 'well_coupled' | 'moderate_drift' | 'high_drift' | null;
+    distance_meters: number;
+    duration_seconds: number;
+}
+
+interface AerobicDriftPayload {
+    count: number;
+    avg_decoupling_pct: number | null;
+    well_coupled_pct: number | null;
+    latest_ef: number | null;
+    latest_metric: 'power' | 'gap' | 'speed' | null;
+    primary_metric: 'power' | 'gap' | 'speed' | null;
+    ef_delta_90d: number | null;
+    points: AerobicDriftPoint[];
+}
+
 interface SportsEnduranceProps {
     sport: {
         key: string;
@@ -389,6 +414,7 @@ interface SportsEnduranceProps {
     weeklyVolume: WeeklyVolumePoint[];
     annualSummary: AnnualActivitySummaryPayload | null;
     eddington: EddingtonPayload | null;
+    aerobicDrift?: AerobicDriftPayload | null;
     hrZones: {
         range: string;
         total_seconds: number;
@@ -1347,6 +1373,322 @@ const eddingtonNextProgressPct = computed<number>(() => {
 });
 
 const hasHrZoneData = computed<boolean>(() => props.hrZones.total_seconds > 0);
+
+// Aerobic Efficiency & Decoupling Trend
+const aerobicDriftPoints = computed<AerobicDriftPoint[]>(
+    () => props.aerobicDrift?.points ?? [],
+);
+
+const hasAerobicDrift = computed<boolean>(
+    () => aerobicDriftPoints.value.length > 0,
+);
+
+const aerobicEfUnit = computed<string>(() =>
+    props.aerobicDrift?.primary_metric === 'power' ? 'W/bpm' : 'm/min/bpm',
+);
+
+const aerobicMetricCode = computed<string>(() => {
+    const metric = props.aerobicDrift?.primary_metric;
+
+    if (metric === 'power') {
+        return 'Pw:Hr';
+    }
+
+    if (metric === 'gap') {
+        return 'Pa:Hr';
+    }
+
+    return 'Spd:Hr';
+});
+
+function decouplingDotColor(pct: number | null): string {
+    if (pct === null || !Number.isFinite(pct)) {
+        return '#a1a1aa';
+    }
+
+    if (pct < 5) {
+        return '#10b981';
+    }
+
+    if (pct <= 10) {
+        return '#f59e0b';
+    }
+
+    return '#f43f5e';
+}
+
+function formatDecouplingMetricLabel(
+    metric: AerobicDriftPoint['decoupling_metric'],
+): string {
+    if (metric === 'power') {
+        return 'Pw:Hr';
+    }
+
+    if (metric === 'gap') {
+        return 'Pa:Hr';
+    }
+
+    if (metric === 'speed') {
+        return 'Spd:Hr';
+    }
+
+    return 'EF';
+}
+
+function formatDecouplingRatingLabel(
+    rating: AerobicDriftPoint['decoupling_rating'],
+): string {
+    if (rating === 'well_coupled') {
+        return 'Well Coupled';
+    }
+
+    if (rating === 'moderate_drift') {
+        return 'Moderate Drift';
+    }
+
+    if (rating === 'high_drift') {
+        return 'High Drift';
+    }
+
+    return '';
+}
+
+const aerobicDriftChartOption = computed<EChartsOption>(() => {
+    const points = aerobicDriftPoints.value;
+    const monoFont = theme.fontFamilyMono;
+
+    if (points.length === 0) {
+        return {};
+    }
+
+    // Only plot EF for the primary metric: W/bpm (power) and m/min/bpm (speed/GAP) are not comparable.
+    const primaryMetric = props.aerobicDrift?.primary_metric ?? null;
+    const efValues = points.map((p) =>
+        primaryMetric === null || p.decoupling_metric === primaryMetric
+            ? p.efficiency_factor
+            : null,
+    );
+    const recentEf: number[] = [];
+    const rollingEf: Array<number | null> = efValues.map((value) => {
+        if (value === null || !Number.isFinite(value)) {
+            return null;
+        }
+
+        recentEf.push(value);
+
+        const windowSlice = recentEf.slice(-5);
+
+        if (windowSlice.length < 2) {
+            return null;
+        }
+
+        const avg =
+            windowSlice.reduce((acc, v) => acc + v, 0) / windowSlice.length;
+
+        return Number(avg.toFixed(3));
+    });
+
+    const axisLabelStyle = {
+        color: theme.mutedColor.value,
+        fontFamily: monoFont,
+        fontSize: 10,
+    };
+
+    return {
+        animation: false,
+        grid: {
+            left: 12,
+            right: 16,
+            top: 46,
+            bottom: 12,
+            containLabel: true,
+        },
+        legend: {
+            top: 0,
+            left: 0,
+            padding: [0, 0, 0, 0],
+            icon: 'roundRect',
+            itemWidth: 10,
+            itemHeight: 6,
+            textStyle: {
+                color: theme.mutedColor.value,
+                fontFamily: monoFont,
+                fontSize: 11,
+            },
+        },
+        tooltip: {
+            trigger: 'axis',
+            axisPointer: {
+                type: 'line',
+                lineStyle: { color: theme.mutedColor.value, type: 'dashed' },
+            },
+            formatter: (params: unknown) => {
+                const list = Array.isArray(params) ? params : [params];
+                const first = list[0] as { dataIndex?: number } | undefined;
+                const item =
+                    first?.dataIndex !== undefined
+                        ? points[first.dataIndex]
+                        : undefined;
+
+                if (!item) {
+                    return '';
+                }
+
+                const unitLabel =
+                    item.decoupling_metric === 'power' ? 'W/bpm' : 'm/min/bpm';
+                const metricCode = formatDecouplingMetricLabel(
+                    item.decoupling_metric,
+                );
+                const lines = [
+                    `<div style="font-size:11px;opacity:0.75;">${formatEffortDate(item.date)} · ${metricCode}</div>`,
+                    `<div style="font-weight:600;margin-top:2px;">${escapeHtml(item.name)}</div>`,
+                ];
+
+                if (item.efficiency_factor !== null) {
+                    const splitNote =
+                        item.first_half_ef !== null &&
+                        item.second_half_ef !== null
+                            ? ` <span style="opacity:0.7;">(${formatNumber(item.first_half_ef, 2)} → ${formatNumber(item.second_half_ef, 2)})</span>`
+                            : '';
+                    lines.push(
+                        `<div style="margin-top:3px;"><span style="color:${accentHex.value};">●</span> EF: <strong>${formatNumber(item.efficiency_factor, 2)} ${unitLabel}</strong>${splitNote}</div>`,
+                    );
+                }
+
+                if (item.decoupling_pct !== null) {
+                    const color = decouplingDotColor(item.decoupling_pct);
+                    const prefix = item.decoupling_pct > 0 ? '+' : '';
+                    const ratingLabel = formatDecouplingRatingLabel(
+                        item.decoupling_rating,
+                    );
+                    lines.push(
+                        `<div><span style="color:${color};">●</span> Drift: <strong style="color:${color};">${prefix}${formatNumber(item.decoupling_pct, 1)}%</strong>${ratingLabel ? ` · ${ratingLabel}` : ''}</div>`,
+                    );
+                }
+
+                return lines.join('');
+            },
+        },
+        xAxis: {
+            type: 'category',
+            data: points.map((p) => p.date),
+            axisLine: { lineStyle: { color: theme.gridLineColor.value } },
+            axisTick: { show: false },
+            axisLabel: {
+                ...axisLabelStyle,
+                formatter: (val: string) => formatShortDate(val),
+            },
+        },
+        yAxis: [
+            {
+                type: 'value',
+                scale: true,
+                name: `EF (${aerobicEfUnit.value})`,
+                nameGap: 12,
+                nameTextStyle: { ...axisLabelStyle, align: 'left' },
+                axisLine: { show: false },
+                axisTick: { show: false },
+                axisLabel: {
+                    ...axisLabelStyle,
+                    formatter: (val: number) => val.toFixed(2),
+                },
+                splitLine: {
+                    lineStyle: {
+                        color: theme.gridLineColor.value,
+                        type: 'dashed',
+                    },
+                },
+            },
+            {
+                type: 'value',
+                scale: true,
+                name: 'Drift (%)',
+                nameGap: 12,
+                nameTextStyle: { ...axisLabelStyle, align: 'right' },
+                axisLine: { show: false },
+                axisTick: { show: false },
+                axisLabel: {
+                    ...axisLabelStyle,
+                    formatter: (val: number) => `${val.toFixed(0)}%`,
+                },
+                splitLine: { show: false },
+            },
+        ],
+        series: [
+            {
+                name: `Efficiency Factor (${aerobicEfUnit.value})`,
+                type: 'line',
+                yAxisIndex: 0,
+                smooth: 0.25,
+                connectNulls: true,
+                showSymbol: points.length <= 45,
+                symbolSize: 5,
+                lineStyle: { color: accentHex.value, width: 2 },
+                itemStyle: { color: accentHex.value },
+                data: efValues,
+                z: 2,
+            },
+            {
+                name: '5-Session Trend',
+                type: 'line',
+                yAxisIndex: 0,
+                smooth: 0.35,
+                connectNulls: true,
+                showSymbol: false,
+                lineStyle: {
+                    color: '#6366f1',
+                    width: 1.75,
+                    type: 'dashed',
+                },
+                itemStyle: { color: '#6366f1' },
+                data: rollingEf,
+                z: 3,
+            },
+            {
+                name: 'Decoupling (%)',
+                type: 'scatter',
+                yAxisIndex: 1,
+                symbolSize: 8,
+                data: points.map((p) => ({
+                    value: p.decoupling_pct,
+                    itemStyle: {
+                        color: decouplingDotColor(p.decoupling_pct),
+                        borderColor: theme.isDark.value ? '#141417' : '#ffffff',
+                        borderWidth: 1.5,
+                    },
+                })),
+                markLine: {
+                    silent: true,
+                    symbol: ['none', 'none'],
+                    lineStyle: {
+                        color: '#10b981',
+                        type: 'dashed',
+                        width: 1.25,
+                        opacity: 0.7,
+                    },
+                    label: {
+                        show: true,
+                        position: 'insideEndTop',
+                        formatter: '5% aerobic threshold',
+                        color: '#10b981',
+                        fontFamily: monoFont,
+                        fontSize: 10,
+                    },
+                    data: [{ yAxis: 5 }],
+                },
+                z: 4,
+            },
+        ],
+    };
+});
+
+function onAerobicDriftPointClick(payload: ChartPointClickPayload): void {
+    const item = aerobicDriftPoints.value[payload.dataIndex];
+
+    if (item?.activity_id) {
+        router.visit(showActivity.url(item.activity_id));
+    }
+}
 
 interface MilestoneDisplayItem {
     key: string;
@@ -3570,6 +3912,161 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     No qualifying milestones recorded yet.
                 </div>
+            </div>
+        </section>
+
+        <!-- Aerobic Efficiency & Decoupling Trend -->
+        <section
+            v-if="hasAerobicDrift && aerobicDrift"
+            class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+        >
+            <div
+                class="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"
+            >
+                <div>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h2
+                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        >
+                            Aerobic Efficiency &amp; Drift
+                        </h2>
+                        <span
+                            class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                        >
+                            {{ aerobicMetricCode }} · 12m
+                        </span>
+                    </div>
+                    <p
+                        class="mt-1 font-mono text-xs text-zinc-500 dark:text-zinc-400"
+                    >
+                        Efficiency Factor trend &amp; cardiac decoupling across
+                        {{ formatNumber(aerobicDrift.count, 0) }} endurance
+                        {{
+                            aerobicDrift.count === 1
+                                ? sessionNoun.singular
+                                : sessionNoun.plural
+                        }}
+                        · Click any point to inspect
+                    </p>
+                </div>
+
+                <!-- Summary KPI Pills -->
+                <div
+                    class="flex flex-wrap items-center gap-2 font-mono text-xs tabular-nums"
+                >
+                    <div
+                        v-if="aerobicDrift.latest_ef !== null"
+                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                    >
+                        <span
+                            class="text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Latest EF
+                        </span>
+                        <div class="mt-0.5 flex items-baseline gap-1.5">
+                            <span
+                                class="font-semibold text-zinc-900 dark:text-zinc-100"
+                            >
+                                {{ formatNumber(aerobicDrift.latest_ef, 2) }}
+                            </span>
+                            <span
+                                class="text-[10px] text-zinc-500 dark:text-zinc-400"
+                            >
+                                {{ aerobicEfUnit }}
+                            </span>
+                            <span
+                                v-if="aerobicDrift.ef_delta_90d !== null"
+                                class="text-[10px] font-medium"
+                                :class="
+                                    aerobicDrift.ef_delta_90d >= 0
+                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                        : 'text-rose-600 dark:text-rose-400'
+                                "
+                            >
+                                {{ aerobicDrift.ef_delta_90d >= 0 ? '+' : ''
+                                }}{{
+                                    formatNumber(aerobicDrift.ef_delta_90d, 2)
+                                }}
+                                90d
+                            </span>
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="aerobicDrift.avg_decoupling_pct !== null"
+                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                    >
+                        <span
+                            class="text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Avg Drift
+                        </span>
+                        <div
+                            class="mt-0.5 font-semibold"
+                            :class="
+                                aerobicDrift.avg_decoupling_pct < 5
+                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                    : aerobicDrift.avg_decoupling_pct <= 10
+                                      ? 'text-amber-600 dark:text-amber-400'
+                                      : 'text-rose-600 dark:text-rose-400'
+                            "
+                        >
+                            {{ aerobicDrift.avg_decoupling_pct > 0 ? '+' : ''
+                            }}{{
+                                formatNumber(
+                                    aerobicDrift.avg_decoupling_pct,
+                                    1,
+                                )
+                            }}%
+                        </div>
+                    </div>
+
+                    <div
+                        v-if="aerobicDrift.well_coupled_pct !== null"
+                        class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/60"
+                    >
+                        <span
+                            class="text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Well Coupled
+                        </span>
+                        <div
+                            class="mt-0.5 font-semibold text-emerald-600 dark:text-emerald-400"
+                        >
+                            {{
+                                formatNumber(aerobicDrift.well_coupled_pct, 0)
+                            }}%
+                            <span
+                                class="text-[10px] font-normal text-zinc-500 dark:text-zinc-400"
+                            >
+                                &lt;5%
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <BaseChart
+                :option="aerobicDriftChartOption"
+                :height="270"
+                @point-click="onAerobicDriftPointClick"
+            />
+
+            <div
+                class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+            >
+                <span class="inline-flex items-center gap-1.5">
+                    <span class="size-2 rounded-full bg-emerald-500" />
+                    Well Coupled (&lt;5%)
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                    <span class="size-2 rounded-full bg-amber-500" />
+                    Moderate Drift (5–10%)
+                </span>
+                <span class="inline-flex items-center gap-1.5">
+                    <span class="size-2 rounded-full bg-rose-500" />
+                    High Drift (&gt;10%)
+                </span>
             </div>
         </section>
 
