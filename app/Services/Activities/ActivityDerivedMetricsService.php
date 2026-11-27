@@ -412,7 +412,7 @@ class ActivityDerivedMetricsService
             $power = (float) $point['power'];
             $time = $point['time'];
 
-            if ($prevTime === null || $prevPower === null) {
+            if ($prevTime === null) {
                 $push($power);
                 $prevTime = $time;
                 $prevPower = $power;
