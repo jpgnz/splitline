@@ -10,8 +10,6 @@ use App\Models\SyncRun;
 use App\Services\Ingestion\TelemetryPersistenceService;
 use Carbon\CarbonImmutable;
 use Closure;
-use Illuminate\Database\Eloquent\Builder;
-use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\DB;
 use Splitline\Core\Data\ProviderContext;
 use Splitline\ProviderGarminPersonal\GarminPersonalProvider;
@@ -796,46 +794,7 @@ class GarminSyncService
             && (bool) config('services.open_meteo.auto_sync', true)
         ) {
             $weatherQuery = Activity::query()
-                ->where('is_indoor', false)
-                ->where(function (Builder $coordQuery): void {
-                    $coordQuery
-                        ->where(function (Builder $startCoords): void {
-                            $startCoords
-                                ->whereNotNull('start_lat')
-                                ->whereNotNull('start_lng');
-                        })
-                        ->orWhereExists(function (QueryBuilder $streamSub): void {
-                            $streamSub
-                                ->selectRaw('1')
-                                ->from('activity_streams')
-                                ->whereColumn('activity_streams.activity_id', 'activities.id');
-                        });
-                })
-                ->where(function (Builder $missingOrUpgradeQuery): void {
-                    $missingOrUpgradeQuery
-                        ->whereNotExists(function (QueryBuilder $weatherSub): void {
-                            $weatherSub
-                                ->selectRaw('1')
-                                ->from('activity_weathers')
-                                ->whereColumn('activity_weathers.activity_id', 'activities.id');
-                        })
-                        ->orWhere(function (Builder $upgradeQuery): void {
-                            $upgradeQuery
-                                ->whereExists(function (QueryBuilder $weatherSub): void {
-                                    $weatherSub
-                                        ->selectRaw('1')
-                                        ->from('activity_weathers')
-                                        ->whereColumn('activity_weathers.activity_id', 'activities.id')
-                                        ->where('activity_weathers.sampling_mode', 'start_point');
-                                })
-                                ->whereExists(function (QueryBuilder $streamSub): void {
-                                    $streamSub
-                                        ->selectRaw('1')
-                                        ->from('activity_streams')
-                                        ->whereColumn('activity_streams.activity_id', 'activities.id');
-                                });
-                        });
-                })
+                ->awaitingWeather()
                 ->orderByDesc('started_at_local')
                 ->orderByDesc('id');
 

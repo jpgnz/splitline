@@ -94,43 +94,89 @@ export function detectAvailableStreams(
     };
 }
 
+export type TelemetryPanelKey =
+    | 'altitude'
+    | 'speed'
+    | 'hr'
+    | 'stamina'
+    | 'performanceCondition'
+    | 'power'
+    | 'leftBalance'
+    | 'torqueEff'
+    | 'pedalSmoothness'
+    | 'grit'
+    | 'flow'
+    | 'cadence'
+    | 'stride'
+    | 'vertical'
+    | 'gct'
+    | 'respiration'
+    | 'temperature'
+    | 'runWalk';
+
+const DIRECT_TELEMETRY_PANEL_KEYS = [
+    'altitude',
+    'speed',
+    'hr',
+    'stamina',
+    'performanceCondition',
+    'power',
+    'leftBalance',
+    'torqueEff',
+    'pedalSmoothness',
+    'grit',
+    'flow',
+    'cadence',
+    'stride',
+    'gct',
+    'respiration',
+    'temperature',
+] as const satisfies ReadonlyArray<TelemetryPanelKey & keyof AvailableStreams>;
+
+/**
+ * Single source of truth for which telemetry panels render, shared by the panel
+ * builder and the parent tab badge count.
+ */
+export function telemetryPanelKeys(
+    series: StreamPoint[],
+    runWalkSegments: RunWalkSegment[],
+): Set<TelemetryPanelKey> {
+    const keys = new Set<TelemetryPanelKey>();
+
+    if (series.length === 0) {
+        return keys;
+    }
+
+    const available = detectAvailableStreams(series);
+
+    for (const key of DIRECT_TELEMETRY_PANEL_KEYS) {
+        if (available[key]) {
+            keys.add(key);
+        }
+    }
+
+    if (available.verticalRatio || available.verticalOsc) {
+        keys.add('vertical');
+    }
+
+    if (runWalkSegments.length > 0) {
+        keys.add('runWalk');
+    }
+
+    return keys;
+}
+
 export function countTelemetryPanels(
     series: StreamPoint[],
     runWalkSegments: RunWalkSegment[],
 ): number {
-    if (series.length === 0) {
-        return 0;
-    }
-
-    const available = detectAvailableStreams(series);
-    let count = 0;
-
-    if (available.altitude) count += 1;
-    if (available.speed) count += 1;
-    if (available.hr) count += 1;
-    if (available.stamina) count += 1;
-    if (available.performanceCondition) count += 1;
-    if (available.power) count += 1;
-    if (available.leftBalance) count += 1;
-    if (available.torqueEff) count += 1;
-    if (available.pedalSmoothness) count += 1;
-    if (available.grit) count += 1;
-    if (available.flow) count += 1;
-    if (available.cadence) count += 1;
-    if (available.stride) count += 1;
-    if (available.verticalRatio || available.verticalOsc) count += 1;
-    if (available.gct) count += 1;
-    if (available.respiration) count += 1;
-    if (available.temperature) count += 1;
-    if (runWalkSegments.length > 0) count += 1;
-
-    return count;
+    return telemetryPanelKeys(series, runWalkSegments).size;
 }
 </script>
 
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts';
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { formatDurationClock, formatNumber } from '@/lib/format';
@@ -174,8 +220,13 @@ const {
     formatSpeed,
 } = useUnits();
 
-const verticalMetricMode = ref<'ratio' | 'oscillation'>('ratio');
-const powerUnitMode = ref<'watts' | 'pct'>('watts');
+const verticalMetricMode = defineModel<'ratio' | 'oscillation'>(
+    'verticalMetricMode',
+    { default: 'ratio' },
+);
+const powerUnitMode = defineModel<'watts' | 'pct'>('powerUnitMode', {
+    default: 'watts',
+});
 
 const availableStreams = computed<AvailableStreams>(() =>
     detectAvailableStreams(props.series),
@@ -913,6 +964,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
     }
 
     const available = availableStreams.value;
+    const panelKeys = telemetryPanelKeys(props.series, props.runWalkSegments);
     const streamTimes = props.series.map((p) => p.time);
 
     const activePanels: Array<{
@@ -926,7 +978,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         build: (isLast: boolean) => EChartsOption;
     }> = [];
 
-    if (available.altitude) {
+    if (panelKeys.has('altitude')) {
         const elevUnitLabel = elevationUnit.value;
 
         activePanels.push({
@@ -954,7 +1006,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.speed) {
+    if (panelKeys.has('speed')) {
         if (props.usesPace) {
             const paceSeries = buildPaceTelemetrySeries({
                 times: streamTimes,
@@ -1055,7 +1107,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         }
     }
 
-    if (available.hr) {
+    if (panelKeys.has('hr')) {
         activePanels.push({
             key: 'hr',
             title: 'Heart Rate',
@@ -1084,7 +1136,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.stamina) {
+    if (panelKeys.has('stamina')) {
         activePanels.push({
             key: 'stamina',
             title: 'Stamina & Stamina Potential',
@@ -1095,7 +1147,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.performanceCondition) {
+    if (panelKeys.has('performanceCondition')) {
         activePanels.push({
             key: 'performance_condition',
             title: 'Performance Condition',
@@ -1106,7 +1158,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.power) {
+    if (panelKeys.has('power')) {
         const usePct =
             powerUnitMode.value === 'pct' && thresholdPowerRef.value !== null;
         const ftp = thresholdPowerRef.value;
@@ -1186,7 +1238,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.leftBalance) {
+    if (panelKeys.has('leftBalance')) {
         // Filter coasting/single-leg spikes (<25% or >75%, or zero power) and apply rolling smoothing
         const cleanedLeft = props.series.map((p) => {
             const lb = p.left_balance;
@@ -1264,7 +1316,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.torqueEff) {
+    if (panelKeys.has('torqueEff')) {
         activePanels.push({
             key: 'torque_effectiveness',
             title: 'Torque Effectiveness (L / R)',
@@ -1282,7 +1334,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.pedalSmoothness) {
+    if (panelKeys.has('pedalSmoothness')) {
         activePanels.push({
             key: 'pedal_smoothness',
             title: 'Pedal Smoothness (L / R)',
@@ -1300,7 +1352,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.grit) {
+    if (panelKeys.has('grit')) {
         const gritData = props.series.map((p) => p.grit ?? null);
         activePanels.push({
             key: 'grit',
@@ -1324,7 +1376,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.flow) {
+    if (panelKeys.has('flow')) {
         const flowData = props.series.map((p) => p.flow ?? null);
         activePanels.push({
             key: 'flow',
@@ -1355,7 +1407,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.cadence) {
+    if (panelKeys.has('cadence')) {
         const cadUnit = props.isRunning ? 'spm' : 'rpm';
         const avgCad = props.activity.avg_cadence;
 
@@ -1395,7 +1447,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.stride) {
+    if (panelKeys.has('stride')) {
         const strideUnitLabel = strideUnit.value;
         const strideMetersData = props.series.map((p) => {
             const raw = p.stride_length;
@@ -1473,7 +1525,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.verticalRatio || available.verticalOsc) {
+    if (panelKeys.has('vertical')) {
         const showOsc =
             verticalMetricMode.value === 'oscillation' && available.verticalOsc;
         const rawVerticalData = showOsc
@@ -1547,7 +1599,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.gct) {
+    if (panelKeys.has('gct')) {
         const rawGctData = props.series.map((p) => p.gct ?? null);
         const gctSeries = buildStartupGatedTelemetrySeries({
             times: streamTimes,
@@ -1600,7 +1652,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.respiration) {
+    if (panelKeys.has('respiration')) {
         const respData = props.series.map((p) => p.respiration ?? null);
         const avgResp =
             props.activity.avg_respiration_rate ?? averageOf(respData);
@@ -1633,7 +1685,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (available.temperature) {
+    if (panelKeys.has('temperature')) {
         const tempUnitLabel = tempUnit.value;
         const rawTempData = props.series.map((p) => p.temperature ?? null);
         const tempData = rawTempData.map((tempC) =>
@@ -1677,7 +1729,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         });
     }
 
-    if (props.runWalkSegments.length > 0) {
+    if (panelKeys.has('runWalk')) {
         const runPart =
             props.activity.run_duration_seconds !== null
                 ? `Run ${formatDurationClock(props.activity.run_duration_seconds)}`

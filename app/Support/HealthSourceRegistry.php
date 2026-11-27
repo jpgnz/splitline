@@ -4,6 +4,7 @@ namespace App\Support;
 
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
@@ -104,6 +105,25 @@ class HealthSourceRegistry
     ];
 
     /**
+     * Per-table ranking date column and the natural key columns that identify the "same" record across providers.
+     *
+     * In Auto mode a lower-ranked provider's row is only shown when no higher-ranked provider has a row with the same key,
+     * so adding a second provider fills gaps instead of hiding existing history.
+     *
+     * @var array<string, array{date_column: ?string, key_columns: list<string>}>
+     */
+    private const array TABLES = [
+        'daily_metrics' => ['date_column' => 'calendar_date', 'key_columns' => ['calendar_date']],
+        'sleep_records' => ['date_column' => 'calendar_date', 'key_columns' => ['calendar_date']],
+        'hrv_records' => ['date_column' => 'calendar_date', 'key_columns' => ['calendar_date']],
+        'weight_measurements' => ['date_column' => 'calendar_date', 'key_columns' => ['calendar_date']],
+        'weight_goals' => ['date_column' => 'start_date', 'key_columns' => ['start_date']],
+        'vo2_max_records' => ['date_column' => 'calendar_date', 'key_columns' => ['calendar_date', 'sport']],
+        'fitness_age_records' => ['date_column' => 'calendar_date', 'key_columns' => ['calendar_date']],
+        'heart_rate_zones' => ['date_column' => null, 'key_columns' => ['sport']],
+    ];
+
+    /**
      * Human-readable labels for known telemetry providers.
      *
      * @var array<string, string>
@@ -126,6 +146,9 @@ class HealthSourceRegistry
     /** @var array<string, array<string, array{count: int, latest_date: ?string, latest_updated_at: ?string}>> */
     private array $providerStatsMemo = [];
 
+    /** @var array<string, array<string, array{count: int, latest_date: ?string, latest_updated_at: ?string}>> */
+    private array $tableStatsMemo = [];
+
     /** @var array<string, ?string> */
     private array $resolvedMemo = [];
 
@@ -137,6 +160,7 @@ class HealthSourceRegistry
     {
         $this->configMemo = null;
         $this->providerStatsMemo = [];
+        $this->tableStatsMemo = [];
         $this->resolvedMemo = [];
     }
 
@@ -236,17 +260,99 @@ class HealthSourceRegistry
             return $this->resolvedMemo[$domain] = $configured;
         }
 
-        $stats = $this->providerStats($domain);
+        $primaryStats = $this->tableStats(self::DOMAINS[$domain]['table']);
+        $ranked = $this->rankProviders($primaryStats !== [] ? $primaryStats : $this->providerStats($domain));
 
-        if ($stats === []) {
-            return $this->resolvedMemo[$domain] = null;
+        return $this->resolvedMemo[$domain] = $ranked[0] ?? null;
+    }
+
+    /**
+     * Scope an Eloquent query to the domain's health source selection.
+     *
+     * An explicitly configured provider strictly filters the domain's primary table. In Auto mode, or for a secondary table
+     * (e.g. weight goals) that holds no rows from the configured provider, rows are ranked by provider recency and a
+     * lower-ranked provider only contributes records the higher-ranked providers do not have.
+     *
+     * @template TModel of Model
+     *
+     * @param  Builder<TModel>  $query
+     * @return Builder<TModel>
+     */
+    public function applyScope(Builder $query, string $domain): Builder
+    {
+        $this->assertValidDomain($domain);
+
+        $table = $query->getModel()->getTable();
+
+        if (! in_array($table, self::DOMAINS[$domain]['tables'], true)) {
+            throw new InvalidArgumentException("Table [{$table}] does not belong to health source domain [{$domain}].");
         }
 
-        $providers = array_keys($stats);
+        $configured = $this->configuredSelection($domain);
+        $tableStats = $this->tableStats($table);
 
-        if (count($providers) === 1) {
-            return $this->resolvedMemo[$domain] = $providers[0];
+        if (
+            $configured !== self::MODE_AUTO
+            && ($table === self::DOMAINS[$domain]['table'] || isset($tableStats[$configured]))
+        ) {
+            return $query->where("{$table}.provider", $configured);
         }
+
+        if (count($tableStats) < 2) {
+            return $query;
+        }
+
+        return $this->applyProviderPrecedence($query, $table, $this->rankProviders($tableStats));
+    }
+
+    /**
+     * Keep each row only when no higher-ranked provider has a row with the same natural key.
+     *
+     * @template TModel of Model
+     *
+     * @param  Builder<TModel>  $query
+     * @param  list<string>  $rankedProviders
+     * @return Builder<TModel>
+     */
+    private function applyProviderPrecedence(Builder $query, string $table, array $rankedProviders): Builder
+    {
+        $keyColumns = self::TABLES[$table]['key_columns'];
+
+        return $query->where(function (Builder $precedenceQuery) use ($table, $rankedProviders, $keyColumns): void {
+            foreach ($rankedProviders as $rank => $provider) {
+                $higherRanked = array_slice($rankedProviders, 0, $rank);
+
+                $precedenceQuery->orWhere(function (Builder $providerQuery) use ($table, $provider, $higherRanked, $keyColumns): void {
+                    $providerQuery->where("{$table}.provider", $provider);
+
+                    if ($higherRanked === []) {
+                        return;
+                    }
+
+                    $providerQuery->whereNotExists(function (QueryBuilder $preferredQuery) use ($table, $higherRanked, $keyColumns): void {
+                        $preferredQuery
+                            ->selectRaw('1')
+                            ->from("{$table} as preferred_source")
+                            ->whereIn('preferred_source.provider', $higherRanked);
+
+                        foreach ($keyColumns as $keyColumn) {
+                            $preferredQuery->whereColumn("preferred_source.{$keyColumn}", "{$table}.{$keyColumn}");
+                        }
+                    });
+                });
+            }
+        });
+    }
+
+    /**
+     * Order providers by most recent record date, then most recent update, preferring garmin_personal and then alphabetical on ties.
+     *
+     * @param  array<string, array{count: int, latest_date: ?string, latest_updated_at: ?string}>  $stats
+     * @return list<string>
+     */
+    private function rankProviders(array $stats): array
+    {
+        $providers = array_map('strval', array_keys($stats));
 
         usort($providers, static function (string $a, string $b) use ($stats): int {
             $dateCompare = strcmp((string) ($stats[$b]['latest_date'] ?? ''), (string) ($stats[$a]['latest_date'] ?? ''));
@@ -272,34 +378,7 @@ class HealthSourceRegistry
             return strcmp($a, $b);
         });
 
-        return $this->resolvedMemo[$domain] = $providers[0];
-    }
-
-    /**
-     * Scope an Eloquent query to the domain's primary provider when explicitly configured or when multiple providers exist.
-     *
-     * @template TModel of Model
-     *
-     * @param  Builder<TModel>  $query
-     * @return Builder<TModel>
-     */
-    public function applyScope(Builder $query, string $domain): Builder
-    {
-        $this->assertValidDomain($domain);
-
-        $configured = $this->configuredSelection($domain);
-        $resolved = $this->resolveProvider($domain);
-
-        if ($resolved === null) {
-            return $query;
-        }
-
-        if ($configured !== self::MODE_AUTO || count($this->providerStats($domain)) >= 2) {
-            $table = $query->getModel()->getTable();
-            $query->where("{$table}.provider", $resolved);
-        }
-
-        return $query;
+        return $providers;
     }
 
     /**
@@ -407,6 +486,8 @@ class HealthSourceRegistry
     }
 
     /**
+     * Merge per-table provider stats for a domain; only the primary table contributes recency dates.
+     *
      * @return array<string, array{count: int, latest_date: ?string, latest_updated_at: ?string}>
      */
     private function providerStats(string $domain): array
@@ -419,40 +500,13 @@ class HealthSourceRegistry
         $stats = [];
 
         foreach ($meta['tables'] as $table) {
-            if (! Schema::hasTable($table)) {
-                continue;
-            }
-
-            $dateColumn = $table === $meta['table'] ? $meta['date_column'] : null;
-            $select = $dateColumn !== null
-                ? "provider, COUNT(*) as row_count, MAX({$dateColumn}) as latest_date, MAX(updated_at) as latest_updated_at"
-                : 'provider, COUNT(*) as row_count, NULL as latest_date, MAX(updated_at) as latest_updated_at';
-
-            $rows = DB::table($table)
-                ->selectRaw($select)
-                ->whereNotNull('provider')
-                ->where('provider', '!=', '')
-                ->groupBy('provider')
-                ->get();
-
-            foreach ($rows as $row) {
-                $provider = is_string($row->provider ?? null) ? trim($row->provider) : '';
-
-                if ($provider === '') {
-                    continue;
-                }
-
-                $count = (int) ($row->row_count ?? 0);
-                $latestDate = is_string($row->latest_date ?? null) && $row->latest_date !== ''
-                    ? $row->latest_date
-                    : null;
-                $latestUpdatedAt = is_string($row->latest_updated_at ?? null) && $row->latest_updated_at !== ''
-                    ? $row->latest_updated_at
-                    : null;
+            foreach ($this->tableStats($table) as $provider => $tableStat) {
+                $latestDate = $table === $meta['table'] ? $tableStat['latest_date'] : null;
+                $latestUpdatedAt = $tableStat['latest_updated_at'];
 
                 if (! isset($stats[$provider])) {
                     $stats[$provider] = [
-                        'count' => $count,
+                        'count' => $tableStat['count'],
                         'latest_date' => $latestDate,
                         'latest_updated_at' => $latestUpdatedAt,
                     ];
@@ -460,7 +514,7 @@ class HealthSourceRegistry
                     continue;
                 }
 
-                $stats[$provider]['count'] += $count;
+                $stats[$provider]['count'] += $tableStat['count'];
 
                 if ($latestDate !== null && ($stats[$provider]['latest_date'] === null || strcmp($latestDate, $stats[$provider]['latest_date']) > 0)) {
                     $stats[$provider]['latest_date'] = $latestDate;
@@ -473,6 +527,50 @@ class HealthSourceRegistry
         }
 
         return $this->providerStatsMemo[$domain] = $stats;
+    }
+
+    /**
+     * @return array<string, array{count: int, latest_date: ?string, latest_updated_at: ?string}>
+     */
+    private function tableStats(string $table): array
+    {
+        if (isset($this->tableStatsMemo[$table])) {
+            return $this->tableStatsMemo[$table];
+        }
+
+        if (! Schema::hasTable($table)) {
+            return $this->tableStatsMemo[$table] = [];
+        }
+
+        $dateColumn = self::TABLES[$table]['date_column'];
+        $select = $dateColumn !== null
+            ? "provider, COUNT(*) as row_count, MAX({$dateColumn}) as latest_date, MAX(updated_at) as latest_updated_at"
+            : 'provider, COUNT(*) as row_count, NULL as latest_date, MAX(updated_at) as latest_updated_at';
+
+        $rows = DB::table($table)
+            ->selectRaw($select)
+            ->whereNotNull('provider')
+            ->where('provider', '!=', '')
+            ->groupBy('provider')
+            ->get();
+
+        $stats = [];
+
+        foreach ($rows as $row) {
+            $provider = is_string($row->provider ?? null) ? trim($row->provider) : '';
+
+            if ($provider === '') {
+                continue;
+            }
+
+            $stats[$provider] = [
+                'count' => (int) ($row->row_count ?? 0),
+                'latest_date' => is_string($row->latest_date ?? null) && $row->latest_date !== '' ? $row->latest_date : null,
+                'latest_updated_at' => is_string($row->latest_updated_at ?? null) && $row->latest_updated_at !== '' ? $row->latest_updated_at : null,
+            ];
+        }
+
+        return $this->tableStatsMemo[$table] = $stats;
     }
 
     private function assertValidDomain(string $domain): void

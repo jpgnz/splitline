@@ -24,9 +24,14 @@ import {
     updateUnits,
 } from '@/actions/App/Http/Controllers/SettingsController';
 import AppearanceTabs from '@/components/AppearanceTabs.vue';
+import { useEnrichmentQueueFeed } from '@/composables/useEnrichmentQueueFeed';
 import { formatNumber, formatRelativeTime } from '@/lib/format';
 import { backfill as syncBackfill, status as syncStatus } from '@/routes/sync';
-import type { EnrichmentQueueSummary, UnitSystem } from '@/types/global';
+import type {
+    EnrichmentQueueJobs,
+    EnrichmentQueueSummary,
+    UnitSystem,
+} from '@/types/global';
 
 type FamilyMode = 'off' | 'unified' | 'split';
 
@@ -191,6 +196,24 @@ watch(
     { deep: true },
 );
 
+function applyPolledEnrichmentJobs(next: EnrichmentQueueJobs): void {
+    liveEnrichmentQueue.value = {
+        ...liveEnrichmentQueue.value,
+        jobs: next.jobs,
+        has_active_work: next.has_active_work,
+    };
+}
+
+// The layout already polls queued-job counts while enrichment runs; reuse its snapshot
+// instead of running a second poller from this page.
+const { latestPolledEnrichments } = useEnrichmentQueueFeed();
+
+watch(latestPolledEnrichments, (next) => {
+    if (next) {
+        applyPolledEnrichmentJobs(next);
+    }
+});
+
 const isAnySyncRunning = computed<boolean>(
     () =>
         isBackfillPosting.value ||
@@ -253,13 +276,9 @@ async function pollBackfillStatus(): Promise<void> {
         }
 
         const data = (await response.json()) as Partial<LiveSyncSnapshot> & {
-            enrichments?: EnrichmentQueueSummary;
+            enrichments?: EnrichmentQueueJobs;
         };
         const nextStatus = data.status ?? 'idle';
-        const wasSyncActive =
-            liveSync.value.status === 'running' ||
-            liveSync.value.status === 'queued';
-        const wasQueueActive = liveEnrichmentQueue.value.jobs.total > 0;
 
         liveSync.value = {
             id: data.id ?? null,
@@ -272,14 +291,12 @@ async function pollBackfillStatus(): Promise<void> {
         };
 
         if (data.enrichments) {
-            liveEnrichmentQueue.value = data.enrichments;
+            applyPolledEnrichmentJobs(data.enrichments);
         }
 
-        const nextSyncActive =
-            nextStatus === 'running' || nextStatus === 'queued';
-        const nextQueueActive = (data.enrichments?.jobs.total ?? 0) > 0;
+        if (nextStatus !== 'running' && nextStatus !== 'queued') {
+            stopBackfillPolling();
 
-        if (!nextSyncActive && wasSyncActive) {
             if (data.type === 'backfill') {
                 if (nextStatus === 'completed') {
                     toast.success('Historical backfill completed.');
@@ -296,14 +313,6 @@ async function pollBackfillStatus(): Promise<void> {
 
             router.reload({ only: ['backfill', 'sync', 'enrichment_queue'] });
         }
-
-        if (!nextSyncActive && !nextQueueActive) {
-            stopBackfillPolling();
-
-            if (!wasSyncActive && wasQueueActive) {
-                router.reload({ only: ['enrichment_queue', 'sync'] });
-            }
-        }
     } catch {
         // Transient network error while polling; retry on next tick.
     } finally {
@@ -314,10 +323,9 @@ async function pollBackfillStatus(): Promise<void> {
 watch(
     () =>
         liveSync.value.status === 'running' ||
-        liveSync.value.status === 'queued' ||
-        isEnrichmentQueueActive.value,
-    (active) => {
-        if (active) {
+        liveSync.value.status === 'queued',
+    (running) => {
+        if (running) {
             if (backfillPollTimer === null) {
                 backfillPollTimer = setInterval(() => {
                     void pollBackfillStatus();
@@ -1658,8 +1666,9 @@ function submitHealthSources(): void {
                             <p class="text-sm text-zinc-500 dark:text-zinc-400">
                                 Choose the primary telemetry source per health
                                 domain when data arrives from multiple
-                                providers. Auto selects the most recently
-                                updated provider.
+                                providers. Auto prefers the most recently
+                                updated provider and fills in days it has no
+                                data for from your other providers.
                             </p>
                         </div>
 

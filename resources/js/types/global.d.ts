@@ -13,19 +13,22 @@ declare module 'vite/client' {
 
 export type UnitSystem = 'metric' | 'imperial';
 
-export type EnrichmentQueueSummary = {
+export type EnrichmentQueueJobs = {
     jobs: {
         default: number;
         streams: number;
         weather: number;
         total: number;
     };
+    has_active_work: boolean;
+};
+
+export type EnrichmentQueueSummary = EnrichmentQueueJobs & {
     pending: {
         streams: number;
         weather: number;
         routes: number;
     };
-    has_active_work: boolean;
 };
 
 export type SportNavItem = {
@@ -83,7 +86,7 @@ declare module '@inertiajs/core' {
                 last_synced_at: string | null;
                 error_message: string | null;
                 provider_configured?: boolean;
-                enrichments?: EnrichmentQueueSummary;
+                enrichments?: EnrichmentQueueJobs;
             };
             flash?: {
                 syncStatus?: string | null;

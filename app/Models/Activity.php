@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 
 /**
  * @property int $id
@@ -465,5 +466,72 @@ class Activity extends Model
         return $query
             ->whereNull("{$table}.streams_synced_at")
             ->whereNull("{$table}.streams_unavailable_at");
+    }
+
+    /**
+     * Outdoor activities with a start coordinate or a stored stream that weather can be sampled along.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeWithWeatherCoordinates(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->where("{$table}.is_indoor", false)
+            ->where(function (Builder $coordinateQuery) use ($table): void {
+                $coordinateQuery
+                    ->where(function (Builder $startCoords) use ($table): void {
+                        $startCoords
+                            ->whereNotNull("{$table}.start_lat")
+                            ->whereNotNull("{$table}.start_lng");
+                    })
+                    ->orWhereExists(function (QueryBuilder $streamSub) use ($table): void {
+                        $streamSub
+                            ->selectRaw('1')
+                            ->from('activity_streams')
+                            ->whereColumn('activity_streams.activity_id', "{$table}.id");
+                    });
+            });
+    }
+
+    /**
+     * Weather-eligible activities that have no weather yet, or only start-point weather that can be upgraded to route sampling.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingWeather(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->withWeatherCoordinates()
+            ->where(function (Builder $missingOrUpgradeQuery) use ($table): void {
+                $missingOrUpgradeQuery
+                    ->whereNotExists(function (QueryBuilder $weatherSub) use ($table): void {
+                        $weatherSub
+                            ->selectRaw('1')
+                            ->from('activity_weathers')
+                            ->whereColumn('activity_weathers.activity_id', "{$table}.id");
+                    })
+                    ->orWhere(function (Builder $upgradeQuery) use ($table): void {
+                        $upgradeQuery
+                            ->whereExists(function (QueryBuilder $weatherSub) use ($table): void {
+                                $weatherSub
+                                    ->selectRaw('1')
+                                    ->from('activity_weathers')
+                                    ->whereColumn('activity_weathers.activity_id', "{$table}.id")
+                                    ->where('activity_weathers.sampling_mode', 'start_point');
+                            })
+                            ->whereExists(function (QueryBuilder $streamSub) use ($table): void {
+                                $streamSub
+                                    ->selectRaw('1')
+                                    ->from('activity_streams')
+                                    ->whereColumn('activity_streams.activity_id', "{$table}.id");
+                            });
+                    });
+            });
     }
 }

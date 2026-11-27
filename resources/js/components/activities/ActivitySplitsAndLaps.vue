@@ -1,11 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 import { formatDurationClock, formatNumber } from '@/lib/format';
 import { computeSplitsFromSeries, KM_TO_MI, useUnits } from '@/lib/units';
 import type { KmSplitItem, SplitItem, StreamPoint } from '@/types/activity';
 
 const props = defineProps<{
-    activityId: number;
     series: StreamPoint[];
     kmSplits: KmSplitItem[];
     laps: Array<Record<string, number | null>>;
@@ -31,14 +30,9 @@ const {
     formatSpeed,
 } = useUnits();
 
-const splitsTab = ref<'splits' | 'laps'>('splits');
-
-watch(
-    () => props.activityId,
-    () => {
-        splitsTab.value = props.kmSplits.length > 0 ? 'splits' : 'laps';
-    },
-);
+const splitsTab = defineModel<'splits' | 'laps'>('splitsTab', {
+    default: 'splits',
+});
 
 const splits = computed<SplitItem[]>(() =>
     computeSplitsFromSeries(props.series, props.kmSplits, units.value),

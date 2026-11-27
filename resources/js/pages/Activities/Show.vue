@@ -112,6 +112,9 @@ const activeStreamIndex = ref<number | null>(null);
 const mapColorMode = ref<MapColorMode>('solid');
 const showWindArrows = ref<boolean>(false);
 const highlightedRange = ref<HighlightRange | null>(null);
+const splitsTab = ref<'splits' | 'laps'>('splits');
+const verticalMetricMode = ref<'ratio' | 'oscillation'>('ratio');
+const powerUnitMode = ref<'watts' | 'pct'>('watts');
 const isSyncingStreams = ref<boolean>(false);
 const isSyncingWeather = ref<boolean>(false);
 
@@ -123,6 +126,8 @@ watch(
         mapColorMode.value = 'solid';
         showWindArrows.value = false;
         highlightedRange.value = null;
+        splitsTab.value =
+            (props.stream?.km_splits?.length ?? 0) > 0 ? 'splits' : 'laps';
     },
 );
 
@@ -1414,6 +1419,8 @@ const tabs = computed<
 
             <!-- Synchronized ECharts Telemetry Panels & MTB Jumps -->
             <ActivityStreamsPanel
+                v-model:vertical-metric-mode="verticalMetricMode"
+                v-model:power-unit-mode="powerUnitMode"
                 :activity="activity"
                 :series="series"
                 :run-walk-segments="runWalkSegments"
@@ -1456,7 +1463,7 @@ const tabs = computed<
 
             <!-- Splits & Laps Card (placed at bottom since it's often the longest) -->
             <ActivitySplitsAndLaps
-                :activity-id="activity.id"
+                v-model:splits-tab="splitsTab"
                 :series="series"
                 :km-splits="kmSplits"
                 :laps="laps"

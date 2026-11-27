@@ -79,7 +79,6 @@ class HandleInertiaRequests extends Middleware
      *     provider_configured: bool,
      *     enrichments: array{
      *         jobs: array{default: int, streams: int, weather: int, total: int},
-     *         pending: array{streams: int, weather: int, routes: int},
      *         has_active_work: bool
      *     }
      * }
@@ -87,7 +86,7 @@ class HandleInertiaRequests extends Middleware
     private function latestSyncSummary(): array
     {
         $providerConfigured = trim((string) config('services.garmin.key', '')) !== '';
-        $enrichments = $this->queueStatus->summary();
+        $enrichments = $this->queueStatus->activeJobs();
 
         if (! Schema::hasTable('sync_runs')) {
             return [
