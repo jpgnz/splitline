@@ -2750,8 +2750,8 @@ function submitSegmentsSettings(): void {
                                 </span>
                             </div>
                             <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                                Automatically labels activity locations from
-                                GNSS start coordinates via
+                                Automatically labels activity locations from GPS
+                                start coordinates via
                                 <span
                                     class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
                                     >{{ geocoding.host }}</span
