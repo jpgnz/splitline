@@ -5,6 +5,7 @@ namespace App\Services\Activities;
 use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
+use App\Models\WeightMeasurement;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Gear\GearService;
 use App\Services\Routes\MatchedRouteService;
@@ -309,6 +310,8 @@ class ActivityQueryService
      *     weather: ?array<string, mixed>,
      *     derivedMetrics: ?array<string, mixed>,
      *     bestEfforts: list<array<string, mixed>>,
+     *     powerEffortRanks: array<int, int>,
+     *     athleteWeightKg: ?float,
      *     prevActivity: ?array{id: int, name: string},
      *     nextActivity: ?array{id: int, name: string},
      *     gear: array<string, mixed>,
@@ -513,6 +516,8 @@ class ActivityQueryService
                 'computed_at' => $derivedMetrics->computed_at->toIso8601String(),
             ] : null,
             'bestEfforts' => $bestEfforts,
+            'powerEffortRanks' => $this->resolvePowerEffortRanks($activity),
+            'athleteWeightKg' => $this->resolveAthleteWeightKg($activity),
             'prevActivity' => $prev !== null ? ['id' => $prev->id, 'name' => $prev->name] : null,
             'nextActivity' => $next !== null ? ['id' => $next->id, 'name' => $next->name] : null,
             'gear' => $this->gearService->forActivity($activity),
@@ -1236,6 +1241,125 @@ class ActivityQueryService
         }
 
         return $ranks;
+    }
+
+    /**
+     * Resolve all-time Top 3 ranks for each duration in the activity's power curve within its sport category.
+     *
+     * @return array<int, int>
+     */
+    private function resolvePowerEffortRanks(Activity $activity): array
+    {
+        $curve = $activity->power_curve;
+
+        if (! is_array($curve) || $curve === []) {
+            return [];
+        }
+
+        /** @var array<int, float> $targetDurations */
+        $targetDurations = [];
+
+        foreach ($curve as $rawSeconds => $rawWatts) {
+            if (! is_numeric($rawSeconds) || ! is_numeric($rawWatts)) {
+                continue;
+            }
+
+            $seconds = (int) $rawSeconds;
+            $watts = (float) $rawWatts;
+
+            if ($seconds > 0 && $watts > 0.0) {
+                $targetDurations[$seconds] = $watts;
+            }
+        }
+
+        if ($targetDurations === []) {
+            return [];
+        }
+
+        $peers = Activity::query()
+            ->select(['id', 'power_curve'])
+            ->where('sport_category', $activity->sport_category)
+            ->whereNotNull('power_curve')
+            ->get();
+
+        /** @var array<int, list<array{id: int, watts: float}>> $buckets */
+        $buckets = [];
+
+        foreach ($targetDurations as $seconds => $_watts) {
+            $buckets[$seconds] = [];
+        }
+
+        foreach ($peers as $peer) {
+            $peerCurve = $peer->power_curve;
+
+            if (! is_array($peerCurve) || $peerCurve === []) {
+                continue;
+            }
+
+            foreach (array_keys($targetDurations) as $seconds) {
+                $rawWatts = $peerCurve[$seconds] ?? $peerCurve[(string) $seconds] ?? null;
+
+                if (! is_numeric($rawWatts)) {
+                    continue;
+                }
+
+                $watts = (float) $rawWatts;
+
+                if ($watts > 0.0) {
+                    $buckets[$seconds][] = [
+                        'id' => $peer->id,
+                        'watts' => $watts,
+                    ];
+                }
+            }
+        }
+
+        /** @var array<int, int> $ranks */
+        $ranks = [];
+
+        foreach ($buckets as $seconds => $entries) {
+            usort($entries, static function (array $a, array $b): int {
+                $cmp = $b['watts'] <=> $a['watts'];
+
+                if ($cmp !== 0) {
+                    return $cmp;
+                }
+
+                return $a['id'] <=> $b['id'];
+            });
+
+            foreach (array_slice($entries, 0, 3) as $index => $candidate) {
+                if ($candidate['id'] === $activity->id) {
+                    $ranks[$seconds] = $index + 1;
+                    break;
+                }
+            }
+        }
+
+        return $ranks;
+    }
+
+    /**
+     * Resolve the athlete's latest weight in kg on or before the activity's local date.
+     */
+    private function resolveAthleteWeightKg(Activity $activity): ?float
+    {
+        $activityDate = $activity->started_at_local->format('Y-m-d');
+
+        /** @var WeightMeasurement|null $measurement */
+        $measurement = $this->healthSources()
+            ->applyScope(WeightMeasurement::query(), 'weight')
+            ->where('calendar_date', '<=', $activityDate)
+            ->orderByDesc('calendar_date')
+            ->orderByDesc('measured_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($measurement === null || $measurement->weight_grams <= 0) {
+            return null;
+        }
+
+        return round($measurement->weight_grams / 1000.0, 2);
     }
 
     /**

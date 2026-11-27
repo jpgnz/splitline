@@ -50,6 +50,7 @@ import {
     formatNumber,
     formatTimeOfDay,
 } from '@/lib/format';
+import { hasAnyDurationPeakEfforts } from '@/lib/peakEfforts';
 import { useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
 import {
@@ -98,6 +99,8 @@ interface ActivityShowProps {
     weather: ActivityWeatherPayload | null;
     derivedMetrics?: ActivityDerivedMetricsPayload | null;
     bestEfforts: ActivityBestEffortItem[];
+    powerEffortRanks?: Record<string, number> | null;
+    athleteWeightKg?: number | null;
     prevActivity: AdjacentActivity | null;
     nextActivity: AdjacentActivity | null;
     gear?: ActivityGearPayload;
@@ -182,6 +185,9 @@ const sportEntry = computed(() => getSportMeta(resolvedSportKey.value));
 
 const isRunning = computed<boolean>(
     () => props.activity.sport_category === 'running',
+);
+const isCycling = computed<boolean>(
+    () => props.activity.sport_category === 'biking',
 );
 const isSwimming = computed<boolean>(
     () =>
@@ -1019,8 +1025,18 @@ const showSegmentsTab = computed<boolean>(
     () => segmentEffortsList.value.length > 0 || hasGnssStreamForSegments.value,
 );
 
+const hasBestEffortsCard = computed<boolean>(
+    () =>
+        props.bestEfforts.length > 0 ||
+        hasAnyDurationPeakEfforts(series.value, {
+            isRunning: isRunning.value,
+            isCycling: isCycling.value,
+            isIndoor: props.activity.is_indoor,
+        }),
+);
+
 const showEffortsSegmentsTab = computed<boolean>(
-    () => props.bestEfforts.length > 0 || showSegmentsTab.value,
+    () => hasBestEffortsCard.value || showSegmentsTab.value,
 );
 
 const effortsSegmentsCount = computed<number>(
@@ -1861,10 +1877,16 @@ const tabs = computed<
             class="space-y-6"
         >
             <ActivityBestEfforts
-                v-if="bestEfforts.length > 0"
+                v-if="hasBestEffortsCard"
                 :best-efforts="bestEfforts"
                 :series="series"
                 :uses-pace="usesPace"
+                :is-running="isRunning"
+                :is-cycling="isCycling"
+                :is-indoor="activity.is_indoor"
+                :athlete-weight-kg="athleteWeightKg ?? null"
+                :power-effort-ranks="powerEffortRanks ?? null"
+                :highlighted-range="highlightedRange"
                 @select-range="highlightedRange = $event"
             />
 
