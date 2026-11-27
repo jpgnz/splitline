@@ -1491,6 +1491,7 @@ const tabs = computed<
                 :is-running="isRunning"
                 :has-ambient-weather="weather !== null"
                 :weather="weather"
+                :highlight-range="highlightedRange"
                 @hover-index="activeStreamIndex = $event"
                 @select-range="highlightedRange = $event"
             />
