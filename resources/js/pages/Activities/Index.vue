@@ -242,6 +242,34 @@ const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const searchInput = ref<string>(props.filters.search ?? '');
 const selectedCompareIds = ref<number[]>([]);
+const selectedCompareNames = ref<Record<number, string>>({});
+
+watch(
+    () => props.activities.data,
+    (items) => {
+        if (selectedCompareIds.value.length === 0) {
+            return;
+        }
+
+        let updated = false;
+        const nextNames = { ...selectedCompareNames.value };
+
+        for (const item of items) {
+            if (
+                selectedCompareIds.value.includes(item.id) &&
+                nextNames[item.id] !== item.name
+            ) {
+                nextNames[item.id] = item.name;
+                updated = true;
+            }
+        }
+
+        if (updated) {
+            selectedCompareNames.value = nextNames;
+        }
+    },
+    { immediate: true },
+);
 
 const compareUrl = computed<string>(() =>
     activitiesCompare.url({
@@ -249,17 +277,32 @@ const compareUrl = computed<string>(() =>
     }),
 );
 
+const showCompareBar = computed<boolean>(
+    () => props.filters.view === 'table' && selectedCompareIds.value.length > 0,
+);
+
+const selectedCompareItems = computed<Array<{ id: number; label: string }>>(
+    () =>
+        selectedCompareIds.value.map((id) => ({
+            id,
+            label: selectedCompareNames.value[id] ?? `#${id}`,
+        })),
+);
+
 function isSelectedForCompare(id: number): boolean {
     return selectedCompareIds.value.includes(id);
 }
 
-function toggleCompareSelection(id: number): void {
+function toggleCompareSelection(id: number, name?: string): void {
     const idx = selectedCompareIds.value.indexOf(id);
 
     if (idx !== -1) {
         selectedCompareIds.value = selectedCompareIds.value.filter(
             (item) => item !== id,
         );
+        const nextNames = { ...selectedCompareNames.value };
+        delete nextNames[id];
+        selectedCompareNames.value = nextNames;
 
         return;
     }
@@ -269,10 +312,18 @@ function toggleCompareSelection(id: number): void {
     }
 
     selectedCompareIds.value = [...selectedCompareIds.value, id];
+
+    if (name) {
+        selectedCompareNames.value = {
+            ...selectedCompareNames.value,
+            [id]: name,
+        };
+    }
 }
 
 function clearCompareSelection(): void {
     selectedCompareIds.value = [];
+    selectedCompareNames.value = {};
 }
 
 let searchTimer: number | null = null;
@@ -301,8 +352,54 @@ const hasActiveFilters = computed<boolean>(
         activeSport.value !== 'all' ||
         props.filters.range !== 'all' ||
         props.filters.pr ||
-        props.filters.favorite,
+        props.filters.favorite ||
+        (Boolean(props.filters.sort) && props.filters.sort !== 'date') ||
+        (Boolean(props.filters.dir) && props.filters.dir !== 'desc'),
 );
+
+const csvExportUrl = computed<string>(() => {
+    const query: Record<string, string | number> = {
+        format: 'csv',
+    };
+
+    if (props.filters.search) {
+        query.search = props.filters.search;
+    }
+
+    if (props.filters.sport && props.filters.sport !== 'all') {
+        query.sport = props.filters.sport;
+    }
+
+    if (props.filters.range) {
+        query.range = props.filters.range;
+    }
+
+    if (props.filters.range === 'custom') {
+        if (props.filters.from) {
+            query.from = props.filters.from;
+        }
+
+        if (props.filters.to) {
+            query.to = props.filters.to;
+        }
+    } else if (
+        props.filters.range !== 'all' &&
+        !props.dateWindow.isLatest &&
+        props.dateWindow.end
+    ) {
+        query.end = props.dateWindow.end;
+    }
+
+    if (props.filters.pr) {
+        query.pr = 1;
+    }
+
+    if (props.filters.favorite) {
+        query.favorite = 1;
+    }
+
+    return exportActivities.url({ query });
+});
 
 const hasCalendarFacetFilters = computed<boolean>(
     () =>
@@ -678,7 +775,7 @@ const summaryKpis = computed<
 </script>
 
 <template>
-    <div class="space-y-6">
+    <div class="space-y-6" :class="{ 'pb-24': showCompareBar }">
         <Head title="All Activities" />
 
         <!-- Page Header -->
@@ -720,31 +817,12 @@ const summaryKpis = computed<
 
                 <!-- Export Filtered CSV -->
                 <a
-                    :href="
-                        exportActivities.url({
-                            query: {
-                                format: 'csv',
-                                ...(filters.search
-                                    ? { search: filters.search }
-                                    : {}),
-                                ...(filters.sport && filters.sport !== 'all'
-                                    ? { sport: filters.sport }
-                                    : {}),
-                                ...(filters.range
-                                    ? { range: filters.range }
-                                    : {}),
-                                ...(filters.from ? { from: filters.from } : {}),
-                                ...(filters.to ? { to: filters.to } : {}),
-                                ...(filters.pr ? { pr: 1 } : {}),
-                                ...(filters.favorite ? { favorite: 1 } : {}),
-                            },
-                        })
-                    "
+                    :href="csvExportUrl"
                     class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white"
                     title="Export currently filtered activities as CSV"
                 >
                     <Download class="size-3.5" />
-                    CSV
+                    Export CSV
                 </a>
 
                 <!-- Table / Calendar Segmented Toggle -->
@@ -833,16 +911,9 @@ const summaryKpis = computed<
                 <!-- PRs & Favorites Chips -->
                 <div class="ml-auto flex flex-wrap items-center gap-1.5">
                     <button
+                        v-if="hasActiveFilters"
                         type="button"
-                        :disabled="!hasActiveFilters"
-                        :tabindex="hasActiveFilters ? 0 : -1"
-                        :aria-hidden="!hasActiveFilters"
-                        :class="[
-                            'inline-flex items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[11px] transition-colors',
-                            hasActiveFilters
-                                ? 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
-                                : 'pointer-events-none opacity-0',
-                        ]"
+                        class="inline-flex cursor-pointer items-center gap-1 rounded-lg px-2 py-1.5 font-mono text-[11px] text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
                         @click="resetFilters"
                     >
                         <RotateCcw class="size-3" />
@@ -1023,7 +1094,7 @@ const summaryKpis = computed<
                                     class="inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
                                     @click="toggleSort('elevation')"
                                 >
-                                    <span>Vert</span>
+                                    <span>Elevation</span>
                                     <ArrowUp
                                         v-if="
                                             filters.sort === 'elevation' &&
@@ -1075,7 +1146,7 @@ const summaryKpis = computed<
                                     class="inline-flex cursor-pointer items-center gap-1 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
                                     @click="toggleSort('load')"
                                 >
-                                    <span>Load</span>
+                                    <span>Load / Power</span>
                                     <ArrowUp
                                         v-if="
                                             filters.sort === 'load' &&
@@ -1118,10 +1189,19 @@ const summaryKpis = computed<
                                         !isSelectedForCompare(activity.id) &&
                                         selectedCompareIds.length >= 3
                                     "
+                                    :title="
+                                        !isSelectedForCompare(activity.id) &&
+                                        selectedCompareIds.length >= 3
+                                            ? 'Maximum 3 activities can be compared'
+                                            : undefined
+                                    "
                                     :aria-label="`Select ${activity.name} for comparison`"
                                     class="size-3.5 cursor-pointer rounded border-zinc-300 text-emerald-600 accent-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900"
                                     @change="
-                                        toggleCompareSelection(activity.id)
+                                        toggleCompareSelection(
+                                            activity.id,
+                                            activity.name,
+                                        )
                                     "
                                 />
                             </td>
@@ -1161,7 +1241,7 @@ const summaryKpis = computed<
                                             ),
                                         }"
                                     />
-                                    <div class="min-w-0">
+                                    <div class="min-w-0 flex-1">
                                         <div
                                             class="flex flex-wrap items-center gap-1.5"
                                         >
@@ -1171,7 +1251,7 @@ const summaryKpis = computed<
                                                         activity.id,
                                                     )
                                                 "
-                                                class="truncate font-medium text-zinc-900 transition-colors hover:text-amber-600 dark:text-zinc-100 dark:hover:text-amber-400"
+                                                class="max-w-full min-w-0 truncate font-medium text-zinc-900 transition-colors hover:text-amber-600 dark:text-zinc-100 dark:hover:text-amber-400"
                                             >
                                                 {{ activity.name }}
                                             </Link>
@@ -1429,22 +1509,29 @@ const summaryKpis = computed<
                 >
                     <!-- Mon..Sun Day Cells -->
                     <div
-                        v-for="day in week.days"
+                        v-for="(day, dayIndex) in week.days"
                         :key="day.date"
                         class="flex min-h-24 flex-col justify-between gap-2 border-b border-zinc-100 p-2.5 transition-colors lg:min-h-28 lg:border-r lg:border-b-0 lg:border-zinc-200/70 dark:border-zinc-800/70"
                         :class="calendarCellIntensityClass(day)"
                     >
                         <div class="flex items-center justify-between gap-1">
-                            <span
-                                class="inline-flex size-6 items-center justify-center rounded-md font-mono text-xs tabular-nums"
-                                :class="
-                                    day.isToday
-                                        ? 'bg-zinc-900 font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950'
-                                        : 'text-zinc-600 dark:text-zinc-400'
-                                "
-                            >
-                                {{ day.dayOfMonth }}
-                            </span>
+                            <div class="flex items-center gap-1.5">
+                                <span
+                                    class="inline-flex size-6 items-center justify-center rounded-md font-mono text-xs tabular-nums"
+                                    :class="
+                                        day.isToday
+                                            ? 'bg-zinc-900 font-semibold text-white dark:bg-zinc-100 dark:text-zinc-950'
+                                            : 'text-zinc-600 dark:text-zinc-400'
+                                    "
+                                >
+                                    {{ day.dayOfMonth }}
+                                </span>
+                                <span
+                                    class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase lg:hidden dark:text-zinc-400"
+                                >
+                                    {{ WEEKDAY_HEADERS[dayIndex] }}
+                                </span>
+                            </div>
 
                             <span
                                 v-if="day.total_duration_seconds > 0"
@@ -1571,19 +1658,38 @@ const summaryKpis = computed<
 
         <!-- Floating Compare Action Bar -->
         <div
-            v-if="selectedCompareIds.length > 0"
-            class="fixed bottom-5 left-1/2 z-40 flex -translate-x-1/2 items-center gap-3 rounded-full border border-zinc-200/90 bg-white/95 px-4 py-2 shadow-lg backdrop-blur-md dark:border-zinc-700/90 dark:bg-[#18181b]/95"
+            v-if="showCompareBar"
+            class="fixed bottom-5 left-1/2 z-40 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-wrap items-center justify-center gap-2 rounded-2xl border border-zinc-200/90 bg-white/95 px-3.5 py-2 shadow-lg backdrop-blur-md sm:rounded-full sm:px-4 dark:border-zinc-700/90 dark:bg-[#18181b]/95"
         >
             <span
-                class="font-mono text-xs text-zinc-600 tabular-nums dark:text-zinc-300"
+                class="font-mono text-xs whitespace-nowrap text-zinc-600 tabular-nums dark:text-zinc-300"
             >
                 {{ selectedCompareIds.length }}/3 selected
             </span>
 
+            <div class="flex flex-wrap items-center justify-center gap-1">
+                <span
+                    v-for="item in selectedCompareItems"
+                    :key="item.id"
+                    class="inline-flex max-w-36 items-center gap-1 rounded-full border border-zinc-200/90 bg-zinc-100/80 px-2 py-0.5 font-mono text-[11px] text-zinc-700 dark:border-zinc-700/80 dark:bg-zinc-800/80 dark:text-zinc-200"
+                    :title="item.label"
+                >
+                    <span class="truncate">{{ item.label }}</span>
+                    <button
+                        type="button"
+                        class="shrink-0 cursor-pointer rounded-full text-zinc-400 transition-colors hover:text-zinc-900 dark:hover:text-zinc-100"
+                        :aria-label="`Remove ${item.label} from comparison`"
+                        @click="toggleCompareSelection(item.id)"
+                    >
+                        <X class="size-3" />
+                    </button>
+                </span>
+            </div>
+
             <Link
                 v-if="selectedCompareIds.length >= 2"
                 :href="compareUrl"
-                class="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-1.5 font-mono text-xs font-medium text-white transition-colors hover:bg-emerald-500"
+                class="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-3.5 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-white transition-colors hover:bg-emerald-500"
             >
                 <ArrowLeftRight class="size-3.5" />
                 <span>
@@ -1593,7 +1699,7 @@ const summaryKpis = computed<
             </Link>
             <span
                 v-else
-                class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                class="font-mono text-[11px] whitespace-nowrap text-zinc-500 dark:text-zinc-400"
             >
                 Pick 1–2 more to compare
             </span>

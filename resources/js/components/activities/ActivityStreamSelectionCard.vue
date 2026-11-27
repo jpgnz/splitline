@@ -30,6 +30,8 @@ const props = withDefaults(
         activeIntervalId?: string | null;
         usesPace: boolean;
         isRunning: boolean;
+        isSwimming?: boolean;
+        cadenceUnit?: string | null;
         thresholdPower?: number | null;
         weather?: ActivityWeatherPayload | null;
     }>(),
@@ -37,6 +39,8 @@ const props = withDefaults(
         selectionLabel: 'Selected Slice',
         pendingStartIndex: null,
         activeIntervalId: null,
+        isSwimming: false,
+        cadenceUnit: null,
         thresholdPower: null,
         weather: null,
     },
@@ -52,11 +56,11 @@ const emit = defineEmits<{
         },
     ];
     clear: [];
+    close: [];
     toggleInspectMode: [];
 }>();
 
 const {
-    isImperial,
     elevationUnit,
     elevationFromMeters,
     paceSecondsFromMps,
@@ -66,9 +70,15 @@ const {
     formatDistance,
     formatElevation,
     formatPace,
+    formatPace100m,
     formatSpeed,
     formatSpeedKmh,
+    formatVam: formatVamUnit,
 } = useUnits();
+
+const resolvedCadenceUnit = computed<string>(
+    () => props.cadenceUnit || (props.isRunning ? 'spm' : 'rpm'),
+);
 
 const showHalfComparison = ref(false);
 
@@ -261,17 +271,19 @@ function formatPrimaryOutput(speedMps: number | null): string {
         return '—';
     }
 
+    if (props.isSwimming) {
+        return formatPace100m(speedMps);
+    }
+
     return props.usesPace ? formatPace(speedMps) : formatSpeed(speedMps);
 }
 
 function formatVam(vamMetersPerHour: number | null): string | null {
-    if (vamMetersPerHour === null) {
+    if (vamMetersPerHour === null || vamMetersPerHour <= 0) {
         return null;
     }
 
-    const converted = Math.round(elevationFromMeters(vamMetersPerHour));
-
-    return `${formatNumber(converted, 0)} ${elevationUnit.value}/h`;
+    return formatVamUnit(vamMetersPerHour);
 }
 
 function formatGrade(gradePct: number | null): string {
@@ -286,6 +298,7 @@ function formatGrade(gradePct: number | null): string {
 
 function formatWindSummary(effectiveKmh: number | null): {
     label: string;
+    subtext: string;
     toneClass: string;
 } | null {
     if (effectiveKmh === null) {
@@ -295,6 +308,7 @@ function formatWindSummary(effectiveKmh: number | null): {
     if (Math.abs(effectiveKmh) < 2) {
         return {
             label: 'Calm / Cross',
+            subtext: 'Neutral wind',
             toneClass: 'text-zinc-600 dark:text-zinc-300',
         };
     }
@@ -304,12 +318,14 @@ function formatWindSummary(effectiveKmh: number | null): {
     if (effectiveKmh > 0) {
         return {
             label: `${speedText} Tail`,
+            subtext: `Route-aligned ${speedUnit.value}`,
             toneClass: 'text-emerald-600 dark:text-emerald-400',
         };
     }
 
     return {
         label: `${speedText} Head`,
+        subtext: `Route-aligned ${speedUnit.value}`,
         toneClass: 'text-rose-600 dark:text-rose-400',
     };
 }
@@ -322,14 +338,20 @@ function formatIntervalHint(interval: DetectedInterval): string {
     }
 
     if (interval.stats.avgSpeed !== null && interval.stats.avgSpeed > 0) {
-        const paceOrSpeed = props.usesPace
-            ? formatPace(interval.stats.avgSpeed)
-            : formatSpeed(interval.stats.avgSpeed);
-
-        return `${duration} · ${paceOrSpeed}`;
+        return `${duration} · ${formatPrimaryOutput(interval.stats.avgSpeed)}`;
     }
 
     return duration;
+}
+
+function formatDurationDelta(deltaSeconds: number): string {
+    const rounded = Math.round(deltaSeconds);
+
+    if (rounded === 0) {
+        return '0:00';
+    }
+
+    return `${rounded > 0 ? '+' : '-'}${formatDurationClock(Math.abs(rounded))}`;
 }
 
 function formatPaceOrSpeedDelta(
@@ -343,6 +365,31 @@ function formatPaceOrSpeedDelta(
         secondSpeed <= 0
     ) {
         return null;
+    }
+
+    if (props.isSwimming) {
+        const p1 = 100 / firstSpeed;
+        const p2 = 100 / secondSpeed;
+        const deltaSec = Math.round(p2 - p1);
+
+        if (deltaSec === 0) {
+            return {
+                text: 'Even split',
+                toneClass: 'text-zinc-500 dark:text-zinc-400',
+            };
+        }
+
+        const absSec = Math.abs(deltaSec);
+        const mins = Math.floor(absSec / 60);
+        const secs = absSec % 60;
+
+        return {
+            text: `${deltaSec < 0 ? '-' : '+'}${mins}:${String(secs).padStart(2, '0')} /100m`,
+            toneClass:
+                deltaSec < 0
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-amber-600 dark:text-amber-400',
+        };
     }
 
     if (props.usesPace) {
@@ -498,6 +545,11 @@ function selectInterval(interval: DetectedInterval): void {
 function toggleHalfComparison(): void {
     showHalfComparison.value = !showHalfComparison.value;
 }
+
+function handleClose(): void {
+    showHalfComparison.value = false;
+    emit('close');
+}
 </script>
 
 <template>
@@ -566,6 +618,12 @@ function toggleHalfComparison(): void {
                     >
                         {{ formatPointMarker(effectiveStartIndex) }} –
                         {{ formatPointMarker(effectiveEndIndex) }}
+                        <span
+                            v-if="inspectMode"
+                            class="ml-1.5 text-indigo-600 dark:text-indigo-400"
+                        >
+                            · Chart drag armed
+                        </span>
                     </span>
                     <span
                         v-else-if="pendingStartIndex !== null"
@@ -573,14 +631,17 @@ function toggleHalfComparison(): void {
                     >
                         Start anchored at
                         {{ formatPointMarker(pendingStartIndex) }} — click a
-                        second point on any chart to set End
+                        second point on any chart to set End (Esc to cancel)
                     </span>
                     <span
                         v-else
-                        class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                     >
-                        Click two points or drag across any chart below, or use
-                        sliders
+                        {{
+                            inspectMode
+                                ? 'Full activity (drag sliders or chart to slice)'
+                                : 'Full activity (drag sliders to slice)'
+                        }}
                     </span>
                 </div>
 
@@ -628,11 +689,21 @@ function toggleHalfComparison(): void {
                     <button
                         v-if="hasSelection || pendingStartIndex !== null"
                         type="button"
-                        class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase transition hover:border-rose-300 hover:text-rose-600 dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-rose-500/50 dark:hover:text-rose-400"
+                        class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] tracking-wider text-zinc-600 uppercase transition hover:border-rose-300 hover:text-rose-600 dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-rose-500/50 dark:hover:text-rose-400"
                         @click="emit('clear')"
                     >
                         <X class="size-3" />
                         Clear
+                    </button>
+
+                    <button
+                        type="button"
+                        aria-label="Close slice inspector"
+                        class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] tracking-wider text-zinc-600 uppercase transition hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
+                        @click="handleClose"
+                    >
+                        <X class="size-3" />
+                        Close
                     </button>
                 </div>
             </div>
@@ -649,7 +720,7 @@ function toggleHalfComparison(): void {
                     Auto Intervals
                     <span
                         v-if="intervalMetricLabel"
-                        class="text-zinc-400 dark:text-zinc-500"
+                        class="text-zinc-500 dark:text-zinc-400"
                     >
                         ({{ intervalMetricLabel }})
                     </span>
@@ -720,6 +791,10 @@ function toggleHalfComparison(): void {
                         </span>
                         <input
                             type="range"
+                            aria-label="Slice start"
+                            :aria-valuetext="
+                                formatPointFull(effectiveStartIndex)
+                            "
                             :min="0"
                             :max="Math.max(0, maxIndex - 1)"
                             :value="effectiveStartIndex"
@@ -741,6 +816,8 @@ function toggleHalfComparison(): void {
                         </span>
                         <input
                             type="range"
+                            aria-label="Slice end"
+                            :aria-valuetext="formatPointFull(effectiveEndIndex)"
                             :min="1"
                             :max="maxIndex"
                             :value="effectiveEndIndex"
@@ -773,7 +850,7 @@ function toggleHalfComparison(): void {
                         }}
                     </div>
                     <div
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         {{ formatDurationClock(selectionStats.startTime) }} –
                         {{ formatDurationClock(selectionStats.endTime) }}
@@ -811,7 +888,7 @@ function toggleHalfComparison(): void {
                             selectionStats.startDistanceMeters !== null &&
                             selectionStats.endDistanceMeters !== null
                         "
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         {{
                             formatDistance(
@@ -834,7 +911,13 @@ function toggleHalfComparison(): void {
                     <div
                         class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        {{ usesPace ? 'Avg Pace' : 'Avg Speed' }}
+                        {{
+                            isSwimming
+                                ? 'Avg Pace /100m'
+                                : usesPace
+                                  ? 'Avg Pace'
+                                  : 'Avg Speed'
+                        }}
                     </div>
                     <div
                         class="mt-0.5 font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -852,7 +935,7 @@ function toggleHalfComparison(): void {
                             selectionStats.maxSpeed !== null &&
                             selectionStats.maxSpeed > 0
                         "
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         Max {{ formatPrimaryOutput(selectionStats.maxSpeed) }}
                     </div>
@@ -874,7 +957,7 @@ function toggleHalfComparison(): void {
                         {{ selectionStats.avgHr }} bpm
                     </div>
                     <div
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         Min {{ selectionStats.minHr ?? '—' }} · Max
                         {{ selectionStats.maxHr ?? '—' }}
@@ -897,7 +980,7 @@ function toggleHalfComparison(): void {
                         {{ selectionStats.avgPower }} W
                         <span
                             v-if="thresholdPower && thresholdPower > 0"
-                            class="text-[11px] font-normal text-zinc-400 dark:text-zinc-500"
+                            class="text-[11px] font-normal text-zinc-500 dark:text-zinc-400"
                         >
                             ({{
                                 Math.round(
@@ -908,7 +991,7 @@ function toggleHalfComparison(): void {
                         </span>
                     </div>
                     <div
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         <template
                             v-if="selectionStats.normalizedPower !== null"
@@ -935,7 +1018,7 @@ function toggleHalfComparison(): void {
                         +{{ formatElevation(selectionStats.elevationGain) }}
                     </div>
                     <div
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         {{ formatGrade(selectionStats.avgGradePct) }}
                         <template v-if="formatVam(selectionStats.vam)">
@@ -958,10 +1041,10 @@ function toggleHalfComparison(): void {
                         class="mt-0.5 font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
                     >
                         {{ selectionStats.avgCadence }}
-                        {{ isRunning ? 'spm' : 'rpm' }}
+                        {{ resolvedCadenceUnit }}
                     </div>
                     <div
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         {{ formatNumber(selectionStats.pointCount, 0) }} pts
                     </div>
@@ -993,12 +1076,12 @@ function toggleHalfComparison(): void {
                         }}
                     </div>
                     <div
-                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                     >
                         {{
-                            isImperial
-                                ? 'Route-aligned mph'
-                                : 'Route-aligned km/h'
+                            formatWindSummary(
+                                selectionStats.avgEffectiveWindKmh,
+                            )?.subtext
                         }}
                     </div>
                 </div>
@@ -1019,7 +1102,7 @@ function toggleHalfComparison(): void {
                     </span>
                     <button
                         type="button"
-                        class="cursor-pointer font-mono text-[10px] text-zinc-400 uppercase hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-200"
+                        class="cursor-pointer font-mono text-[10px] text-zinc-500 uppercase hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200"
                         @click="showHalfComparison = false"
                     >
                         Hide
@@ -1031,7 +1114,7 @@ function toggleHalfComparison(): void {
                         class="w-full text-left font-mono text-xs tabular-nums"
                     >
                         <thead
-                            class="border-b border-zinc-100 text-[10px] text-zinc-400 uppercase dark:border-zinc-800/80 dark:text-zinc-500"
+                            class="border-b border-zinc-100 text-[10px] text-zinc-500 uppercase dark:border-zinc-800/80 dark:text-zinc-400"
                         >
                             <tr>
                                 <th class="px-3 py-1.5 font-medium">Metric</th>
@@ -1091,14 +1174,12 @@ function toggleHalfComparison(): void {
                                     class="px-3 py-1.5 text-right text-zinc-500 dark:text-zinc-400"
                                 >
                                     {{
-                                        formatSignedDelta(
+                                        formatDurationDelta(
                                             halfComparison.second
                                                 .durationSeconds -
                                                 halfComparison.first
                                                     .durationSeconds,
-                                            's',
-                                            true,
-                                        )?.text ?? '—'
+                                        )
                                     }}
                                 </td>
                             </tr>
@@ -1112,7 +1193,13 @@ function toggleHalfComparison(): void {
                                 <td
                                     class="px-3 py-1.5 text-zinc-500 dark:text-zinc-400"
                                 >
-                                    {{ usesPace ? 'Avg Pace' : 'Avg Speed' }}
+                                    {{
+                                        isSwimming
+                                            ? 'Avg Pace /100m'
+                                            : usesPace
+                                              ? 'Avg Pace'
+                                              : 'Avg Speed'
+                                    }}
                                 </td>
                                 <td
                                     class="px-3 py-1.5 text-right text-zinc-900 dark:text-zinc-100"

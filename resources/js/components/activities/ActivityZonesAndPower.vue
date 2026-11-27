@@ -82,7 +82,15 @@ function formatZoneWattRange(zone: PowerZoneItem): string {
     return '';
 }
 
-// Road Power Curve
+function formatZonePct(pct: number, seconds: number): string {
+    if (seconds > 0 && pct > 0 && pct < 0.5) {
+        return '<1%';
+    }
+
+    return `${Math.round(pct)}%`;
+}
+
+// Road / Running Power Curve
 const POWER_CURVE_LABELS: Record<number, string> = {
     1: '1s',
     5: '5s',
@@ -150,13 +158,21 @@ const powerCurveOption = computed<EChartsOption>(() => {
         fontFamily: monoFont,
         fontSize: 11,
     };
+    const curveColor = props.isRunning ? '#8b5cf6' : '#0ea5e9';
+    const curveAreaColor = props.isRunning
+        ? theme.isDark.value
+            ? 'rgba(139, 92, 246, 0.18)'
+            : 'rgba(139, 92, 246, 0.15)'
+        : theme.isDark.value
+          ? 'rgba(14, 165, 233, 0.16)'
+          : 'rgba(14, 165, 233, 0.14)';
 
     return {
         animation: false,
         grid: {
             left: 16,
             right: 16,
-            top: 20,
+            top: 32,
             bottom: 12,
             containLabel: true,
         },
@@ -187,7 +203,10 @@ const powerCurveOption = computed<EChartsOption>(() => {
             data: powerCurvePoints.value.map((p) => p.label),
             axisLine: { lineStyle: { color: theme.gridLineColor.value } },
             axisTick: { show: false },
-            axisLabel: axisLabelStyle,
+            axisLabel: {
+                ...axisLabelStyle,
+                hideOverlap: true,
+            },
         },
         yAxis: {
             type: 'value',
@@ -202,12 +221,10 @@ const powerCurveOption = computed<EChartsOption>(() => {
                 type: 'line',
                 smooth: 0.25,
                 symbolSize: 6,
-                lineStyle: { color: '#0ea5e9', width: 2.25 },
-                itemStyle: { color: '#0ea5e9' },
+                lineStyle: { color: curveColor, width: 2.25 },
+                itemStyle: { color: curveColor },
                 areaStyle: {
-                    color: theme.isDark.value
-                        ? 'rgba(14, 165, 233, 0.16)'
-                        : 'rgba(14, 165, 233, 0.14)',
+                    color: curveAreaColor,
                 },
                 data: powerCurvePoints.value.map((p) => p.watts),
             },
@@ -254,9 +271,11 @@ const powerCurveOption = computed<EChartsOption>(() => {
                         <div
                             class="flex items-center justify-between gap-2 font-mono text-xs tabular-nums"
                         >
-                            <div class="flex min-w-0 items-center gap-2">
+                            <div
+                                class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5"
+                            >
                                 <span
-                                    class="inline-flex w-7 justify-center rounded bg-zinc-100 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                                    class="inline-flex w-7 shrink-0 justify-center rounded bg-zinc-100 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                                 >
                                     Z{{ zone.zone }}
                                 </span>
@@ -267,7 +286,7 @@ const powerCurveOption = computed<EChartsOption>(() => {
                                 </span>
                                 <span
                                     v-if="formatZoneBpmRange(zone)"
-                                    class="hidden text-[11px] text-zinc-400 sm:inline dark:text-zinc-500"
+                                    class="text-[10px] text-zinc-500 sm:text-[11px] dark:text-zinc-400"
                                 >
                                     {{ formatZoneBpmRange(zone) }}
                                 </span>
@@ -278,9 +297,9 @@ const powerCurveOption = computed<EChartsOption>(() => {
                                     {{ formatDurationClock(zone.seconds) }}
                                 </span>
                                 <span
-                                    class="w-10 text-right text-[11px] text-zinc-400 dark:text-zinc-500"
+                                    class="w-10 text-right text-[11px] text-zinc-500 dark:text-zinc-400"
                                 >
-                                    {{ Math.round(zone.pct) }}%
+                                    {{ formatZonePct(zone.pct, zone.seconds) }}
                                 </span>
                             </div>
                         </div>
@@ -312,11 +331,11 @@ const powerCurveOption = computed<EChartsOption>(() => {
                         {{ isRunning ? 'Running Power Zones' : 'Power Zones' }}
                     </span>
                     <span
-                        class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Z1 – Z{{ powerZones.length }}
                         <template v-if="thresholdPower">
-                            · Thresh {{ Math.round(thresholdPower) }} W
+                            · Threshold {{ Math.round(thresholdPower) }} W
                         </template>
                     </span>
                 </div>
@@ -330,9 +349,11 @@ const powerCurveOption = computed<EChartsOption>(() => {
                         <div
                             class="flex items-center justify-between gap-2 font-mono text-xs tabular-nums"
                         >
-                            <div class="flex min-w-0 items-center gap-2">
+                            <div
+                                class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5"
+                            >
                                 <span
-                                    class="inline-flex w-7 justify-center rounded bg-zinc-100 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                                    class="inline-flex w-7 shrink-0 justify-center rounded bg-zinc-100 py-0.5 text-[10px] font-semibold text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                                 >
                                     Z{{ zone.zone }}
                                 </span>
@@ -343,7 +364,7 @@ const powerCurveOption = computed<EChartsOption>(() => {
                                 </span>
                                 <span
                                     v-if="formatZoneWattRange(zone)"
-                                    class="hidden text-[11px] text-zinc-400 sm:inline dark:text-zinc-500"
+                                    class="text-[10px] text-zinc-500 sm:text-[11px] dark:text-zinc-400"
                                 >
                                     {{ formatZoneWattRange(zone) }}
                                 </span>
@@ -354,9 +375,9 @@ const powerCurveOption = computed<EChartsOption>(() => {
                                     {{ formatDurationClock(zone.seconds) }}
                                 </span>
                                 <span
-                                    class="w-10 text-right text-[11px] text-zinc-400 dark:text-zinc-500"
+                                    class="w-10 text-right text-[11px] text-zinc-500 dark:text-zinc-400"
                                 >
-                                    {{ Math.round(zone.pct) }}%
+                                    {{ formatZonePct(zone.pct, zone.seconds) }}
                                 </span>
                             </div>
                         </div>
@@ -404,9 +425,14 @@ const powerCurveOption = computed<EChartsOption>(() => {
                             {{ pt.label }}:
                         </span>
                         <span
-                            class="font-semibold text-sky-600 dark:text-sky-400"
+                            class="font-semibold"
+                            :class="
+                                isRunning
+                                    ? 'text-violet-600 dark:text-violet-400'
+                                    : 'text-sky-600 dark:text-sky-400'
+                            "
                         >
-                            {{ pt.watts }}W
+                            {{ pt.watts }} W
                         </span>
                     </span>
                 </div>
