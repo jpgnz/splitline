@@ -60,7 +60,10 @@ it('renders Insights/Index with default running sport, 1y range, and full correl
             ->has('available_sports')
             ->has('summary', fn (Assert $summary) => $summary
                 ->where('total_activities', 1)
+                ->where('training_days', 1)
                 ->where('with_derived_metrics', 1)
+                ->where('ef_metric', 'speed')
+                ->where('ef_excluded_sessions', 0)
                 ->where('with_sleep', 1)
                 ->where('with_hrv', 1)
                 ->where('with_weather', 1)
@@ -139,6 +142,8 @@ it('applies sport, range, and custom date bounds query parameters with graceful 
             ->where('filters.sport', 'road_cycling')
             ->where('filters.range', '180d')
             ->where('dateWindow.range', '180d')
+            ->where('dateWindow.start', '2026-05-31')
+            ->where('dateWindow.end', '2026-11-26')
             ->where('summary.total_activities', 1),
         );
 
