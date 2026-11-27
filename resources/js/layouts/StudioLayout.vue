@@ -20,6 +20,7 @@ import {
     RefreshCw,
     Route,
     Settings,
+    Sparkles,
     Sun,
     Target,
     Timer,
@@ -41,6 +42,7 @@ import { index as fitnessIndex } from '@/routes/fitness';
 // import { index as gearIndex } from '@/routes/gear';
 import { index as goalsIndex } from '@/routes/goals';
 import { index as heatmapIndex } from '@/routes/heatmap';
+import { index as insightsIndex } from '@/routes/insights';
 import { index as routesIndex } from '@/routes/routes';
 import { index as segmentsIndex } from '@/routes/segments';
 import { index as settingsIndex } from '@/routes/settings';
@@ -125,6 +127,12 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                     label: 'Training Load',
                     href: fitnessIndex.url(),
                     icon: TrendingUp,
+                },
+                {
+                    key: 'insights',
+                    label: 'Insights',
+                    href: insightsIndex.url(),
+                    icon: Sparkles,
                 },
                 {
                     key: 'activities',
