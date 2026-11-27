@@ -45,6 +45,7 @@ import {
     show as showActivity,
 } from '@/routes/activities';
 import { update as updateBestEffort } from '@/routes/best-efforts';
+import type { DecouplingMetric } from '@/types/activity';
 
 type EnvironmentFilter = 'all' | 'outdoor' | 'indoor';
 type TerrainFilter = 'all' | 'flat' | 'rolling' | 'steep';
@@ -173,10 +174,10 @@ interface CyclingBestEffortItem {
         activity_name: string;
         achieved_at: string;
         effective_seconds: number;
-        override_seconds?: number | null;
+        override_seconds: number | null;
         avg_speed: number;
     } | null;
-    excluded?: BestEffortBoardEntry[];
+    excluded: BestEffortBoardEntry[];
 }
 
 interface PowerModule {
@@ -534,54 +535,15 @@ const editTimeInput = ref<string>('');
 const editTimeError = ref<string | null>(null);
 const busyEffortId = ref<number | null>(null);
 const offroadTab = ref<OffroadLeaderboardTab>('hardest');
-const overriddenCyclingIds = ref<number[]>([]);
-const locallyExcludedCycling = ref<
-    Array<{
-        id: number;
-        activity_id: number;
-        activity_name: string;
-        achieved_at: string;
-        effective_seconds: number;
-        distanceLabel: string;
-    }>
->([]);
 
-const excludedCyclingEfforts = computed(() => {
-    const seen = new Set<number>();
-    const combined: Array<{
-        id: number;
-        activity_id: number;
-        activity_name: string;
-        achieved_at: string;
-        effective_seconds: number;
-        distanceLabel: string;
-    }> = [];
-
-    for (const effort of props.modules.power?.bestEfforts ?? []) {
-        for (const ex of effort.excluded ?? []) {
-            if (!seen.has(ex.id)) {
-                seen.add(ex.id);
-                combined.push({
-                    id: ex.id,
-                    activity_id: ex.activity_id,
-                    activity_name: ex.activity_name,
-                    achieved_at: ex.achieved_at,
-                    effective_seconds: ex.effective_seconds,
-                    distanceLabel: effort.label,
-                });
-            }
-        }
-    }
-
-    for (const ex of locallyExcludedCycling.value) {
-        if (!seen.has(ex.id)) {
-            seen.add(ex.id);
-            combined.push(ex);
-        }
-    }
-
-    return combined;
-});
+const excludedCyclingEfforts = computed(() =>
+    (props.modules.power?.bestEfforts ?? []).flatMap((effort) =>
+        effort.excluded.map((excludedEffort) => ({
+            ...excludedEffort,
+            distanceLabel: effort.label,
+        })),
+    ),
+);
 
 // Initialize default selected distance tab for running best efforts
 function resolveDefaultDistanceKey(
@@ -1148,7 +1110,7 @@ function cancelEditEffort(): void {
     editTimeError.value = null;
 }
 
-function saveEffortOverride(effortId: number, isCycling = false): void {
+function saveEffortOverride(effortId: number): void {
     const parsedSeconds = parseTimeToSeconds(editTimeInput.value);
 
     if (parsedSeconds === null) {
@@ -1167,16 +1129,6 @@ function saveEffortOverride(effortId: number, isCycling = false): void {
             preserveState: true,
             preserveScroll: true,
             onSuccess: () => {
-                if (
-                    isCycling &&
-                    !overriddenCyclingIds.value.includes(effortId)
-                ) {
-                    overriddenCyclingIds.value = [
-                        ...overriddenCyclingIds.value,
-                        effortId,
-                    ];
-                }
-
                 cancelEditEffort();
             },
             onFinish: () => {
@@ -1196,9 +1148,6 @@ function resetEffortOverride(effortId: number): void {
             preserveState: true,
             preserveScroll: true,
             onSuccess: () => {
-                overriddenCyclingIds.value = overriddenCyclingIds.value.filter(
-                    (id) => id !== effortId,
-                );
                 cancelEditEffort();
             },
             onFinish: () => {
@@ -1208,16 +1157,7 @@ function resetEffortOverride(effortId: number): void {
     );
 }
 
-function excludeEffort(
-    effortId: number,
-    cyclingMeta?: {
-        activity_id: number;
-        activity_name: string;
-        achieved_at: string;
-        effective_seconds: number;
-        distanceLabel: string;
-    },
-): void {
+function excludeEffort(effortId: number): void {
     busyEffortId.value = effortId;
 
     router.patch(
@@ -1227,15 +1167,6 @@ function excludeEffort(
             preserveState: true,
             preserveScroll: true,
             onSuccess: () => {
-                if (cyclingMeta) {
-                    locallyExcludedCycling.value = [
-                        ...locallyExcludedCycling.value.filter(
-                            (item) => item.id !== effortId,
-                        ),
-                        { id: effortId, ...cyclingMeta },
-                    ];
-                }
-
                 if (editingEffortId.value === effortId) {
                     cancelEditEffort();
                 }
@@ -1256,12 +1187,6 @@ function restoreEffort(effortId: number): void {
         {
             preserveState: true,
             preserveScroll: true,
-            onSuccess: () => {
-                locallyExcludedCycling.value =
-                    locallyExcludedCycling.value.filter(
-                        (item) => item.id !== effortId,
-                    );
-            },
             onFinish: () => {
                 busyEffortId.value = null;
             },
@@ -1492,27 +1417,15 @@ const hasAerobicDrift = computed<boolean>(
     () => aerobicDriftPoints.value.length > 0,
 );
 
-const aerobicEfUnit = computed<string>(() => {
-    if (props.aerobicDrift?.primary_metric === 'power') {
-        return 'W/bpm';
-    }
-
-    return units.isImperial.value ? 'ft/min/bpm' : 'm/min/bpm';
-});
+const aerobicEfUnit = computed<string>(() =>
+    units.efficiencyFactorUnit(props.aerobicDrift?.primary_metric),
+);
 
 function convertEfValue(
     value: number | null | undefined,
-    metric: 'power' | 'gap' | 'speed' | null | undefined,
+    metric: DecouplingMetric | null | undefined,
 ): number | null {
-    if (value === null || value === undefined || !Number.isFinite(value)) {
-        return null;
-    }
-
-    if (metric === 'power' || !units.isImperial.value) {
-        return value;
-    }
-
-    return value * M_TO_FT;
+    return units.efficiencyFactorFromMetric(value, metric);
 }
 
 const aerobicMetricCode = computed<string>(() => {
@@ -1675,12 +1588,7 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
                 const metric =
                     item.decoupling_metric ??
                     props.aerobicDrift?.primary_metric;
-                const unitLabel =
-                    metric === 'power'
-                        ? 'W/bpm'
-                        : units.isImperial.value
-                          ? 'ft/min/bpm'
-                          : 'm/min/bpm';
+                const unitLabel = units.efficiencyFactorUnit(metric);
                 const metricCode = formatDecouplingMetricLabel(
                     item.decoupling_metric,
                 );
@@ -5939,7 +5847,6 @@ const recentHasOffroad = computed<boolean>(() =>
                                                     @keydown.enter.prevent="
                                                         saveEffortOverride(
                                                             effort.best.id,
-                                                            true,
                                                         )
                                                     "
                                                     @keydown.escape.prevent="
@@ -5957,7 +5864,6 @@ const recentHasOffroad = computed<boolean>(() =>
                                                     @click="
                                                         saveEffortOverride(
                                                             effort.best.id,
-                                                            true,
                                                         )
                                                     "
                                                 >
@@ -6076,15 +5982,9 @@ const recentHasOffroad = computed<boolean>(() =>
                                             </button>
                                             <button
                                                 v-if="
-                                                    (effort.best
+                                                    effort.best
                                                         .override_seconds !==
-                                                        null &&
-                                                        effort.best
-                                                            .override_seconds !==
-                                                            undefined) ||
-                                                    overriddenCyclingIds.includes(
-                                                        effort.best.id,
-                                                    )
+                                                    null
                                                 "
                                                 type="button"
                                                 :disabled="
@@ -6113,22 +6013,6 @@ const recentHasOffroad = computed<boolean>(() =>
                                                 @click="
                                                     excludeEffort(
                                                         effort.best.id,
-                                                        {
-                                                            activity_id:
-                                                                effort.best
-                                                                    .activity_id,
-                                                            activity_name:
-                                                                effort.best
-                                                                    .activity_name,
-                                                            achieved_at:
-                                                                effort.best
-                                                                    .achieved_at,
-                                                            effective_seconds:
-                                                                effort.best
-                                                                    .effective_seconds,
-                                                            distanceLabel:
-                                                                effort.label,
-                                                        },
                                                     )
                                                 "
                                             >
