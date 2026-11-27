@@ -19,7 +19,7 @@ import {
     formatNumber,
     formatShortDate,
 } from '@/lib/format';
-import { climbCategoryMeta, formatGrade, formatVam } from '@/lib/segments';
+import { climbCategoryMeta, formatGrade } from '@/lib/segments';
 import { useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
 import {
@@ -40,6 +40,7 @@ const {
     formatPace,
     formatPace100m,
     formatSpeed,
+    formatVam,
 } = useUnits();
 
 const searchInput = ref<string>(props.filters.search ?? '');
@@ -78,7 +79,7 @@ const categoryPills = [
     { value: 'cat2', label: 'Cat 2' },
     { value: 'cat3', label: 'Cat 3' },
     { value: 'cat4', label: 'Cat 4' },
-    { value: 'uncategorized', label: 'Uncat' },
+    { value: 'uncategorized', label: 'Uncategorized' },
 ] as const;
 
 const sortOptions = [
@@ -111,6 +112,14 @@ const sportPills = computed<
 
 const showCategoryFilters = computed<boolean>(
     () => props.filters.kind === 'all' || props.filters.kind === 'climb',
+);
+
+const hasActiveFilters = computed<boolean>(
+    () =>
+        props.filters.kind !== 'all' ||
+        props.filters.sport !== 'all' ||
+        props.filters.category !== 'all' ||
+        props.filters.search.trim() !== '',
 );
 
 const summaryKpis = computed<
@@ -188,7 +197,7 @@ function buildQuery(
     if (
         merged.category &&
         merged.category !== 'all' &&
-        merged.kind !== 'custom'
+        (merged.kind === 'all' || merged.kind === 'climb')
     ) {
         query.category = merged.category;
     }
@@ -245,7 +254,24 @@ function clearSearch(): void {
 function selectKind(kind: string): void {
     applyFilters({
         kind,
-        category: kind === 'custom' ? 'all' : props.filters.category,
+        category:
+            kind === 'all' || kind === 'climb' ? props.filters.category : 'all',
+    });
+}
+
+function resetAllFilters(): void {
+    searchInput.value = '';
+
+    if (searchTimer !== null) {
+        clearTimeout(searchTimer);
+        searchTimer = null;
+    }
+
+    applyFilters({
+        kind: 'all',
+        sport: 'all',
+        category: 'all',
+        search: '',
     });
 }
 
@@ -362,7 +388,7 @@ function formatDateWithYear(dateStr: string | null): string {
         <Head title="Segments & Climbs" />
 
         <!-- Page Header -->
-        <div
+        <header
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div>
@@ -393,7 +419,7 @@ function formatDateWithYear(dateStr: string | null): string {
                         {{
                             isScanning
                                 ? 'Scanning...'
-                                : `Scan Activities (${summary.unscanned_count})`
+                                : `Scan ${summary.unscanned_count} ${summary.unscanned_count === 1 ? 'Activity' : 'Activities'}`
                         }}
                     </span>
                 </button>
@@ -408,14 +434,14 @@ function formatDateWithYear(dateStr: string | null): string {
                         type="search"
                         placeholder="Search climb, segment, place..."
                         aria-label="Search segments and climbs"
-                        class="w-full rounded-lg border border-zinc-200/90 bg-white py-2 pr-8 pl-8.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-600"
+                        class="w-full rounded-lg border border-zinc-200/90 bg-white py-2 pr-8 pl-8.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus-visible:border-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-900/15 focus-visible:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus-visible:border-zinc-600 dark:focus-visible:ring-zinc-100/15"
                         @input="onSearchInput"
                     />
                     <button
                         v-if="searchInput"
                         type="button"
                         aria-label="Clear search"
-                        class="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-zinc-400 transition-colors hover:text-zinc-700 dark:hover:text-zinc-200"
+                        class="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-zinc-400 transition-colors hover:text-zinc-700 focus-visible:ring-2 focus-visible:ring-zinc-900/20 focus-visible:outline-none dark:hover:text-zinc-200 dark:focus-visible:ring-zinc-100/20"
                         @click="clearSearch"
                     >
                         <X class="size-3.5" />
@@ -426,7 +452,7 @@ function formatDateWithYear(dateStr: string | null): string {
                 <select
                     :value="filters.sort"
                     aria-label="Sort segments"
-                    class="cursor-pointer rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs text-zinc-700 focus:border-zinc-400 focus:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-200 dark:focus:border-zinc-600"
+                    class="cursor-pointer rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs text-zinc-700 focus-visible:border-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-900/15 focus-visible:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-200 dark:focus-visible:border-zinc-600 dark:focus-visible:ring-zinc-100/15"
                     @change="onSortChange"
                 >
                     <option
@@ -438,7 +464,7 @@ function formatDateWithYear(dateStr: string | null): string {
                     </option>
                 </select>
             </div>
-        </div>
+        </header>
 
         <!-- KPI Strip -->
         <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -550,7 +576,7 @@ function formatDateWithYear(dateStr: string | null): string {
                 class="flex flex-wrap items-center gap-1.5 border-t border-zinc-100 pt-3 dark:border-zinc-800/80"
             >
                 <span
-                    class="mr-1 font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                    class="mr-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
                     Climb Grade
                 </span>
@@ -600,37 +626,52 @@ function formatDateWithYear(dateStr: string | null): string {
                             class="pointer-events-none absolute top-2 left-2 flex flex-wrap items-center gap-1.5"
                         >
                             <span
-                                :class="[
-                                    'rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium backdrop-blur-xs',
-                                    sportBadgeClasses(
-                                        getSportMeta(segment.sport_key)
-                                            .color_token,
-                                    ),
-                                ]"
+                                class="inline-flex rounded-md bg-white/90 backdrop-blur-xs dark:bg-zinc-900/90"
                             >
-                                {{
-                                    getSportMeta(segment.sport_key).short_label
-                                }}
+                                <span
+                                    :class="[
+                                        'rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium',
+                                        sportBadgeClasses(
+                                            getSportMeta(segment.sport_key)
+                                                .color_token,
+                                        ),
+                                    ]"
+                                >
+                                    {{
+                                        getSportMeta(segment.sport_key)
+                                            .short_label
+                                    }}
+                                </span>
                             </span>
                             <span
                                 v-if="climbCategoryMeta(segment.climb_category)"
-                                :class="[
-                                    'rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold backdrop-blur-xs',
-                                    climbCategoryMeta(segment.climb_category)!
-                                        .badgeClass,
-                                ]"
+                                class="inline-flex rounded-md bg-white/90 backdrop-blur-xs dark:bg-zinc-900/90"
                             >
-                                {{
-                                    climbCategoryMeta(segment.climb_category)!
-                                        .shortLabel
-                                }}
+                                <span
+                                    :class="[
+                                        'rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-semibold',
+                                        climbCategoryMeta(
+                                            segment.climb_category,
+                                        )!.badgeClass,
+                                    ]"
+                                >
+                                    {{
+                                        climbCategoryMeta(
+                                            segment.climb_category,
+                                        )!.shortLabel
+                                    }}
+                                </span>
                             </span>
                             <span
                                 v-if="segment.kind === 'custom'"
-                                class="inline-flex items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/12 px-1.5 py-0.5 font-mono text-[10px] font-medium text-sky-700 backdrop-blur-xs dark:border-sky-500/30 dark:bg-sky-500/20 dark:text-sky-300"
+                                class="inline-flex rounded-md bg-white/90 backdrop-blur-xs dark:bg-zinc-900/90"
                             >
-                                <Flag class="size-2.5" />
-                                Custom
+                                <span
+                                    class="inline-flex items-center gap-1 rounded-md border border-sky-500/30 bg-sky-500/12 px-1.5 py-0.5 font-mono text-[10px] font-medium text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/20 dark:text-sky-300"
+                                >
+                                    <Flag class="size-2.5" />
+                                    Custom
+                                </span>
                             </span>
                         </div>
 
@@ -645,11 +686,11 @@ function formatDateWithYear(dateStr: string | null): string {
                                         ? 'Unstar segment'
                                         : 'Star segment'
                                 "
-                                class="inline-flex size-6.5 cursor-pointer items-center justify-center rounded-md border border-zinc-200/80 bg-white/90 text-zinc-400 backdrop-blur-xs transition-colors hover:text-amber-500 dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-400 dark:hover:text-amber-400"
+                                class="inline-flex size-8 cursor-pointer items-center justify-center rounded-md border border-zinc-200/80 bg-white/90 text-zinc-500 backdrop-blur-xs transition-colors hover:text-amber-500 dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-400 dark:hover:text-amber-400"
                                 @click.stop="toggleStar(segment)"
                             >
                                 <Star
-                                    class="size-3.5"
+                                    class="size-4"
                                     :class="
                                         segment.is_starred
                                             ? 'fill-amber-400 text-amber-500 dark:fill-amber-400 dark:text-amber-400'
@@ -658,7 +699,7 @@ function formatDateWithYear(dateStr: string | null): string {
                                 />
                             </button>
                             <span
-                                class="pointer-events-none rounded-md bg-zinc-900/85 px-2 py-0.5 font-mono text-[11px] font-semibold text-white tabular-nums backdrop-blur-xs dark:bg-zinc-100/90 dark:text-zinc-950"
+                                class="pointer-events-none rounded-md bg-zinc-900/90 px-2 py-1 font-mono text-[11px] font-semibold text-white tabular-nums backdrop-blur-xs dark:bg-zinc-100/95 dark:text-zinc-950"
                             >
                                 {{ segment.effort_count }}×
                             </span>
@@ -709,7 +750,11 @@ function formatDateWithYear(dateStr: string | null): string {
                                 <TrendingUp class="size-3" />
                                 {{ formatGrade(segment.avg_grade_pct) }} avg
                             </span>
-                            <span v-if="segment.fiets_score !== null">
+                            <span
+                                v-if="segment.fiets_score !== null"
+                                title="FIETS climb difficulty index (elevation gain, grade, and length)"
+                                class="cursor-help underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:decoration-zinc-600"
+                            >
                                 FIETS {{ segment.fiets_score.toFixed(1) }}
                             </span>
                         </div>
@@ -765,7 +810,7 @@ function formatDateWithYear(dateStr: string | null): string {
                             {{ segment.best_w_per_kg.toFixed(2) }} W/kg
                         </p>
                         <p
-                            class="mt-0.5 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                            class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                         >
                             {{
                                 segment.last_effort_at
@@ -794,41 +839,67 @@ function formatDateWithYear(dateStr: string | null): string {
                 No segments or climbs found
             </h2>
             <p class="mt-1.5 max-w-md text-sm text-zinc-500 dark:text-zinc-400">
-                <template v-if="summary.unscanned_count > 0">
+                <template v-if="hasActiveFilters">
+                    Try clearing your filters or search query to view all
+                    segments and climbs.
+                </template>
+                <template v-else-if="summary.unscanned_count > 0">
                     You have {{ summary.unscanned_count }} unscanned outdoor
-                    activity(ies). Run a scan to automatically detect sustained
-                    climbs and match efforts.
+                    {{
+                        summary.unscanned_count === 1
+                            ? 'activity'
+                            : 'activities'
+                    }}. Run a scan to automatically detect sustained climbs and
+                    match efforts.
                 </template>
                 <template v-else>
-                    Try adjusting your filters, or open any outdoor activity to
-                    create a custom segment directly on its route map.
+                    Open any outdoor activity to create a custom segment
+                    directly on its route map.
                 </template>
             </p>
-            <button
-                v-if="summary.unscanned_count > 0"
-                type="button"
-                :disabled="isScanning"
-                class="mt-5 inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-4 py-2 font-mono text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
-                @click="triggerScan"
-            >
-                <RefreshCw
-                    :class="['size-3.5', isScanning && 'animate-spin']"
-                />
-                <span>
-                    {{
-                        isScanning
-                            ? 'Scanning Activities...'
-                            : `Scan ${summary.unscanned_count} Activity(ies)`
-                    }}
-                </span>
-            </button>
+            <div class="mt-5 flex flex-wrap items-center justify-center gap-2">
+                <button
+                    v-if="summary.unscanned_count > 0"
+                    type="button"
+                    :disabled="isScanning"
+                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-4 py-2 font-mono text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"
+                    @click="triggerScan"
+                >
+                    <RefreshCw
+                        :class="['size-3.5', isScanning && 'animate-spin']"
+                    />
+                    <span>
+                        {{
+                            isScanning
+                                ? 'Scanning Activities...'
+                                : `Scan ${summary.unscanned_count} ${summary.unscanned_count === 1 ? 'Activity' : 'Activities'}`
+                        }}
+                    </span>
+                </button>
+                <button
+                    v-if="hasActiveFilters"
+                    type="button"
+                    class="cursor-pointer rounded-lg border border-zinc-200 bg-white px-3.5 py-2 font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200 dark:hover:bg-zinc-800"
+                    @click="resetAllFilters"
+                >
+                    Reset Filters
+                </button>
+            </div>
         </section>
 
         <!-- ODbL Attribution Footer -->
         <footer
-            class="pt-2 text-right font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+            class="pt-2 text-right font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
         >
-            Place names © OpenStreetMap contributors (ODbL)
+            Place names &copy;
+            <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-700 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+            >
+                OpenStreetMap contributors (ODbL)
+            </a>
         </footer>
     </div>
 </template>

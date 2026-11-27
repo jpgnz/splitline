@@ -15,7 +15,7 @@ import {
 import { computed, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import { formatDurationClock } from '@/lib/format';
-import { climbCategoryMeta, formatGrade, formatVam } from '@/lib/segments';
+import { climbCategoryMeta, formatGrade } from '@/lib/segments';
 import { useUnits } from '@/lib/units';
 import { show as showSegment, store as storeSegment } from '@/routes/segments';
 import type { HighlightRange, StreamPoint } from '@/types/activity';
@@ -29,9 +29,14 @@ const props = withDefaults(
         series: StreamPoint[];
         usesPace: boolean;
         isSwimming?: boolean;
+        highlightedRange?:
+            | HighlightRange
+            | { start: number; end: number }
+            | null;
     }>(),
     {
         isSwimming: false,
+        highlightedRange: undefined,
     },
 );
 
@@ -41,11 +46,13 @@ const emit = defineEmits<{
 
 const page = usePage();
 const {
+    isImperial,
     formatDistance,
     formatElevation,
     formatPace,
     formatPace100m,
     formatSpeed,
+    formatVam,
 } = useUnits();
 
 interface GnssEntry {
@@ -147,6 +154,21 @@ watch(
         createForm.clearErrors();
         emit('selectRange', null);
     },
+);
+
+watch(
+    () => props.highlightedRange,
+    (nextRange) => {
+        if (nextRange === null) {
+            selectedEffortId.value = null;
+        }
+    },
+);
+
+const hasOsmAttribution = computed<boolean>(
+    () =>
+        creatorOpen.value ||
+        props.segmentEfforts.some((e) => Boolean(e.place_label)),
 );
 
 function initSliderBounds(): void {
@@ -278,16 +300,30 @@ function toggleCreator(): void {
 }
 
 function onStartSliderInput(event: Event): void {
-    const val = Number((event.target as HTMLInputElement).value);
+    const input = event.target as HTMLInputElement;
+    const val = Number(input.value);
     const maxStart = Math.max(0, endPos.value - 4);
-    startPos.value = Math.min(val, maxStart);
+    const clamped = Math.min(val, maxStart);
+    startPos.value = clamped;
+
+    if (val !== clamped) {
+        input.value = String(clamped);
+    }
+
     emitCustomRange();
 }
 
 function onEndSliderInput(event: Event): void {
-    const val = Number((event.target as HTMLInputElement).value);
+    const input = event.target as HTMLInputElement;
+    const val = Number(input.value);
     const minEnd = Math.min(gnssEntries.value.length - 1, startPos.value + 4);
-    endPos.value = Math.max(val, minEnd);
+    const clamped = Math.max(val, minEnd);
+    endPos.value = clamped;
+
+    if (val !== clamped) {
+        input.value = String(clamped);
+    }
+
     emitCustomRange();
 }
 
@@ -388,15 +424,20 @@ function rankBadgeClass(rank: number | null): string {
     <div class="space-y-4">
         <!-- Header Bar -->
         <div
-            class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
+            class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-zinc-200/90 bg-white px-4 py-3.5 sm:px-5 dark:border-zinc-800/90 dark:bg-[#141417]"
         >
             <div>
-                <h2
-                    class="text-sm font-semibold text-zinc-900 dark:text-zinc-100"
+                <div class="flex items-center gap-2">
+                    <span class="size-1.5 rounded-full bg-emerald-500" />
+                    <h2
+                        class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        Segments &amp; Climbs
+                    </h2>
+                </div>
+                <p
+                    class="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                 >
-                    Segments &amp; Climbs
-                </h2>
-                <p class="mt-0.5 text-xs text-zinc-500 dark:text-zinc-400">
                     Hover or click any matched climb or segment to highlight it
                     on the route map.
                 </p>
@@ -518,7 +559,7 @@ function rankBadgeClass(rank: number | null): string {
             >
                 <div>
                     <p
-                        class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Distance
                     </p>
@@ -530,7 +571,7 @@ function rankBadgeClass(rank: number | null): string {
                 </div>
                 <div>
                     <p
-                        class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Elevation Gain
                     </p>
@@ -546,7 +587,7 @@ function rankBadgeClass(rank: number | null): string {
                 </div>
                 <div>
                     <p
-                        class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Avg Grade
                     </p>
@@ -558,7 +599,7 @@ function rankBadgeClass(rank: number | null): string {
                 </div>
                 <div>
                     <p
-                        class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                        class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Elapsed Time
                     </p>
@@ -610,8 +651,9 @@ function rankBadgeClass(rank: number | null): string {
                         v-else-if="!customPreview.isValid"
                         class="mt-1 text-xs text-amber-600 dark:text-amber-400"
                     >
-                        Select at least 100 m and 5 GNSS points to create a
-                        segment.
+                        Select at least
+                        {{ isImperial ? '330 ft' : '100 m' }} and 5 GNSS points
+                        to create a segment.
                     </p>
                 </div>
 
@@ -652,12 +694,14 @@ function rankBadgeClass(rank: number | null): string {
                 <table class="w-full border-collapse text-left text-sm">
                     <thead>
                         <tr
-                            class="border-b border-zinc-100 bg-zinc-50/70 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:border-zinc-800/80 dark:bg-zinc-900/40 dark:text-zinc-400"
+                            class="border-b border-zinc-100 bg-[#f7f7f5] font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:border-zinc-800/80 dark:bg-zinc-900/50 dark:text-zinc-400"
                         >
                             <th class="px-4 py-2.5">Segment / Climb</th>
                             <th class="px-4 py-2.5 text-right">Rank</th>
                             <th class="px-4 py-2.5 text-right">Time</th>
-                            <th class="px-4 py-2.5 text-right">Pace / Speed</th>
+                            <th class="px-4 py-2.5 text-right">
+                                {{ usesPace || isSwimming ? 'Pace' : 'Speed' }}
+                            </th>
                             <th class="px-4 py-2.5 text-right">VAM</th>
                             <th class="px-4 py-2.5 text-right">Power / W/kg</th>
                             <th class="px-4 py-2.5 text-right">Avg HR</th>
@@ -669,13 +713,21 @@ function rankBadgeClass(rank: number | null): string {
                         <tr
                             v-for="effort in segmentEfforts"
                             :key="effort.id"
-                            class="cursor-pointer transition-colors"
+                            tabindex="0"
+                            :aria-selected="selectedEffortId === effort.id"
+                            class="cursor-pointer transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-500"
                             :class="
                                 selectedEffortId === effort.id
                                     ? 'bg-emerald-500/[0.08] dark:bg-emerald-500/[0.12]'
-                                    : 'hover:bg-zinc-50/80 dark:hover:bg-zinc-900/50'
+                                    : 'hover:bg-[#f7f7f5]/80 dark:hover:bg-zinc-900/50'
                             "
                             @click="toggleEffortSelection(effort)"
+                            @keydown.enter.prevent="
+                                toggleEffortSelection(effort)
+                            "
+                            @keydown.space.prevent="
+                                toggleEffortSelection(effort)
+                            "
                             @mouseenter="onEffortHover(effort)"
                             @mouseleave="onEffortLeave"
                         >
@@ -803,7 +855,7 @@ function rankBadgeClass(rank: number | null): string {
                                         !effort.is_pr &&
                                         effort.delta_pr_seconds >= 0.5
                                     "
-                                    class="text-[10px] text-zinc-400 dark:text-zinc-500"
+                                    class="text-[10px] text-zinc-500 dark:text-zinc-400"
                                 >
                                     +{{
                                         formatDurationClock(
@@ -832,9 +884,9 @@ function rankBadgeClass(rank: number | null): string {
                                     {{ Math.round(effort.avg_power) }} W
                                     <span
                                         v-if="effort.w_per_kg !== null"
-                                        class="text-zinc-400 dark:text-zinc-500"
+                                        class="text-zinc-500 dark:text-zinc-400"
                                     >
-                                        · {{ effort.w_per_kg.toFixed(2) }}
+                                        · {{ effort.w_per_kg.toFixed(2) }} W/kg
                                     </span>
                                 </template>
                                 <template v-else>—</template>
@@ -871,5 +923,21 @@ function rankBadgeClass(rank: number | null): string {
                 or benchmark stretch from this route.
             </p>
         </section>
+
+        <!-- ODbL Place Naming Attribution -->
+        <p
+            v-if="hasOsmAttribution"
+            class="text-right font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+        >
+            Place names &copy;
+            <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-700 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+            >
+                OpenStreetMap contributors (ODbL)
+            </a>
+        </p>
     </div>
 </template>
