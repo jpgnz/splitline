@@ -2,8 +2,10 @@
 
 use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\GeocodeRouteClusterJob;
+use App\Jobs\GeocodeSegmentJob;
 use App\Models\Activity;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use App\Services\Geocoding\NominatimClient;
 use App\Services\Geocoding\ReverseGeocodingService;
 use Illuminate\Support\Facades\Cache;
@@ -42,5 +44,9 @@ it('releases geocode jobs for the provider cooldown without recording an attempt
             'start_lat' => -36.85,
             'start_lng' => 174.76,
         ]),
+    ],
+    'segment' => [
+        fn (int $id) => new GeocodeSegmentJob($id),
+        fn () => Segment::factory()->custom()->create(['geocoded_at' => null]),
     ],
 ]);

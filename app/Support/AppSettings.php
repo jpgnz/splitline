@@ -11,6 +11,12 @@ class AppSettings
 
     public const string UNIT_IMPERIAL = 'imperial';
 
+    public const int DEFAULT_SEGMENTS_MIN_EFFORTS = 5;
+
+    public const int MIN_SEGMENTS_MIN_EFFORTS = 1;
+
+    public const int MAX_SEGMENTS_MIN_EFFORTS = 50;
+
     /** @var array<string, mixed>|null */
     private ?array $memo = null;
 
@@ -91,6 +97,21 @@ class AppSettings
     public function isImperial(): bool
     {
         return $this->unitSystem() === self::UNIT_IMPERIAL;
+    }
+
+    public function segmentsMinEfforts(): int
+    {
+        $configured = $this->get('segments_min_efforts');
+
+        if (is_numeric($configured)) {
+            $value = (int) $configured;
+
+            if ($value >= self::MIN_SEGMENTS_MIN_EFFORTS && $value <= self::MAX_SEGMENTS_MIN_EFFORTS) {
+                return $value;
+            }
+        }
+
+        return self::DEFAULT_SEGMENTS_MIN_EFFORTS;
     }
 
     public function displayTimezone(): string

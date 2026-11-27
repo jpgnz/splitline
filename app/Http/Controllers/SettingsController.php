@@ -3,8 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateHealthSourcesRequest;
+use App\Http\Requests\UpdateSegmentsSettingsRequest;
 use App\Http\Requests\UpdateSportsSettingsRequest;
 use App\Http\Requests\UpdateUnitsRequest;
+use App\Jobs\GeocodeSegmentJob;
+use App\Jobs\RefreshSubClimbFlagsJob;
+use App\Models\Segment;
 use App\Models\SyncRun;
 use App\Services\Geocoding\NominatimClient;
 use App\Services\Sync\QueueStatusService;
@@ -43,6 +47,7 @@ class SettingsController extends Controller
             ],
             'sports_settings' => $sports->settingsPayload(),
             'health_sources' => $healthSources->settingsPayload(),
+            'segments_settings' => $this->segmentsSettingsSummary($settings),
         ]);
     }
 
@@ -76,6 +81,79 @@ class SettingsController extends Controller
         $healthSources->saveConfig($sources);
 
         return back()->with('status', 'Health data source preferences updated.');
+    }
+
+    public function updateSegments(
+        UpdateSegmentsSettingsRequest $request,
+        AppSettings $settings,
+    ): RedirectResponse {
+        $minEfforts = (int) $request->validated('min_efforts');
+
+        $settings->set('segments_min_efforts', $minEfforts);
+
+        if (Schema::hasTable('segments')) {
+            /** @var list<string> $sports */
+            $sports = Segment::query()
+                ->climbs()
+                ->distinct()
+                ->pluck('sport_category')
+                ->all();
+
+            foreach ($sports as $sport) {
+                RefreshSubClimbFlagsJob::dispatch($sport);
+            }
+
+            if (
+                (bool) config('services.nominatim.enabled', true)
+                && (bool) config('services.nominatim.auto_sync', true)
+            ) {
+                $unGeocodedIds = Segment::query()
+                    ->awaitingGeocoding($minEfforts)
+                    ->orderByDesc('effort_count')
+                    ->orderBy('id')
+                    ->limit(50)
+                    ->pluck('id')
+                    ->all();
+
+                foreach ($unGeocodedIds as $segmentId) {
+                    GeocodeSegmentJob::dispatch((int) $segmentId);
+                }
+            }
+        }
+
+        return back()->with(
+            'status',
+            "Auto-detected climb threshold updated to {$minEfforts} ".($minEfforts === 1 ? 'effort' : 'efforts').'.',
+        );
+    }
+
+    /**
+     * @return array{
+     *     min_efforts: int,
+     *     default_min_efforts: int,
+     *     visible_climbs_count: int,
+     *     tracked_climbs_count: int
+     * }
+     */
+    private function segmentsSettingsSummary(AppSettings $settings): array
+    {
+        $minEfforts = $settings->segmentsMinEfforts();
+
+        if (! Schema::hasTable('segments')) {
+            return [
+                'min_efforts' => $minEfforts,
+                'default_min_efforts' => AppSettings::DEFAULT_SEGMENTS_MIN_EFFORTS,
+                'visible_climbs_count' => 0,
+                'tracked_climbs_count' => 0,
+            ];
+        }
+
+        return [
+            'min_efforts' => $minEfforts,
+            'default_min_efforts' => AppSettings::DEFAULT_SEGMENTS_MIN_EFFORTS,
+            'visible_climbs_count' => Segment::query()->climbs()->visible($minEfforts)->count(),
+            'tracked_climbs_count' => Segment::query()->climbs()->where('is_climb_verified', true)->count(),
+        ];
     }
 
     /**
