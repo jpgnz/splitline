@@ -139,22 +139,14 @@ class QueueStatusService
             ? $this->routeMatchingService->unfingerprintedCount()
             : 0;
 
-        $pendingGeocoding = Activity::query()
-            ->where('is_indoor', false)
-            ->whereNotNull('start_lat')
-            ->whereNotNull('start_lng')
-            ->where(function (Builder $sub): void {
-                $sub
-                    ->whereNull('location_name')
-                    ->orWhere('location_name', '');
-            })
-            ->count();
+        $pendingGeocoding = 0;
 
-        if (Schema::hasTable('route_clusters') && Schema::hasColumn('route_clusters', 'geocoded_at')) {
-            $pendingGeocoding += RouteCluster::query()
-                ->matched()
-                ->whereNull('geocoded_at')
-                ->count();
+        if (Schema::hasColumn('activities', 'geocode_attempted_at')) {
+            $pendingGeocoding += Activity::query()->awaitingGeocoding()->count();
+        }
+
+        if (Schema::hasTable('route_clusters') && Schema::hasColumn('route_clusters', 'geocode_attempted_at')) {
+            $pendingGeocoding += RouteCluster::query()->awaitingGeocoding()->count();
         }
 
         return [

@@ -4,9 +4,11 @@ namespace App\Services\Geocoding;
 
 use App\Models\GeocodedPlace;
 use App\Services\Geocoding\Exceptions\GeocodingRateLimitedException;
+use App\Services\Geocoding\Exceptions\GeocodingUnavailableException;
 use App\Support\AppVersion;
 use Carbon\CarbonImmutable;
 use Closure;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Cache;
@@ -14,6 +16,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Sleep;
 use InvalidArgumentException;
+use Throwable;
 
 /**
  * OSMF Nominatim Usage Policy compliant reverse geocoding client with two-tier SQLite spatial caching
@@ -40,6 +43,14 @@ class NominatimClient
     public const string CACHE_LAST_REQUEST_KEY = 'splitline.nominatim.last_request_at_ms';
 
     public const string CACHE_COOLDOWN_UNTIL_KEY = 'splitline.nominatim.cooldown_until_ms';
+
+    public const string CACHE_REQUEST_LOCK_KEY = 'splitline.nominatim.request_slot';
+
+    public const int REQUEST_LOCK_WAIT_SECONDS = 30;
+
+    public const int UNAVAILABLE_COOLDOWN_SECONDS = 60;
+
+    public const int BLOCKED_COOLDOWN_SECONDS = 3600;
 
     /**
      * @var array<string, true>
@@ -182,22 +193,23 @@ class NominatimClient
         return "Splitline/{$version} (+https://github.com/splitline-php/splitline)";
     }
 
+    /**
+     * Only send a Referer when explicitly configured, so self-hosted APP_URL hostnames never leak to the provider.
+     */
     public function referer(): ?string
     {
-        $configured = config('services.nominatim.referer');
-        $resolved = $this->validHttpUrl($configured);
+        return $this->validHttpUrl(config('services.nominatim.referer'));
+    }
 
-        if ($resolved !== null) {
-            return $resolved;
-        }
-
-        return $this->validHttpUrl(config('app.url'));
+    public function negativeCacheTtlDays(): int
+    {
+        return max(1, (int) config('services.nominatim.negative_cache_days', 30));
     }
 
     /**
-     * Compute deterministic spatial cache buckets and zoom level for a precision tier.
+     * Compute deterministic spatial cache buckets, the bucket centre coordinate, and zoom level for a precision tier.
      *
-     * @return array{lat_bucket: int, lng_bucket: int, zoom: int}
+     * @return array{lat_bucket: int, lng_bucket: int, center_lat: float, center_lng: float, zoom: int}
      */
     public static function bucketCoordinates(float $lat, float $lng, string $tier): array
     {
@@ -207,9 +219,14 @@ class NominatimClient
             default => throw new InvalidArgumentException("Unsupported geocoding precision tier: {$tier}"),
         };
 
+        $latBucket = (int) round($lat / $bucketDeg);
+        $lngBucket = (int) round($lng / $bucketDeg);
+
         return [
-            'lat_bucket' => (int) round($lat / $bucketDeg),
-            'lng_bucket' => (int) round($lng / $bucketDeg),
+            'lat_bucket' => $latBucket,
+            'lng_bucket' => $lngBucket,
+            'center_lat' => max(-90.0, min(90.0, round($latBucket * $bucketDeg, 6))),
+            'center_lng' => max(-180.0, min(180.0, round($lngBucket * $bucketDeg, 6))),
             'zoom' => $zoom,
         ];
     }
@@ -217,7 +234,11 @@ class NominatimClient
     /**
      * Reverse-geocode a coordinate using two-tier SQLite caching before making any HTTP call.
      *
-     * @throws GeocodingRateLimitedException
+     * Only the bucket centre is sent to the provider, so every coordinate in a bucket resolves identically
+     * and exact activity start points (often a home address) never leave the server. Coordinates the
+     * provider cannot resolve are negatively cached so they are not re-requested on every sync.
+     *
+     * @throws GeocodingUnavailableException
      */
     public function reverse(
         float $lat,
@@ -246,7 +267,13 @@ class NominatimClient
                 ->first();
 
             if ($cached instanceof GeocodedPlace) {
-                return $cached;
+                if (! $cached->is_empty) {
+                    return $cached;
+                }
+
+                if ($cached->fetched_at->greaterThan(CarbonImmutable::now('UTC')->subDays($this->negativeCacheTtlDays()))) {
+                    return null;
+                }
             }
         }
 
@@ -254,15 +281,16 @@ class NominatimClient
             return null;
         }
 
-        $payload = $this->requestReverse($lat, $lng, $bucket['zoom']);
+        $payload = $this->requestReverse($bucket['center_lat'], $bucket['center_lng'], $bucket['zoom']);
 
         if ($payload === null) {
             return null;
         }
 
+        $isEmpty = $payload === [];
         $extracted = $this->extractPlaceAttributes($payload, $tier);
 
-        return GeocodedPlace::query()->updateOrCreate(
+        $place = GeocodedPlace::query()->updateOrCreate(
             [
                 'precision_tier' => $tier,
                 'lat_bucket' => $bucket['lat_bucket'],
@@ -271,18 +299,24 @@ class NominatimClient
             [
                 ...$extracted,
                 'zoom' => $bucket['zoom'],
-                'lat' => round($lat, 6),
-                'lng' => round($lng, 6),
+                'lat' => $bucket['center_lat'],
+                'lng' => $bucket['center_lng'],
                 'provider_host' => mb_substr($this->providerHost(), 0, 120),
+                'is_empty' => $isEmpty,
                 'fetched_at' => CarbonImmutable::now('UTC'),
             ],
         );
+
+        return $isEmpty ? null : $place;
     }
 
     /**
+     * Returns the decoded payload, an empty array when the provider has no place for the coordinate,
+     * or null for a non-retryable client error that should not be negatively cached.
+     *
      * @return array<string, mixed>|null
      *
-     * @throws GeocodingRateLimitedException
+     * @throws GeocodingUnavailableException
      */
     private function requestReverse(float $lat, float $lng, int $zoom): ?array
     {
@@ -336,7 +370,11 @@ class NominatimClient
                     'message' => $exception->getMessage(),
                 ]);
 
-                return null;
+                $this->throwUnavailable(
+                    'Nominatim reverse geocoding is unreachable.',
+                    self::UNAVAILABLE_COOLDOWN_SECONDS,
+                    $exception,
+                );
             }
 
             $status = $response->status();
@@ -351,10 +389,33 @@ class NominatimClient
                 );
             }
 
-            if ($status >= 500 && $attempt < $maxRetries) {
-                $this->sleepMicroseconds(($attempt + 1) * 500_000);
+            if ($status === 403) {
+                Log::error('Nominatim reverse geocoding access was refused (HTTP 403). Check NOMINATIM_USER_AGENT and the provider usage policy.', [
+                    'host' => $this->providerHost(),
+                ]);
 
-                continue;
+                $this->throwUnavailable(
+                    'Nominatim reverse geocoding access refused (HTTP 403).',
+                    self::BLOCKED_COOLDOWN_SECONDS,
+                );
+            }
+
+            if ($status >= 500) {
+                if ($attempt < $maxRetries) {
+                    $this->sleepMicroseconds(($attempt + 1) * 500_000);
+
+                    continue;
+                }
+
+                Log::warning('Nominatim reverse geocoding returned server error status.', [
+                    'host' => $this->providerHost(),
+                    'status' => $status,
+                ]);
+
+                $this->throwUnavailable(
+                    "Nominatim reverse geocoding failed (HTTP {$status}).",
+                    self::UNAVAILABLE_COOLDOWN_SECONDS,
+                );
             }
 
             if ($response->failed()) {
@@ -368,8 +429,15 @@ class NominatimClient
 
             $decoded = $response->json();
 
-            if (! is_array($decoded) || isset($decoded['error'])) {
-                return null;
+            if (! is_array($decoded)) {
+                $this->throwUnavailable(
+                    'Nominatim reverse geocoding returned an unreadable response.',
+                    self::UNAVAILABLE_COOLDOWN_SECONDS,
+                );
+            }
+
+            if (isset($decoded['error'])) {
+                return [];
             }
 
             /** @var array<string, mixed> $decoded */
@@ -380,11 +448,75 @@ class NominatimClient
     }
 
     /**
-     * Enforce global cooldown and minimum request interval spacing.
+     * Pause all geocoding for a cooldown window and signal callers to retry later.
      *
-     * @throws GeocodingRateLimitedException
+     * @throws GeocodingUnavailableException
+     */
+    private function throwUnavailable(string $message, int $cooldownSeconds, ?Throwable $previous = null): never
+    {
+        $this->setCooldown($cooldownSeconds);
+
+        throw new GeocodingUnavailableException(
+            "{$message} Retry after {$cooldownSeconds}s.",
+            $cooldownSeconds,
+            previous: $previous,
+        );
+    }
+
+    /**
+     * Enforce global cooldown and minimum request interval spacing under an atomic lock, so concurrent
+     * workers and inline commands never send requests closer together than the configured spacing.
+     *
+     * @throws GeocodingUnavailableException
      */
     private function enforceRateLimitAndCooldown(): void
+    {
+        $this->assertNoCooldown();
+
+        $minSpacingMs = $this->effectiveRateLimitMs();
+
+        if ($minSpacingMs <= 0) {
+            Cache::put(self::CACHE_LAST_REQUEST_KEY, $this->nowMs(), 120);
+
+            return;
+        }
+
+        $lockSeconds = (int) ceil($minSpacingMs / 1000.0) + 5;
+
+        try {
+            Cache::lock(self::CACHE_REQUEST_LOCK_KEY, $lockSeconds)->block(
+                self::REQUEST_LOCK_WAIT_SECONDS,
+                function () use ($minSpacingMs): void {
+                    $this->assertNoCooldown();
+
+                    $nowMs = $this->nowMs();
+                    $lastRequestAt = Cache::get(self::CACHE_LAST_REQUEST_KEY);
+
+                    if (is_numeric($lastRequestAt)) {
+                        $elapsedMs = $nowMs - (float) $lastRequestAt;
+
+                        if ($elapsedMs >= 0.0 && $elapsedMs < $minSpacingMs) {
+                            $this->sleepMicroseconds((int) ceil(($minSpacingMs - $elapsedMs) * 1000.0));
+                            $nowMs = $this->nowMs();
+                        }
+                    }
+
+                    Cache::put(self::CACHE_LAST_REQUEST_KEY, $nowMs, 120);
+                },
+            );
+        } catch (LockTimeoutException $exception) {
+            throw new GeocodingRateLimitedException(
+                'Timed out waiting for a Nominatim request slot.',
+                5,
+                $exception,
+            );
+        }
+    }
+
+    /**
+     * @throws GeocodingRateLimitedException
+     */
+    private function assertNoCooldown(): void
     {
         $nowMs = $this->nowMs();
         $cooldownUntil = Cache::get(self::CACHE_COOLDOWN_UNTIL_KEY);
@@ -393,28 +525,10 @@ class NominatimClient
             $remainingSeconds = max(1, (int) ceil(((float) $cooldownUntil - $nowMs) / 1000.0));
 
             throw new GeocodingRateLimitedException(
-                "Nominatim rate-limit cooldown active. Retry after {$remainingSeconds}s.",
+                "Nominatim cooldown active. Retry after {$remainingSeconds}s.",
                 $remainingSeconds,
             );
         }
-
-        $minSpacingMs = $this->effectiveRateLimitMs();
-
-        if ($minSpacingMs > 0) {
-            $lastRequestAt = Cache::get(self::CACHE_LAST_REQUEST_KEY);
-
-            if (is_numeric($lastRequestAt)) {
-                $elapsedMs = $nowMs - (float) $lastRequestAt;
-
-                if ($elapsedMs >= 0.0 && $elapsedMs < $minSpacingMs) {
-                    $waitMs = $minSpacingMs - $elapsedMs;
-                    $this->sleepMicroseconds((int) ceil($waitMs * 1000.0));
-                    $nowMs = $this->nowMs();
-                }
-            }
-        }
-
-        Cache::put(self::CACHE_LAST_REQUEST_KEY, $nowMs, 120);
     }
 
     private function setCooldown(int $seconds): void

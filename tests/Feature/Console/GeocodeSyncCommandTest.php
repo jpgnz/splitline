@@ -120,3 +120,76 @@ it('exits cleanly without queuing or making requests when NOMINATIM_ENABLED is f
     Queue::assertNothingPushed();
     Http::assertNothingSent();
 });
+
+it('skips recently attempted items so unresolvable lookups cannot starve the batch', function () {
+    Queue::fake([GeocodeRouteClusterJob::class, GeocodeActivityLocationJob::class]);
+    config(['services.nominatim.retry_failed_days' => 7]);
+
+    RouteCluster::factory()->count(2)->create([
+        'activity_count' => 9,
+        'geocoded_at' => null,
+        'geocode_attempted_at' => CarbonImmutable::now('UTC')->subDay(),
+    ]);
+    $retryableCluster = RouteCluster::factory()->create([
+        'activity_count' => 2,
+        'geocoded_at' => null,
+        'geocode_attempted_at' => CarbonImmutable::now('UTC')->subDays(8),
+    ]);
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => null,
+        'start_lat' => -36.5,
+        'start_lng' => 175.1,
+        'geocode_attempted_at' => CarbonImmutable::now('UTC')->subHour(),
+        'started_at_local' => CarbonImmutable::parse('2026-11-25 07:00:00'),
+    ]);
+    $pendingActivity = Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => null,
+        'start_lat' => -36.85,
+        'start_lng' => 174.76,
+        'started_at_local' => CarbonImmutable::parse('2026-11-01 07:00:00'),
+    ]);
+
+    $this->artisan('geocode:sync', ['--queue' => true, '--limit' => 2])
+        ->expectsOutputToContain('Queued background geocoding for 1 route cluster(s) and 1 activity(ies).')
+        ->assertSuccessful();
+
+    Queue::assertPushed(GeocodeRouteClusterJob::class, 1);
+    Queue::assertPushed(GeocodeRouteClusterJob::class, fn (GeocodeRouteClusterJob $job): bool => $job->routeClusterId === $retryableCluster->id);
+    Queue::assertPushed(GeocodeActivityLocationJob::class, 1);
+    Queue::assertPushed(GeocodeActivityLocationJob::class, fn (GeocodeActivityLocationJob $job): bool => $job->activityId === $pendingActivity->id);
+});
+
+it('never selects provider-supplied location names with --force', function () {
+    Queue::fake([GeocodeRouteClusterJob::class, GeocodeActivityLocationJob::class]);
+
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => 'North Shore',
+        'location_geocoded_at' => null,
+        'start_lat' => -36.79,
+        'start_lng' => 174.77,
+    ]);
+    $geocoded = Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => 'Takapuna, Auckland',
+        'location_geocoded_at' => CarbonImmutable::now('UTC')->subMonth(),
+        'start_lat' => -36.79,
+        'start_lng' => 174.77,
+    ]);
+    $missing = Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => null,
+        'geocode_attempted_at' => CarbonImmutable::now('UTC')->subHour(),
+        'start_lat' => -36.85,
+        'start_lng' => 174.76,
+    ]);
+
+    $this->artisan('geocode:sync', ['--queue' => true, '--force' => true])
+        ->assertSuccessful();
+
+    Queue::assertPushed(GeocodeActivityLocationJob::class, 2);
+    Queue::assertPushed(GeocodeActivityLocationJob::class, fn (GeocodeActivityLocationJob $job): bool => $job->activityId === $geocoded->id && $job->force);
+    Queue::assertPushed(GeocodeActivityLocationJob::class, fn (GeocodeActivityLocationJob $job): bool => $job->activityId === $missing->id && $job->force);
+});

@@ -281,6 +281,7 @@ class RouteMatchingService
         if (
             $refreshed->activity_count >= 2
             && $refreshed->geocoded_at === null
+            && $refreshed->geocode_attempted_at === null
             && (bool) config('services.nominatim.enabled', true)
             && (bool) config('services.nominatim.auto_sync', true)
         ) {

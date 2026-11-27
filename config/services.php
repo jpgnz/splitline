@@ -68,6 +68,8 @@ return [
         'email' => env('NOMINATIM_EMAIL'),
         'timeout' => (int) env('NOMINATIM_TIMEOUT', 15),
         'max_retries' => (int) env('NOMINATIM_MAX_RETRIES', 2),
+        'negative_cache_days' => (int) env('NOMINATIM_NEGATIVE_CACHE_DAYS', 30),
+        'retry_failed_days' => (int) env('NOMINATIM_RETRY_FAILED_DAYS', 7),
     ],
 
 ];

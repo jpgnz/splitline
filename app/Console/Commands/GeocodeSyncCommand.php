@@ -6,7 +6,7 @@ use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\GeocodeRouteClusterJob;
 use App\Models\Activity;
 use App\Models\RouteCluster;
-use App\Services\Geocoding\Exceptions\GeocodingRateLimitedException;
+use App\Services\Geocoding\Exceptions\GeocodingUnavailableException;
 use App\Services\Geocoding\NominatimClient;
 use App\Services\Geocoding\ReverseGeocodingService;
 use Illuminate\Console\Command;
@@ -23,7 +23,7 @@ class GeocodeSyncCommand extends Command
     protected $signature = 'geocode:sync
         {--queue : Dispatch geocoding jobs onto the background geocode queue instead of running inline}
         {--limit=50 : Maximum number of route clusters and activities to process}
-        {--force : Re-geocode items even if they were already geocoded}';
+        {--force : Re-geocode routes and previously geocoded activity locations, bypassing the place cache (provider-supplied location names are never replaced)}';
 
     /**
      * The console command description.
@@ -64,7 +64,7 @@ class GeocodeSyncCommand extends Command
         $total = count($clusterIds) + count($activityIds);
 
         if ($total === 0) {
-            $this->components->info('All matched routes and outdoor activities already have place names. Nothing to do.');
+            $this->components->info('No matched routes or outdoor activities are awaiting geocoding. Nothing to do.');
 
             return self::SUCCESS;
         }
@@ -113,7 +113,7 @@ class GeocodeSyncCommand extends Command
                 } else {
                     $skipped++;
                 }
-            } catch (GeocodingRateLimitedException $exception) {
+            } catch (GeocodingUnavailableException $exception) {
                 $rateLimited = true;
                 $this->components->warn($exception->getMessage());
                 break;
@@ -141,7 +141,7 @@ class GeocodeSyncCommand extends Command
                     } else {
                         $skipped++;
                     }
-                } catch (GeocodingRateLimitedException $exception) {
+                } catch (GeocodingUnavailableException $exception) {
                     $rateLimited = true;
                     $this->components->warn($exception->getMessage());
                     break;
@@ -154,7 +154,7 @@ class GeocodeSyncCommand extends Command
 
         $elapsedSeconds = round(microtime(true) - $startedAt, 2);
 
-        $this->components->info($rateLimited ? 'Geocoding paused due to Nominatim rate limit.' : 'Geocoding sync completed.');
+        $this->components->info($rateLimited ? 'Geocoding paused: Nominatim is rate limiting or unavailable.' : 'Geocoding sync completed.');
         $this->components->twoColumnDetail('Routes Enriched', (string) $clustersEnriched);
         $this->components->twoColumnDetail('Activities Enriched', (string) $activitiesEnriched);
         $this->components->twoColumnDetail('Skipped', (string) $skipped);
@@ -171,18 +171,18 @@ class GeocodeSyncCommand extends Command
      */
     private function resolveTargetClusterIds(int $limit, bool $force): array
     {
-        $query = RouteCluster::query()
-            ->matched()
-            ->orderByDesc('activity_count')
-            ->orderByDesc('id');
-
-        if (! $force) {
-            $query->whereNull('geocoded_at');
-        }
+        $query = $force
+            ? RouteCluster::query()->matched()
+            : RouteCluster::query()->awaitingGeocoding();
 
         return array_values(array_map(
             'intval',
-            $query->limit($limit)->pluck('id')->all(),
+            $query
+                ->orderByDesc('activity_count')
+                ->orderByDesc('id')
+                ->limit($limit)
+                ->pluck('id')
+                ->all(),
         ));
     }
 
@@ -191,24 +191,27 @@ class GeocodeSyncCommand extends Command
      */
     private function resolveTargetActivityIds(int $limit, bool $force): array
     {
-        $query = Activity::query()
-            ->where('is_indoor', false)
-            ->whereNotNull('start_lat')
-            ->whereNotNull('start_lng')
-            ->orderByDesc('started_at_local')
-            ->orderByDesc('id');
-
-        if (! $force) {
-            $query->where(function (Builder $sub): void {
-                $sub
-                    ->whereNull('location_name')
-                    ->orWhere('location_name', '');
-            });
-        }
+        $query = $force
+            ? Activity::query()
+                ->where('is_indoor', false)
+                ->whereNotNull('start_lat')
+                ->whereNotNull('start_lng')
+                ->where(function (Builder $sub): void {
+                    $sub
+                        ->whereNull('location_name')
+                        ->orWhere('location_name', '')
+                        ->orWhereNotNull('location_geocoded_at');
+                })
+            : Activity::query()->awaitingGeocoding();
 
         return array_values(array_map(
             'intval',
-            $query->limit($limit)->pluck('id')->all(),
+            $query
+                ->orderByDesc('started_at_local')
+                ->orderByDesc('id')
+                ->limit($limit)
+                ->pluck('id')
+                ->all(),
         ));
     }
 }

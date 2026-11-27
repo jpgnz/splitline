@@ -32,6 +32,7 @@ class GeocodedPlaceFactory extends Factory
             'lat' => $lat,
             'lng' => $lng,
             'provider_host' => NominatimClient::PUBLIC_HOST,
+            'is_empty' => false,
             'osm_type' => 'way',
             'osm_id' => fake()->numberBetween(100000, 99999999),
             'category' => 'leisure',
@@ -79,5 +80,30 @@ class GeocodedPlaceFactory extends Factory
                 'city' => 'Auckland',
             ];
         });
+    }
+
+    /**
+     * A negatively cached bucket where the provider returned no place.
+     */
+    public function empty(): static
+    {
+        return $this->state(fn (): array => [
+            'is_empty' => true,
+            'osm_type' => null,
+            'osm_id' => null,
+            'category' => null,
+            'type' => null,
+            'feature_name' => null,
+            'road' => null,
+            'neighbourhood' => null,
+            'suburb' => null,
+            'city' => null,
+            'region' => null,
+            'country' => null,
+            'country_code' => null,
+            'display_label' => null,
+            'area_label' => null,
+            'raw_address' => null,
+        ]);
     }
 }

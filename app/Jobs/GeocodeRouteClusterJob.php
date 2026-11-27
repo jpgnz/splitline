@@ -3,8 +3,9 @@
 namespace App\Jobs;
 
 use App\Models\RouteCluster;
-use App\Services\Geocoding\Exceptions\GeocodingRateLimitedException;
+use App\Services\Geocoding\Exceptions\GeocodingUnavailableException;
 use App\Services\Geocoding\ReverseGeocodingService;
+use DateTimeInterface;
 use Illuminate\Contracts\Queue\ShouldBeUnique;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
@@ -15,7 +16,10 @@ class GeocodeRouteClusterJob implements ShouldBeUnique, ShouldQueue
 
     public const string QUEUE = 'geocode';
 
-    public int $tries = 5;
+    /**
+     * Fail after this many unhandled exceptions; provider cooldown releases do not count.
+     */
+    public int $maxExceptions = 3;
 
     public int $uniqueFor = 14400;
 
@@ -29,6 +33,14 @@ class GeocodeRouteClusterJob implements ShouldBeUnique, ShouldQueue
         public readonly bool $force = false,
     ) {
         $this->onQueue(self::QUEUE);
+    }
+
+    /**
+     * Allow provider cooldown releases to keep retrying for a day instead of exhausting a fixed attempt count.
+     */
+    public function retryUntil(): DateTimeInterface
+    {
+        return now()->addDay();
     }
 
     public function uniqueId(): string
@@ -49,7 +61,7 @@ class GeocodeRouteClusterJob implements ShouldBeUnique, ShouldQueue
 
         try {
             $service->enrichRouteCluster($cluster, force: $this->force);
-        } catch (GeocodingRateLimitedException $exception) {
+        } catch (GeocodingUnavailableException $exception) {
             if ($this->job !== null) {
                 $this->release($exception->retryAfterSeconds);
 
