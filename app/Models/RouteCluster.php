@@ -34,6 +34,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int $activity_count
  * @property CarbonImmutable|null $last_activity_at
  * @property CarbonImmutable|null $geocoded_at
+ * @property CarbonImmutable|null $geocode_attempted_at
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read Activity|null $representativeActivity
@@ -69,6 +70,7 @@ class RouteCluster extends Model
         'activity_count',
         'last_activity_at',
         'geocoded_at',
+        'geocode_attempted_at',
     ];
 
     /**
@@ -95,6 +97,7 @@ class RouteCluster extends Model
             'activity_count' => 'integer',
             'last_activity_at' => 'immutable_datetime',
             'geocoded_at' => 'immutable_datetime',
+            'geocode_attempted_at' => 'immutable_datetime',
         ];
     }
 
@@ -132,5 +135,26 @@ class RouteCluster extends Model
     public function scopeMatched(Builder $query): Builder
     {
         return $query->where('activity_count', '>=', 2);
+    }
+
+    /**
+     * Scope matched routes that are not yet geocoded and have not had a reverse-geocoding attempt
+     * within the configured retry window.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingGeocoding(Builder $query): Builder
+    {
+        $retryCutoff = CarbonImmutable::now('UTC')->subDays(max(1, (int) config('services.nominatim.retry_failed_days', 7)));
+
+        return $query
+            ->matched()
+            ->whereNull('geocoded_at')
+            ->where(function (Builder $attemptQuery) use ($retryCutoff): void {
+                $attemptQuery
+                    ->whereNull('geocode_attempted_at')
+                    ->orWhere('geocode_attempted_at', '<', $retryCutoff);
+            });
     }
 }

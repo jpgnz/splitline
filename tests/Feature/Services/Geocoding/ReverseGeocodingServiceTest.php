@@ -373,3 +373,137 @@ it('dispatches background geocode jobs automatically when auto_sync is enabled',
         fn (GeocodeRouteClusterJob $job): bool => $job->routeClusterId === $fp1?->route_cluster_id && $job->queue === 'geocode',
     );
 });
+
+it('records an attempt when no place resolves so the route is only retried after the retry window', function () {
+    Http::preventStrayRequests();
+    Sleep::fake();
+    config([
+        'services.nominatim.retry_failed_days' => 7,
+        'services.nominatim.negative_cache_days' => 30,
+    ]);
+
+    Http::fake([
+        'https://nominatim.openstreetmap.org/reverse*' => Http::response(['error' => 'Unable to geocode']),
+    ]);
+
+    $cluster = RouteCluster::factory()->create(['activity_count' => 3, 'geocoded_at' => null]);
+    $service = app(ReverseGeocodingService::class);
+
+    expect($service->enrichRouteCluster($cluster))->toBeFalse();
+
+    $cluster->refresh();
+    expect($cluster->geocoded_at)->toBeNull()
+        ->and($cluster->geocode_attempted_at)->not->toBeNull()
+        ->and(RouteCluster::query()->awaitingGeocoding()->count())->toBe(0)
+        ->and($service->pendingCount())->toBe(0);
+
+    $this->travel(8)->days();
+
+    expect(RouteCluster::query()->awaitingGeocoding()->pluck('id')->all())->toBe([$cluster->id])
+        ->and($service->enrichRouteCluster($cluster))->toBeFalse();
+
+    // The retry is answered by the negative bucket cache, not another Nominatim request
+    Http::assertSentCount(1);
+});
+
+it('records an attempt for activities whose location cannot be resolved', function () {
+    Http::preventStrayRequests();
+    Sleep::fake();
+
+    Http::fake([
+        'https://nominatim.openstreetmap.org/reverse*' => Http::response(['error' => 'Unable to geocode']),
+    ]);
+
+    $activity = Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => null,
+        'start_lat' => -36.5000,
+        'start_lng' => 175.1000,
+    ]);
+
+    expect(app(ReverseGeocodingService::class)->enrichActivityLocation($activity))->toBeFalse();
+
+    $activity->refresh();
+    expect($activity->location_name)->toBeNull()
+        ->and($activity->geocode_attempted_at)->not->toBeNull()
+        ->and(Activity::query()->awaitingGeocoding()->count())->toBe(0);
+});
+
+it('never replaces a provider-supplied location name when forced but refreshes a previously geocoded one', function () {
+    Http::preventStrayRequests();
+    Sleep::fake();
+
+    Http::fake([
+        'https://nominatim.openstreetmap.org/reverse*' => Http::response([
+            'category' => 'place',
+            'type' => 'suburb',
+            'address' => ['suburb' => 'Takapuna', 'city' => 'Auckland'],
+        ]),
+    ]);
+
+    $providerNamed = Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => 'North Shore',
+        'location_geocoded_at' => null,
+        'start_lat' => -36.7880,
+        'start_lng' => 174.7730,
+    ]);
+
+    $previouslyGeocoded = Activity::factory()->create([
+        'is_indoor' => false,
+        'location_name' => 'Stale Suburb, Auckland',
+        'location_geocoded_at' => CarbonImmutable::now('UTC')->subMonth(),
+        'start_lat' => -36.7880,
+        'start_lng' => 174.7730,
+    ]);
+
+    $service = app(ReverseGeocodingService::class);
+
+    expect($service->enrichActivityLocation($providerNamed, force: true))->toBeFalse()
+        ->and($providerNamed->fresh()?->location_name)->toBe('North Shore')
+        ->and($service->enrichActivityLocation($previouslyGeocoded, force: true))->toBeTrue()
+        ->and($previouslyGeocoded->fresh()?->location_name)->toBe('Takapuna, Auckland');
+
+    Http::assertSentCount(1);
+});
+
+it('keeps a geocoded location when the provider omits one and hands ownership back when the provider supplies one', function () {
+    Queue::fake();
+
+    $geocodedAt = CarbonImmutable::parse('2026-11-21 08:00:00', 'UTC');
+    $activity = Activity::factory()->create([
+        'provider' => 'file_import',
+        'external_id' => 'fit-geo-001',
+        'location_name' => 'Takapuna, Auckland',
+        'location_geocoded_at' => $geocodedAt,
+    ]);
+
+    $dto = fn (?string $locationName): NormalizedActivity => new NormalizedActivity(
+        provider: 'file_import',
+        externalId: 'fit-geo-001',
+        name: 'Morning Run',
+        activityTypeKey: 'running',
+        sportCategory: 'running',
+        sportDiscipline: 'road',
+        isIndoor: false,
+        startedAtLocal: CarbonImmutable::parse('2026-11-20 07:00:00'),
+        startedAtUtc: CarbonImmutable::parse('2026-11-19 18:00:00', 'UTC'),
+        locationName: $locationName,
+        startLat: -36.7880,
+        startLng: 174.7730,
+        distanceMeters: 5000.0,
+        durationSeconds: 1500.0,
+    );
+
+    $persistence = app(TelemetryPersistenceService::class);
+
+    $persistence->upsertActivity($dto(null));
+    $activity->refresh();
+    expect($activity->location_name)->toBe('Takapuna, Auckland')
+        ->and($activity->location_geocoded_at?->equalTo($geocodedAt))->toBeTrue();
+
+    $persistence->upsertActivity($dto('North Shore'));
+    $activity->refresh();
+    expect($activity->location_name)->toBe('North Shore')
+        ->and($activity->location_geocoded_at)->toBeNull();
+});

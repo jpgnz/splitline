@@ -31,6 +31,8 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property CarbonImmutable $started_at_local
  * @property CarbonImmutable $started_at_utc
  * @property string|null $location_name
+ * @property CarbonImmutable|null $location_geocoded_at
+ * @property CarbonImmutable|null $geocode_attempted_at
  * @property float|null $start_lat
  * @property float|null $start_lng
  * @property float $distance_meters
@@ -157,6 +159,8 @@ class Activity extends Model
         'started_at_local',
         'started_at_utc',
         'location_name',
+        'location_geocoded_at',
+        'geocode_attempted_at',
         'start_lat',
         'start_lng',
         'distance_meters',
@@ -355,6 +359,8 @@ class Activity extends Model
             'streams_synced_at' => 'immutable_datetime',
             'streams_unavailable_at' => 'immutable_datetime',
             'route_match_skipped_at' => 'immutable_datetime',
+            'location_geocoded_at' => 'immutable_datetime',
+            'geocode_attempted_at' => 'immutable_datetime',
             'raw_summary' => 'array',
         ];
     }
@@ -532,6 +538,34 @@ class Activity extends Model
                                     ->whereColumn('activity_streams.activity_id', "{$table}.id");
                             });
                     });
+            });
+    }
+
+    /**
+     * Scope outdoor activities with start coordinates that still lack a location name and have not had a
+     * reverse-geocoding attempt within the configured retry window.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingGeocoding(Builder $query): Builder
+    {
+        $table = $this->getTable();
+        $retryCutoff = CarbonImmutable::now('UTC')->subDays(max(1, (int) config('services.nominatim.retry_failed_days', 7)));
+
+        return $query
+            ->where("{$table}.is_indoor", false)
+            ->whereNotNull("{$table}.start_lat")
+            ->whereNotNull("{$table}.start_lng")
+            ->where(function (Builder $locationQuery) use ($table): void {
+                $locationQuery
+                    ->whereNull("{$table}.location_name")
+                    ->orWhere("{$table}.location_name", '');
+            })
+            ->where(function (Builder $attemptQuery) use ($table, $retryCutoff): void {
+                $attemptQuery
+                    ->whereNull("{$table}.geocode_attempted_at")
+                    ->orWhere("{$table}.geocode_attempted_at", '<', $retryCutoff);
             });
     }
 }

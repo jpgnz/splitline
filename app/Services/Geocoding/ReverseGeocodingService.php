@@ -6,7 +6,7 @@ use App\Models\Activity;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\GeocodedPlace;
 use App\Models\RouteCluster;
-use App\Services\Geocoding\Exceptions\GeocodingRateLimitedException;
+use App\Services\Geocoding\Exceptions\GeocodingUnavailableException;
 use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
 
@@ -22,7 +22,7 @@ class ReverseGeocodingService
     /**
      * Resolve an exact road, trail, park, peak, or landmark using the high-precision feature tier (zoom 17, ~25m).
      *
-     * @throws GeocodingRateLimitedException
+     * @throws GeocodingUnavailableException
      */
     public function resolveFeature(float $lat, float $lng, bool $force = false): ?GeocodedPlace
     {
@@ -32,7 +32,7 @@ class ReverseGeocodingService
     /**
      * Resolve a suburb, neighbourhood, town, or city using the area tier (zoom 14, ~220m).
      *
-     * @throws GeocodingRateLimitedException
+     * @throws GeocodingUnavailableException
      */
     public function resolveArea(float $lat, float $lng, bool $force = false): ?GeocodedPlace
     {
@@ -50,7 +50,10 @@ class ReverseGeocodingService
     /**
      * Enrich a matched RouteCluster with an OSM place_label and upgrade generic fallback route names.
      *
-     * @throws GeocodingRateLimitedException
+     * Every completed lookup, including one that finds no usable place, records `geocode_attempted_at`
+     * so unresolvable routes are only retried after the configured retry window.
+     *
+     * @throws GeocodingUnavailableException
      */
     public function enrichRouteCluster(RouteCluster $cluster, bool $force = false): bool
     {
@@ -62,6 +65,97 @@ class ReverseGeocodingService
             return false;
         }
 
+        $labels = $this->resolveClusterLabels($cluster, $force);
+        $now = CarbonImmutable::now('UTC');
+
+        if ($labels === null) {
+            $cluster->update(['geocode_attempted_at' => $now]);
+
+            return false;
+        }
+
+        $updates = [
+            'place_label' => mb_substr($labels['place_label'], 0, 160),
+            'geocoded_at' => $now,
+            'geocode_attempted_at' => $now,
+        ];
+
+        $shortPlace = $labels['short_place'];
+        $linkedActivities = $this->loadClusterActivities($cluster);
+
+        if (
+            $shortPlace !== null
+            && RouteMatchingService::shouldUpgradeClusterNameWithPlace($cluster, $linkedActivities)
+        ) {
+            $updates['name'] = RouteMatchingService::formatGeocodedClusterName(
+                $shortPlace,
+                $cluster->is_loop,
+                $cluster->distance_meters,
+            );
+        }
+
+        $cluster->update($updates);
+
+        return true;
+    }
+
+    /**
+     * Populate an outdoor activity's missing location_name from the area precision tier.
+     *
+     * Provider-supplied location names are never overwritten, even when forced; forcing only refreshes
+     * names that were previously filled by reverse geocoding (`location_geocoded_at`).
+     *
+     * @throws GeocodingUnavailableException
+     */
+    public function enrichActivityLocation(Activity $activity, bool $force = false): bool
+    {
+        if ($activity->is_indoor || $activity->start_lat === null || $activity->start_lng === null) {
+            return false;
+        }
+
+        $hasLocation = is_string($activity->location_name) && trim($activity->location_name) !== '';
+
+        if ($hasLocation && (! $force || $activity->location_geocoded_at === null)) {
+            return false;
+        }
+
+        $place = $this->resolveArea($activity->start_lat, $activity->start_lng, $force);
+        $location = $place !== null ? $this->formatActivityLocation($place) : null;
+        $now = CarbonImmutable::now('UTC');
+
+        if ($location === null) {
+            $activity->update(['geocode_attempted_at' => $now]);
+
+            return false;
+        }
+
+        $activity->update([
+            'location_name' => mb_substr($location, 0, 160),
+            'location_geocoded_at' => $now,
+            'geocode_attempted_at' => $now,
+        ]);
+
+        return true;
+    }
+
+    /**
+     * Count matched route clusters and outdoor activities still awaiting geocoding.
+     */
+    public function pendingCount(): int
+    {
+        return RouteCluster::query()->awaitingGeocoding()->count()
+            + Activity::query()->awaitingGeocoding()->count();
+    }
+
+    /**
+     * Resolve a cluster's subtitle and short naming place, or null when no usable place was found.
+     *
+     * @return array{place_label: string, short_place: ?string}|null
+     *
+     * @throws GeocodingUnavailableException
+     */
+    private function resolveClusterLabels(RouteCluster $cluster, bool $force): ?array
+    {
         $placeLabel = null;
         $shortPlace = null;
 
@@ -69,12 +163,10 @@ class ReverseGeocodingService
             [$targetLat, $targetLng] = $this->furthestWaypointFromStart($cluster);
             $feature = $this->resolveFeature($targetLat, $targetLng, $force);
 
-            if ($feature === null) {
-                return false;
+            if ($feature !== null) {
+                $placeLabel = $this->formatSubtitle($feature);
+                $shortPlace = $feature->display_label ?? $feature->area_label ?? $feature->city;
             }
-
-            $placeLabel = $this->formatSubtitle($feature);
-            $shortPlace = $feature->display_label ?? $feature->area_label ?? $feature->city;
         } else {
             $startArea = $this->resolveArea($cluster->start_lat, $cluster->start_lng, $force);
             $endArea = $this->resolveArea($cluster->end_lat, $cluster->end_lng, $force);
@@ -103,96 +195,18 @@ class ReverseGeocodingService
                 } elseif ($startArea !== null) {
                     $placeLabel = $this->formatSubtitle($startArea);
                     $shortPlace = $startLabel;
-                } else {
-                    return false;
                 }
             }
         }
 
         if ($placeLabel === null || trim($placeLabel) === '') {
-            return false;
+            return null;
         }
 
-        $updates = [
-            'place_label' => mb_substr(trim($placeLabel), 0, 160),
-            'geocoded_at' => CarbonImmutable::now('UTC'),
+        return [
+            'place_label' => trim($placeLabel),
+            'short_place' => $shortPlace !== null && trim($shortPlace) !== '' ? trim($shortPlace) : null,
         ];
-
-        $linkedActivities = $this->loadClusterActivities($cluster);
-
-        if (
-            $shortPlace !== null
-            && trim($shortPlace) !== ''
-            && RouteMatchingService::shouldUpgradeClusterNameWithPlace($cluster, $linkedActivities)
-        ) {
-            $updates['name'] = RouteMatchingService::formatGeocodedClusterName(
-                trim($shortPlace),
-                $cluster->is_loop,
-                $cluster->distance_meters,
-            );
-        }
-
-        $cluster->update($updates);
-
-        return true;
-    }
-
-    /**
-     * Populate an outdoor activity's missing location_name from the area precision tier.
-     *
-     * @throws GeocodingRateLimitedException
-     */
-    public function enrichActivityLocation(Activity $activity, bool $force = false): bool
-    {
-        if ($activity->is_indoor || $activity->start_lat === null || $activity->start_lng === null) {
-            return false;
-        }
-
-        if (! $force && is_string($activity->location_name) && trim($activity->location_name) !== '') {
-            return false;
-        }
-
-        $place = $this->resolveArea($activity->start_lat, $activity->start_lng, $force);
-
-        if ($place === null) {
-            return false;
-        }
-
-        $location = $this->formatActivityLocation($place);
-
-        if ($location === null) {
-            return false;
-        }
-
-        $activity->update([
-            'location_name' => mb_substr($location, 0, 160),
-        ]);
-
-        return true;
-    }
-
-    /**
-     * Count matched route clusters and outdoor activities still awaiting geocoding.
-     */
-    public function pendingCount(): int
-    {
-        $pendingClusters = RouteCluster::query()
-            ->matched()
-            ->whereNull('geocoded_at')
-            ->count();
-
-        $pendingActivities = Activity::query()
-            ->where('is_indoor', false)
-            ->whereNotNull('start_lat')
-            ->whereNotNull('start_lng')
-            ->where(function ($query): void {
-                $query
-                    ->whereNull('location_name')
-                    ->orWhere('location_name', '');
-            })
-            ->count();
-
-        return $pendingClusters + $pendingActivities;
     }
 
     /**

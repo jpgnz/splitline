@@ -16,6 +16,7 @@ use Illuminate\Database\Eloquent\Model;
  * @property float $lat
  * @property float $lng
  * @property string $provider_host
+ * @property bool $is_empty
  * @property string|null $osm_type
  * @property int|null $osm_id
  * @property string|null $category
@@ -55,6 +56,7 @@ class GeocodedPlace extends Model
         'lat',
         'lng',
         'provider_host',
+        'is_empty',
         'osm_type',
         'osm_id',
         'category',
@@ -87,6 +89,7 @@ class GeocodedPlace extends Model
             'lat' => 'float',
             'lng' => 'float',
             'osm_id' => 'integer',
+            'is_empty' => 'boolean',
             'raw_address' => 'array',
             'fetched_at' => 'immutable_datetime',
         ];

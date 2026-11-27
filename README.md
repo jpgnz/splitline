@@ -136,10 +136,12 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 | `NOMINATIM_BASE_URL`       | `https://nominatim.openstreetmap.org` | Nominatim endpoint URL (point to a self-hosted Nominatim instance to remove public rate limits).                                                                        |
 | `NOMINATIM_RATE_LIMIT_MS`  | `1100`                                | Minimum spacing in milliseconds between Nominatim requests (enforces ≥1000ms on the public OSMF host; set to `0` for self-hosted instances).                            |
 | `NOMINATIM_USER_AGENT`     | _(Splitline/version)_                 | Custom HTTP `User-Agent` header (defaults to `Splitline/{version} (+https://github.com/splitline-php/splitline)`).                                                      |
-| `NOMINATIM_REFERER`        | _(`APP_URL`)_                         | Optional HTTP `Referer` header sent to Nominatim (defaults to `APP_URL` when valid HTTP/HTTPS).                                                                         |
+| `NOMINATIM_REFERER`        | _(empty)_                             | Optional HTTP `Referer` header sent to Nominatim (only sent when explicitly configured).                                                                                |
 | `NOMINATIM_EMAIL`          | _(empty)_                             | Optional contact email passed per the OSMF Nominatim Usage Policy.                                                                                                      |
 | `NOMINATIM_TIMEOUT`        | `15`                                  | HTTP request timeout in seconds for Nominatim reverse lookups.                                                                                                          |
 | `NOMINATIM_MAX_RETRIES`    | `2`                                   | Maximum retry attempts for transient connection/5xx errors.                                                                                                             |
+| `NOMINATIM_NEGATIVE_CACHE_DAYS` | `30`                                  | Days to remember coordinates Nominatim could not resolve before asking again.                                                                                           |
+| `NOMINATIM_RETRY_FAILED_DAYS` | `7`                                   | Days before a route or activity whose lookup found no usable place name is retried.                                                                                     |
 
 ## Development
 
