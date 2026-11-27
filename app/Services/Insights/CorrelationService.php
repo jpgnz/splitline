@@ -6,6 +6,7 @@ use App\Models\Activity;
 use App\Models\DailyMetric;
 use App\Models\HrvRecord;
 use App\Models\SleepRecord;
+use App\Services\Activities\ActivityDerivedMetricsService;
 use App\Support\DateWindowResolver;
 use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
@@ -358,6 +359,7 @@ class CorrelationService
         private readonly DateWindowResolver $dateWindows,
         private readonly HealthSourceRegistry $healthSources,
         private readonly Statistics $statistics,
+        private readonly ActivityDerivedMetricsService $derivedMetrics,
     ) {}
 
     /**
@@ -396,10 +398,14 @@ class CorrelationService
                 'activities.avg_hr',
                 'activities.training_load',
                 'activities.tss',
+                'activities.hr_zone_1_seconds',
+                'activities.hr_zone_2_seconds',
+                'activities.hr_zone_3_seconds',
+                'activities.hr_zone_4_seconds',
+                'activities.hr_zone_5_seconds',
                 'activity_derived_metrics.efficiency_factor as adm_efficiency_factor',
                 'activity_derived_metrics.decoupling_metric as adm_decoupling_metric',
                 'activity_derived_metrics.decoupling_pct as adm_decoupling_pct',
-                'activity_derived_metrics.hr_high_pct as adm_hr_high_pct',
                 'activity_weathers.temperature_c as aw_temperature_c',
                 'activity_weathers.dew_point_c as aw_dew_point_c',
                 'activity_weathers.apparent_temperature_c as aw_apparent_temperature_c',
@@ -455,7 +461,7 @@ class CorrelationService
 
             $trainingLoad = $this->toPositiveFloat($row->training_load ?? null);
             $tss = $this->toPositiveFloat($row->tss ?? null);
-            $hrHighPct = $this->toFloat($row->adm_hr_high_pct ?? null);
+            $hrHighPct = $this->highHrSharePct($row);
             $effectiveLoad = $tss ?? $trainingLoad;
 
             $parsedRows[] = [
@@ -562,6 +568,23 @@ class CorrelationService
             'workout_to_recovery' => $recoveryAnalysis,
             'schedule_patterns' => $scheduleAnalysis,
         ];
+    }
+
+    /**
+     * Share of time in HR zones 4–5, derived from the activity's zone durations via the same
+     * polarized split the activity detail page uses.
+     */
+    private function highHrSharePct(stdClass $row): ?float
+    {
+        $zoneSeconds = (new Activity)->setRawAttributes([
+            'hr_zone_1_seconds' => $row->hr_zone_1_seconds ?? null,
+            'hr_zone_2_seconds' => $row->hr_zone_2_seconds ?? null,
+            'hr_zone_3_seconds' => $row->hr_zone_3_seconds ?? null,
+            'hr_zone_4_seconds' => $row->hr_zone_4_seconds ?? null,
+            'hr_zone_5_seconds' => $row->hr_zone_5_seconds ?? null,
+        ]);
+
+        return $this->derivedMetrics->polarizedHrSplit($zoneSeconds)['hr_high_pct'];
     }
 
     /**
