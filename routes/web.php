@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ActivityComparisonController;
 use App\Http\Controllers\ActivityController;
 use App\Http\Controllers\BestEffortController;
 use App\Http\Controllers\DashboardController;
@@ -21,6 +22,7 @@ Route::get('/health/{metric}', [HealthMetricController::class, 'show'])->name('h
 Route::get('/fitness', [FitnessController::class, 'index'])->name('fitness.index');
 
 Route::get('/activities', [ActivityController::class, 'index'])->name('activities.index');
+Route::get('/activities/compare', [ActivityComparisonController::class, 'index'])->name('activities.compare');
 Route::get('/activities/{activity}', [ActivityController::class, 'show'])->name('activities.show');
 Route::patch('/activities/{activity}/discipline', [ActivityController::class, 'updateDiscipline'])->name('activities.discipline.update');
 Route::post('/activities/{activity}/favorite', [ActivityController::class, 'toggleFavorite'])->name('activities.favorite.toggle');
