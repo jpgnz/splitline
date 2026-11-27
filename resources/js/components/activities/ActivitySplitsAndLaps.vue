@@ -4,16 +4,21 @@ import { formatDurationClock, formatNumber } from '@/lib/format';
 import { computeSplitsFromSeries, KM_TO_MI, useUnits } from '@/lib/units';
 import type { KmSplitItem, SplitItem, StreamPoint } from '@/types/activity';
 
-const props = defineProps<{
-    series: StreamPoint[];
-    kmSplits: KmSplitItem[];
-    laps: Array<Record<string, number | null>>;
-    usesPace: boolean;
-    isRunning: boolean;
-    isSwimming: boolean;
-    accentHex: string;
-    cadenceUnit: string;
-}>();
+const props = withDefaults(
+    defineProps<{
+        series: StreamPoint[];
+        kmSplits: KmSplitItem[];
+        laps: Array<Record<string, number | null>>;
+        usesPace: boolean;
+        isRunning: boolean;
+        isSwimming?: boolean;
+        accentHex: string;
+        cadenceUnit: string;
+    }>(),
+    {
+        isSwimming: false,
+    },
+);
 
 const {
     units,
@@ -38,8 +43,14 @@ const splits = computed<SplitItem[]>(() =>
     computeSplitsFromSeries(props.series, props.kmSplits, units.value),
 );
 
+const splitsAreKm = computed<boolean>(
+    () =>
+        !isImperial.value ||
+        (splits.value.length > 0 && splits.value[0].label.startsWith('Km')),
+);
+
 const fullSplitThresholdMeters = computed<number>(() =>
-    isImperial.value ? 1528 : 950,
+    splitsAreKm.value ? 950 : 1528,
 );
 
 const splitsHavePower = computed<boolean>(() =>
@@ -58,6 +69,25 @@ const lapsHaveGap = computed<boolean>(
             (l) => pickLapNumber(l, ['gap_seconds_per_km']) !== null,
         ),
 );
+const lapsHavePowerOrCadence = computed<boolean>(() =>
+    props.laps.some(
+        (l) =>
+            pickLapNumber(l, ['avg_power', 'power']) !== null ||
+            pickLapNumber(l, ['avg_cadence', 'cadence']) !== null,
+    ),
+);
+
+const cardHeading = computed<string>(() => {
+    if (splits.value.length > 0 && props.laps.length > 0) {
+        return 'Splits & Laps';
+    }
+
+    if (splits.value.length > 0) {
+        return 'Splits';
+    }
+
+    return 'Laps';
+});
 
 const splitSpeedBounds = computed<{ min: number; max: number }>(() => {
     const speeds = splits.value
@@ -151,7 +181,7 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
             <span
                 class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
             >
-                Splits &amp; Laps
+                {{ cardHeading }}
             </span>
 
             <div
@@ -168,7 +198,7 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                     "
                     @click="splitsTab = 'splits'"
                 >
-                    {{ isImperial ? '1 mi Splits' : '1 km Splits' }} ({{
+                    {{ splitsAreKm ? '1 km Splits' : '1 mi Splits' }} ({{
                         splits.length
                     }})
                 </button>
@@ -197,41 +227,55 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                     class="border-b border-zinc-200/80 bg-[#f7f7f5]/80 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:border-zinc-800/80 dark:bg-zinc-900/50 dark:text-zinc-400"
                 >
                     <tr>
-                        <th class="px-4 py-2.5 font-medium">
-                            {{ isImperial ? 'Mile' : 'Km' }}
+                        <th class="px-4 py-2.5 font-medium whitespace-nowrap">
+                            {{ splitsAreKm ? 'Km' : 'Mile' }}
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
-                            {{ usesPace ? 'Pace' : 'Speed' }}
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
+                            {{
+                                isSwimming
+                                    ? 'Pace /100m'
+                                    : usesPace
+                                      ? 'Pace'
+                                      : 'Speed'
+                            }}
                         </th>
                         <th
                             v-if="splitsHaveGap"
-                            class="px-4 py-2.5 text-right font-medium"
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
                         >
                             GAP
                         </th>
                         <th
-                            class="hidden w-36 px-4 py-2.5 font-medium sm:table-cell"
+                            class="hidden w-36 px-4 py-2.5 font-medium whitespace-nowrap sm:table-cell"
                         >
-                            Effort
+                            {{ isSwimming || usesPace ? 'Pace' : 'Speed' }}
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Grade
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Elev +/-
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Avg HR
                         </th>
                         <th
                             v-if="splitsHavePower"
-                            class="px-4 py-2.5 text-right font-medium"
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
                         >
                             Power
                         </th>
                         <th
                             v-if="splitsHaveCadence"
-                            class="px-4 py-2.5 text-right font-medium"
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
                         >
                             Cadence
                         </th>
@@ -258,28 +302,26 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                                 class="ml-1 text-[10px] text-zinc-400 dark:text-zinc-500"
                             >
                                 ({{
-                                    formatNumber(
-                                        distanceFromMeters(
-                                            split.distance_meters,
-                                        ),
-                                        2,
-                                    )
-                                }}
-                                {{ distanceUnit }})
+                                    splitsAreKm
+                                        ? `${formatNumber(split.distance_meters / 1000, 2)} km`
+                                        : `${formatNumber(distanceFromMeters(split.distance_meters), 2)} ${distanceUnit}`
+                                }})
                             </span>
                         </td>
                         <td
-                            class="px-4 py-2.5 text-right font-medium text-zinc-900 dark:text-zinc-100"
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap text-zinc-900 dark:text-zinc-100"
                         >
                             {{
-                                usesPace
-                                    ? formatPaceSeconds(split.pace_seconds)
-                                    : formatSpeed(split.avg_speed)
+                                isSwimming
+                                    ? formatPace100m(split.avg_speed)
+                                    : usesPace
+                                      ? formatPaceSeconds(split.pace_seconds)
+                                      : formatSpeed(split.avg_speed)
                             }}
                         </td>
                         <td
                             v-if="splitsHaveGap"
-                            class="px-4 py-2.5 text-right text-amber-600 dark:text-amber-400"
+                            class="px-4 py-2.5 text-right whitespace-nowrap text-amber-600 dark:text-amber-400"
                         >
                             {{ formatPaceSeconds(split.gap_seconds) }}
                         </td>
@@ -297,7 +339,7 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                             </div>
                         </td>
                         <td
-                            class="px-4 py-2.5 text-right text-zinc-600 dark:text-zinc-400"
+                            class="px-4 py-2.5 text-right whitespace-nowrap text-zinc-600 dark:text-zinc-400"
                         >
                             {{
                                 `${split.avg_grade > 0 ? '+' : ''}${split.avg_grade.toFixed(1)}%`
@@ -327,12 +369,12 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                                 {{ elevationUnit }}
                             </span>
                         </td>
-                        <td class="px-4 py-2.5 text-right">
+                        <td class="px-4 py-2.5 text-right whitespace-nowrap">
                             <span
                                 v-if="split.avg_hr !== null"
                                 class="text-rose-600 dark:text-rose-400"
                             >
-                                {{ Math.round(split.avg_hr) }}
+                                {{ Math.round(split.avg_hr) }} bpm
                             </span>
                             <span
                                 v-else
@@ -343,7 +385,7 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                         </td>
                         <td
                             v-if="splitsHavePower"
-                            class="px-4 py-2.5 text-right text-zinc-700 dark:text-zinc-300"
+                            class="px-4 py-2.5 text-right whitespace-nowrap text-zinc-700 dark:text-zinc-300"
                         >
                             {{
                                 split.avg_power !== null
@@ -353,7 +395,7 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                         </td>
                         <td
                             v-if="splitsHaveCadence"
-                            class="px-4 py-2.5 text-right text-zinc-700 dark:text-zinc-300"
+                            class="px-4 py-2.5 text-right whitespace-nowrap text-zinc-700 dark:text-zinc-300"
                         >
                             {{
                                 split.avg_cadence !== null
@@ -373,27 +415,50 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                     class="border-b border-zinc-200/80 bg-[#f7f7f5]/80 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:border-zinc-800/80 dark:bg-zinc-900/50 dark:text-zinc-400"
                 >
                     <tr>
-                        <th class="px-4 py-2.5 font-medium">Lap</th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th class="px-4 py-2.5 font-medium whitespace-nowrap">
+                            Lap
+                        </th>
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Distance
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">Time</th>
-                        <th class="px-4 py-2.5 text-right font-medium">
-                            {{ usesPace ? 'Pace' : 'Speed' }}
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
+                            Time
+                        </th>
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
+                            {{
+                                isSwimming
+                                    ? 'Pace /100m'
+                                    : usesPace
+                                      ? 'Pace'
+                                      : 'Speed'
+                            }}
                         </th>
                         <th
                             v-if="lapsHaveGap"
-                            class="px-4 py-2.5 text-right font-medium"
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
                         >
                             GAP
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Elev Gain
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Avg HR
                         </th>
-                        <th class="px-4 py-2.5 text-right font-medium">
+                        <th
+                            v-if="lapsHavePowerOrCadence"
+                            class="px-4 py-2.5 text-right font-medium whitespace-nowrap"
+                        >
                             Power / Cadence
                         </th>
                     </tr>
@@ -496,7 +561,8 @@ const activeSplitsTab = computed<'splits' | 'laps'>(() => {
                             }}
                         </td>
                         <td
-                            class="px-4 py-2.5 text-right text-zinc-700 dark:text-zinc-300"
+                            v-if="lapsHavePowerOrCadence"
+                            class="px-4 py-2.5 text-right whitespace-nowrap text-zinc-700 dark:text-zinc-300"
                         >
                             <template
                                 v-if="
