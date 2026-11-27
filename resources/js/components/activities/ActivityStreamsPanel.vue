@@ -2538,12 +2538,12 @@ const CORE_STREAM_KEYS = new Set([
     'cadence',
 ]);
 
-const showExtraStreams = ref<boolean>(false);
+const showExtraStreams = ref<boolean>(true);
 
 watch(
     () => props.activity.id,
     () => {
-        showExtraStreams.value = false;
+        showExtraStreams.value = true;
     },
 );
 
