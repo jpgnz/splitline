@@ -2,7 +2,6 @@
 import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import {
     ArrowLeft,
-    ArrowLeftRight,
     Check,
     CloudSun,
     Flag,
@@ -32,10 +31,7 @@ import {
 import { climbCategoryMeta, formatGrade, formatVam } from '@/lib/segments';
 import { useSports } from '@/lib/sports';
 import { distanceFromMeters, elevationFromMeters, useUnits } from '@/lib/units';
-import {
-    compare as activitiesCompare,
-    show as showActivity,
-} from '@/routes/activities';
+import { show as showActivity } from '@/routes/activities';
 import {
     destroy as destroySegment,
     index as segmentsIndex,
@@ -193,27 +189,6 @@ const hasAnyVam = computed<boolean>(() =>
 const hasAnyWeather = computed<boolean>(() =>
     props.efforts.some((e) => e.weather !== null),
 );
-
-const prActivityId = computed<number | null>(
-    () =>
-        props.summary.pr_activity_id ??
-        props.efforts.find((e) => e.is_display_pr)?.activity_id ??
-        null,
-);
-
-const canCompareEfforts = computed<boolean>(
-    () =>
-        prActivityId.value !== null &&
-        props.efforts.some(
-            (e) => !e.is_display_pr && e.activity_id !== prActivityId.value,
-        ),
-);
-
-function compareVsPrUrl(activityId: number): string {
-    return activitiesCompare.url({
-        query: { ids: `${prActivityId.value},${activityId}` },
-    });
-}
 
 function formatMetricSpeedOrPace(speedMps: number | null): string {
     if (props.segment.metric_mode === 'pace_100m') {
@@ -1056,12 +1031,6 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                             <th v-if="hasAnyWeather" class="px-4 py-2.5">
                                 Weather
                             </th>
-                            <th
-                                v-if="canCompareEfforts"
-                                class="px-4 py-2.5 text-right"
-                            >
-                                Compare
-                            </th>
                         </tr>
                     </thead>
                     <tbody
@@ -1196,29 +1165,6 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                 <span
                                     v-else
                                     class="font-mono text-xs text-zinc-400"
-                                >
-                                    —
-                                </span>
-                            </td>
-                            <td
-                                v-if="canCompareEfforts"
-                                class="px-4 py-2.5 text-right whitespace-nowrap"
-                            >
-                                <Link
-                                    v-if="
-                                        !effort.is_display_pr &&
-                                        effort.activity_id !== prActivityId
-                                    "
-                                    :href="compareVsPrUrl(effort.activity_id)"
-                                    title="Compare this effort's activity against Segment PR"
-                                    class="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/[0.06] px-2 py-1 font-mono text-[10px] font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
-                                >
-                                    <ArrowLeftRight class="size-3" />
-                                    Compare vs PR
-                                </Link>
-                                <span
-                                    v-else
-                                    class="font-mono text-xs text-zinc-400 dark:text-zinc-600"
                                 >
                                     —
                                 </span>
