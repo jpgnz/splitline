@@ -15,7 +15,8 @@ import {
     Trophy,
     X,
 } from '@lucide/vue';
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
+import { toast } from 'vue-sonner';
 import { formatNumber } from '@/lib/format';
 import { useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
@@ -214,6 +215,7 @@ const PERIOD_OPTIONS: Array<{ value: GoalPeriod; label: string }> = [
 ];
 
 const isFormOpen = ref<boolean>(false);
+const formSectionRef = ref<HTMLElement | null>(null);
 const editingGoalId = ref<number | null>(null);
 const archivedOpen = ref<boolean>(false);
 const busyGoalId = ref<number | null>(null);
@@ -389,6 +391,13 @@ function openEditForm(goal: GoalEvaluation): void {
     form.target_value = formatTargetForInput(goal.target_value, goal.metric);
     form.year = goal.year !== null ? String(goal.year) : '';
     isFormOpen.value = true;
+
+    void nextTick(() => {
+        formSectionRef.value?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'start',
+        });
+    });
 }
 
 function closeForm(): void {
@@ -441,10 +450,16 @@ function submitForm(): void {
                 : null,
     }));
 
+    const isEditing = editingGoalId.value !== null;
+
     const options = {
         preserveScroll: true,
         onSuccess: () => {
             closeForm();
+            toast.success(isEditing ? 'Goal updated.' : 'Goal created.');
+        },
+        onError: () => {
+            toast.error('Please review the goal details and try again.');
         },
     };
 
@@ -463,6 +478,7 @@ function toggleArchive(goal: GoalEvaluation): void {
     }
 
     confirmDeleteId.value = null;
+    const wasActive = goal.is_active;
 
     router.post(
         goalsArchive(goal.id),
@@ -471,6 +487,16 @@ function toggleArchive(goal: GoalEvaluation): void {
             preserveScroll: true,
             onStart: () => {
                 busyGoalId.value = goal.id;
+            },
+            onSuccess: () => {
+                toast.success(wasActive ? 'Goal archived.' : 'Goal restored.');
+            },
+            onError: () => {
+                toast.error(
+                    wasActive
+                        ? 'Unable to archive goal.'
+                        : 'Unable to restore goal.',
+                );
             },
             onFinish: () => {
                 busyGoalId.value = null;
@@ -503,6 +529,11 @@ function executeDelete(goalId: number): void {
             if (editingGoalId.value === goalId) {
                 closeForm();
             }
+
+            toast.success('Goal deleted.');
+        },
+        onError: () => {
+            toast.error('Unable to delete goal.');
         },
         onFinish: () => {
             busyGoalId.value = null;
@@ -644,7 +675,7 @@ function formatDaysRemaining(days: number): string {
                 <p
                     class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Planning &amp; Equipment
+                    Planning
                 </p>
                 <h1
                     class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
@@ -835,6 +866,7 @@ function formatDaysRemaining(days: number): string {
         <!-- Inline Collapsible Create / Edit Goal Form -->
         <section
             v-if="isFormOpen"
+            ref="formSectionRef"
             class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
         >
             <span
@@ -1157,7 +1189,7 @@ function formatDaysRemaining(days: number): string {
                                     >
                                         <button
                                             type="button"
-                                            class="inline-flex h-7 cursor-pointer items-center justify-center rounded-md border border-zinc-200 bg-white px-2 font-mono text-[10px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                            class="inline-flex h-7 cursor-pointer items-center justify-center rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                                             @click="confirmDeleteId = null"
                                         >
                                             Cancel
@@ -1165,12 +1197,12 @@ function formatDaysRemaining(days: number): string {
                                         <button
                                             type="button"
                                             :disabled="busyGoalId === goal.id"
-                                            class="inline-flex h-7 cursor-pointer items-center justify-center rounded-md bg-rose-500/15 px-2 font-mono text-[10px] font-medium text-rose-600 transition-colors hover:bg-rose-500/25 disabled:opacity-50 dark:text-rose-400"
+                                            class="inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-md bg-rose-500/15 px-2.5 font-mono text-[11px] font-medium text-rose-600 transition-colors hover:bg-rose-500/25 disabled:opacity-50 dark:text-rose-400"
                                             aria-label="Confirm delete goal"
                                             title="Click to confirm delete"
                                             @click="requestDelete(goal.id)"
                                         >
-                                            Delete?
+                                            Confirm Delete
                                         </button>
                                     </template>
                                     <template v-else>
@@ -1421,7 +1453,7 @@ function formatDaysRemaining(days: number): string {
                         <template v-if="confirmDeleteId === goal.id">
                             <button
                                 type="button"
-                                class="inline-flex cursor-pointer items-center rounded-md border border-zinc-200 bg-white px-2.5 py-1 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                class="inline-flex h-7 cursor-pointer items-center justify-center rounded-md border border-zinc-200 bg-white px-2.5 font-mono text-[11px] font-medium text-zinc-600 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
                                 @click="confirmDeleteId = null"
                             >
                                 Cancel
@@ -1429,11 +1461,10 @@ function formatDaysRemaining(days: number): string {
                             <button
                                 type="button"
                                 :disabled="busyGoalId === goal.id"
-                                class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-transparent bg-rose-500/15 px-2.5 py-1 text-xs font-medium text-rose-600 transition-colors hover:bg-rose-500/25 disabled:opacity-50 dark:text-rose-400"
+                                class="inline-flex h-7 cursor-pointer items-center justify-center gap-1 rounded-md bg-rose-500/15 px-2.5 font-mono text-[11px] font-medium text-rose-600 transition-colors hover:bg-rose-500/25 disabled:opacity-50 dark:text-rose-400"
                                 @click="requestDelete(goal.id)"
                             >
-                                <Trash2 class="size-3.5" />
-                                <span>Confirm Delete</span>
+                                Confirm Delete
                             </button>
                         </template>
                         <template v-else>

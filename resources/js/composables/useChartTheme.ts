@@ -63,7 +63,9 @@ export function useChartTheme(): UseChartThemeReturn {
     const textColor = computed<string>(() =>
         isDark.value ? '#e4e4e7' : '#27272a',
     );
-    const mutedColor = computed<string>(() => '#71717a');
+    const mutedColor = computed<string>(() =>
+        isDark.value ? '#a1a1aa' : '#71717a',
+    );
     const gridLineColor = computed<string>(() =>
         isDark.value ? '#27272a' : '#e4e4e7',
     );

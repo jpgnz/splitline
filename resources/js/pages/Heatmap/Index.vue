@@ -197,7 +197,7 @@ const ORDER_OPTIONS: Array<{
     {
         value: 'activity_type',
         label: 'Activity type',
-        title: 'Group layers by activity type (click a sport in the legend to bring it to the front)',
+        title: 'Group layers by activity type',
     },
 ];
 
@@ -209,7 +209,6 @@ const inspectedLatLng = ref<[number, number] | null>(null);
 const hoveredTrackId = ref<number | null>(null);
 const isQueueingSync = ref<boolean>(false);
 const activeOrder = ref<HeatmapOrder>(props.order ?? 'newest_on_top');
-const prioritySportKey = ref<string | null>(null);
 const showExplorerTiles = ref<boolean>(false);
 const explorerSummary = ref<ExplorerSummary | null>(null);
 const isLoadingExplorer = ref<boolean>(false);
@@ -306,16 +305,6 @@ const orderedTracksForRender = computed<DecodedHeatmapTrack[]>(() => {
     }
 
     const sortedKeys = [...groups.keys()].sort((a, b) => {
-        if (prioritySportKey.value !== null) {
-            if (a === prioritySportKey.value) {
-                return 1;
-            }
-
-            if (b === prioritySportKey.value) {
-                return -1;
-            }
-        }
-
         const countDiff =
             (groups.get(b)?.length ?? 0) - (groups.get(a)?.length ?? 0);
 
@@ -338,19 +327,6 @@ const orderedTracksForRender = computed<DecodedHeatmapTrack[]>(() => {
     }
 
     return ordered;
-});
-
-const topRenderedSportKey = computed<string | null>(() => {
-    if (
-        activeOrder.value !== 'activity_type' ||
-        orderedTracksForRender.value.length === 0
-    ) {
-        return null;
-    }
-
-    return resolveTrackSportKey(
-        orderedTracksForRender.value[orderedTracksForRender.value.length - 1],
-    );
 });
 
 const indexedTracks = computed<IndexedTrack[]>(() =>
@@ -411,28 +387,6 @@ function trackColor(track: DecodedHeatmapTrack): string {
 function sportLabel(track: DecodedHeatmapTrack): string {
     return sportShortLabel(resolveTrackSportKey(track));
 }
-
-const legendItems = computed<
-    Array<{ key: string; label: string; color: string }>
->(() => {
-    const items: Array<{ key: string; label: string; color: string }> = [];
-    const seen = new Set<string>();
-
-    for (const track of decodedTracks.value) {
-        const key = resolveTrackSportKey(track);
-
-        if (!seen.has(key)) {
-            seen.add(key);
-            items.push({
-                key,
-                label: sportShortLabel(key),
-                color: trackColor(track),
-            });
-        }
-    }
-
-    return items;
-});
 
 function formatTrackDate(dateStr: string): string {
     const short = formatShortDate(dateStr);
@@ -580,19 +534,7 @@ function selectOrder(order: HeatmapOrder): void {
 
     activeOrder.value = order;
 
-    if (order !== 'activity_type') {
-        prioritySportKey.value = null;
-    }
-
     syncOrderUrlParam();
-}
-
-function bringSportToFront(sportKey: string): void {
-    if (activeOrder.value !== 'activity_type') {
-        return;
-    }
-
-    prioritySportKey.value = sportKey;
 }
 
 function resetFilters(): void {
@@ -1854,105 +1796,6 @@ onBeforeUnmount(() => {
                     <Crosshair class="size-3.5" />
                     <span>Fit All</span>
                 </button>
-
-                <!-- Bottom-Left Sport Legend -->
-                <div
-                    v-if="legendItems.length > 0"
-                    :class="[
-                        'absolute bottom-3 left-3 z-[500] flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1.5 font-mono text-[11px] text-zinc-600 backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-300',
-                        activeOrder === 'activity_type' &&
-                        legendItems.length > 1
-                            ? 'pointer-events-auto'
-                            : 'pointer-events-none',
-                    ]"
-                >
-                    <template
-                        v-if="
-                            activeOrder === 'activity_type' &&
-                            legendItems.length > 1
-                        "
-                    >
-                        <button
-                            v-for="item in legendItems"
-                            :key="item.key"
-                            type="button"
-                            :title="`Bring ${item.label} to front`"
-                            class="inline-flex cursor-pointer items-center gap-1.5 rounded-md px-1.5 py-0.5 transition-colors"
-                            :class="
-                                topRenderedSportKey === item.key
-                                    ? 'bg-zinc-900/8 font-semibold text-zinc-950 dark:bg-zinc-100/12 dark:text-white'
-                                    : 'hover:bg-zinc-100 hover:text-zinc-950 dark:hover:bg-zinc-800/70 dark:hover:text-white'
-                            "
-                            @click="bringSportToFront(item.key)"
-                        >
-                            <span
-                                class="size-2 rounded-full"
-                                :style="{ backgroundColor: item.color }"
-                            />
-                            <span>{{ item.label }}</span>
-                            <span
-                                v-if="topRenderedSportKey === item.key"
-                                class="text-[9px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
-                            >
-                                top
-                            </span>
-                        </button>
-                    </template>
-                    <template v-else>
-                        <span
-                            v-for="item in legendItems"
-                            :key="item.key"
-                            class="inline-flex items-center gap-1.5 px-0.5"
-                        >
-                            <span
-                                class="size-2 rounded-full"
-                                :style="{ backgroundColor: item.color }"
-                            />
-                            <span>{{ item.label }}</span>
-                        </span>
-                    </template>
-                    <template
-                        v-if="
-                            showExplorerTiles &&
-                            explorerSummary &&
-                            explorerSummary.total_tiles > 0
-                        "
-                    >
-                        <span
-                            class="mx-0.5 h-3 w-px bg-zinc-200 dark:bg-zinc-700"
-                            aria-hidden="true"
-                        />
-                        <span class="inline-flex items-center gap-1.5 px-0.5">
-                            <span
-                                class="size-2 rounded-[2px] border border-emerald-500 bg-emerald-500/25"
-                            />
-                            <span>z{{ explorerSummary.zoom }} Tile</span>
-                        </span>
-                        <span
-                            v-if="explorerSummary.max_cluster.size > 0"
-                            class="inline-flex items-center gap-1.5 px-0.5"
-                        >
-                            <span
-                                class="size-2 rounded-[2px] border border-sky-500 bg-sky-500/30"
-                            />
-                            <span>Cluster</span>
-                        </span>
-                        <span
-                            v-if="explorerSummary.max_square.size > 0"
-                            class="inline-flex items-center gap-1.5 px-0.5"
-                        >
-                            <span
-                                class="size-2 rounded-[2px] border border-dashed border-amber-500"
-                            />
-                            <span>
-                                {{ explorerSummary.max_square.size }}×{{
-                                    explorerSummary.max_square.size
-                                }}
-                                Square
-                            </span>
-                        </span>
-                    </template>
-                </div>
 
                 <!-- Floating Corridor Inspector Panel -->
                 <aside

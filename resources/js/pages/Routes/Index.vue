@@ -115,7 +115,7 @@ const summaryKpis = computed<
     {
         label: 'Repeated Distance',
         value: formatDistanceCompact(props.summary.total_distance_meters, 1),
-        sub: 'across matched loops',
+        sub: 'across matched routes',
         accentClass: 'bg-indigo-500',
     },
 ]);
@@ -284,7 +284,7 @@ function formatDateWithYear(dateStr: string | null): string {
         <Head title="Matched Routes" />
 
         <!-- Page Header -->
-        <div
+        <header
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div>
@@ -315,7 +315,7 @@ function formatDateWithYear(dateStr: string | null): string {
                         {{
                             isScanning
                                 ? 'Scanning...'
-                                : `Scan Activities (${summary.unfingerprinted_count})`
+                                : `Scan ${summary.unfingerprinted_count} ${summary.unfingerprinted_count === 1 ? 'Activity' : 'Activities'}`
                         }}
                     </span>
                 </button>
@@ -330,14 +330,14 @@ function formatDateWithYear(dateStr: string | null): string {
                         type="search"
                         placeholder="Search route or location..."
                         aria-label="Search matched routes"
-                        class="w-full rounded-lg border border-zinc-200/90 bg-white py-2 pr-8 pl-8.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-400 focus:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus:border-zinc-600"
+                        class="w-full rounded-lg border border-zinc-200/90 bg-white py-2 pr-8 pl-8.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus-visible:border-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-900/15 focus-visible:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:placeholder:text-zinc-500 dark:focus-visible:border-zinc-600 dark:focus-visible:ring-zinc-100/15"
                         @input="onSearchInput"
                     />
                     <button
                         v-if="searchInput"
                         type="button"
                         aria-label="Clear search"
-                        class="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-zinc-400 transition-colors hover:text-zinc-700 dark:hover:text-zinc-200"
+                        class="absolute top-1/2 right-2 -translate-y-1/2 cursor-pointer rounded p-0.5 text-zinc-400 transition-colors hover:text-zinc-700 focus-visible:ring-2 focus-visible:ring-zinc-900/20 focus-visible:outline-none dark:hover:text-zinc-200 dark:focus-visible:ring-zinc-100/20"
                         @click="clearSearch"
                     >
                         <X class="size-3.5" />
@@ -348,7 +348,7 @@ function formatDateWithYear(dateStr: string | null): string {
                 <select
                     :value="filters.sort"
                     aria-label="Sort matched routes"
-                    class="cursor-pointer rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs text-zinc-700 focus:border-zinc-400 focus:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-200 dark:focus:border-zinc-600"
+                    class="cursor-pointer rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs text-zinc-700 focus-visible:border-zinc-400 focus-visible:ring-2 focus-visible:ring-zinc-900/15 focus-visible:outline-none dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-200 dark:focus-visible:border-zinc-600 dark:focus-visible:ring-zinc-100/15"
                     @change="onSortChange"
                 >
                     <option
@@ -360,7 +360,7 @@ function formatDateWithYear(dateStr: string | null): string {
                     </option>
                 </select>
             </div>
-        </div>
+        </header>
 
         <!-- KPI Strip -->
         <section class="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -378,7 +378,7 @@ function formatDateWithYear(dateStr: string | null): string {
                     </p>
                 </div>
                 <p
-                    class="mt-2 font-mono text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                    class="mt-2 font-mono text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
                 >
                     {{ kpi.value }}
                 </p>
@@ -451,15 +451,22 @@ function formatDateWithYear(dateStr: string | null): string {
                             class="pointer-events-none absolute top-2 left-2 flex items-center gap-1.5"
                         >
                             <span
-                                :class="[
-                                    'rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium backdrop-blur-xs',
-                                    sportBadgeClasses(
-                                        getSportMeta(route.sport_key)
-                                            .color_token,
-                                    ),
-                                ]"
+                                class="inline-flex rounded-md bg-white/90 backdrop-blur-xs dark:bg-zinc-900/90"
                             >
-                                {{ getSportMeta(route.sport_key).short_label }}
+                                <span
+                                    :class="[
+                                        'rounded-md border px-2 py-0.5 font-mono text-[10px] font-medium',
+                                        sportBadgeClasses(
+                                            getSportMeta(route.sport_key)
+                                                .color_token,
+                                        ),
+                                    ]"
+                                >
+                                    {{
+                                        getSportMeta(route.sport_key)
+                                            .short_label
+                                    }}
+                                </span>
                             </span>
                             <span
                                 class="inline-flex items-center gap-1 rounded-md border border-zinc-200/80 bg-white/90 px-1.5 py-0.5 font-mono text-[10px] text-zinc-600 backdrop-blur-xs dark:border-zinc-700/80 dark:bg-zinc-900/90 dark:text-zinc-300"
@@ -471,7 +478,7 @@ function formatDateWithYear(dateStr: string | null): string {
 
                         <div class="pointer-events-none absolute top-2 right-2">
                             <span
-                                class="rounded-md bg-zinc-900/85 px-2 py-0.5 font-mono text-[11px] font-semibold text-white backdrop-blur-xs dark:bg-zinc-100/90 dark:text-zinc-950"
+                                class="rounded-md bg-zinc-900/90 px-2 py-0.5 font-mono text-[11px] font-semibold text-white tabular-nums backdrop-blur-xs dark:bg-zinc-100/95 dark:text-zinc-950"
                             >
                                 {{ route.activity_count }}×
                             </span>
@@ -523,7 +530,7 @@ function formatDateWithYear(dateStr: string | null): string {
 
                     <!-- PR / Median / Latest Strip -->
                     <div
-                        class="grid grid-cols-3 gap-2 rounded-lg border border-zinc-200/70 bg-zinc-50/70 p-2.5 dark:border-zinc-800/70 dark:bg-zinc-900/40"
+                        class="grid grid-cols-3 gap-2 rounded-lg border border-zinc-200/70 bg-[#f7f7f5] p-2.5 tabular-nums dark:border-zinc-800/70 dark:bg-zinc-900/50"
                     >
                         <div>
                             <p
@@ -555,7 +562,7 @@ function formatDateWithYear(dateStr: string | null): string {
 
                         <div>
                             <p
-                                class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                                class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Median
                             </p>
@@ -582,7 +589,7 @@ function formatDateWithYear(dateStr: string | null): string {
 
                         <div>
                             <p
-                                class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                                class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Latest
                             </p>
@@ -639,7 +646,7 @@ function formatDateWithYear(dateStr: string | null): string {
                         Last: {{ formatDateWithYear(route.last_activity_at) }}
                     </span>
                     <span
-                        class="text-zinc-400 transition-colors group-hover:text-zinc-900 dark:text-zinc-500 dark:group-hover:text-zinc-100"
+                        class="text-zinc-500 transition-colors group-hover:text-zinc-900 dark:text-zinc-400 dark:group-hover:text-zinc-100"
                     >
                         View history →
                     </span>
@@ -668,8 +675,13 @@ function formatDateWithYear(dateStr: string | null): string {
                     repeated routes.
                 </template>
                 <template v-else-if="summary.unfingerprinted_count > 0">
-                    You have {{ summary.unfingerprinted_count }} outdoor
-                    streamed activity(ies) ready to scan for repeated routes.
+                    You have {{ summary.unfingerprinted_count }} outdoor GNSS
+                    {{
+                        summary.unfingerprinted_count === 1
+                            ? 'activity'
+                            : 'activities'
+                    }}
+                    ready to scan for repeated routes.
                 </template>
                 <template v-else>
                     Routes appear automatically once you complete the same
@@ -687,7 +699,12 @@ function formatDateWithYear(dateStr: string | null): string {
                     <RefreshCw
                         :class="['size-3.5', isScanning && 'animate-spin']"
                     />
-                    Scan {{ summary.unfingerprinted_count }} Activities
+                    Scan {{ summary.unfingerprinted_count }}
+                    {{
+                        summary.unfingerprinted_count === 1
+                            ? 'Activity'
+                            : 'Activities'
+                    }}
                 </button>
                 <button
                     v-if="filters.search || filters.sport !== 'all'"

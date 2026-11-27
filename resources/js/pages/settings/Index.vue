@@ -11,10 +11,15 @@ import {
     ExternalLink,
     HeartPulse,
     History,
+    Info,
     Layers,
     MapPin,
     Mountain,
+    Palette,
     RefreshCw,
+    Ruler,
+    Server,
+    SlidersHorizontal,
     Sparkles,
     Tag,
 } from '@lucide/vue';
@@ -172,7 +177,24 @@ const BACKFILL_RANGE_OPTIONS: Array<{
 ];
 
 const selectedBackfillRange = ref<BackfillRange>('1y');
+const confirmingBackfillRange = ref<BackfillRange | null>(null);
 const isBackfillPosting = ref(false);
+
+const selectedBackfillRangeLabel = computed<string>(
+    () =>
+        BACKFILL_RANGE_OPTIONS.find(
+            (option) => option.value === selectedBackfillRange.value,
+        )?.label ?? selectedBackfillRange.value,
+);
+
+function selectBackfillRange(range: BackfillRange): void {
+    selectedBackfillRange.value = range;
+    confirmingBackfillRange.value = null;
+}
+
+function isHeavyBackfillRange(range: BackfillRange): boolean {
+    return range === '3y' || range === 'all';
+}
 
 interface LiveSyncSnapshot {
     id: number | null;
@@ -370,10 +392,26 @@ onUnmounted(() => {
     stopBackfillPolling();
 });
 
+function requestBackfill(): void {
+    if (isAnySyncRunning.value || !props.provider.configured) {
+        return;
+    }
+
+    if (isHeavyBackfillRange(selectedBackfillRange.value)) {
+        confirmingBackfillRange.value = selectedBackfillRange.value;
+
+        return;
+    }
+
+    triggerBackfill(selectedBackfillRange.value);
+}
+
 function triggerBackfill(range: BackfillRange | 'resume'): void {
     if (isAnySyncRunning.value || !props.provider.configured) {
         return;
     }
+
+    confirmingBackfillRange.value = null;
 
     router.post(
         syncBackfill.url(),
@@ -534,18 +572,26 @@ const sportsForm = useForm<SportsConfig>(
     cloneSportsConfig(props.sports_settings.config),
 );
 
+function syncSportsFormFromProps(config: SportsConfig): void {
+    const cloned = cloneSportsConfig(config);
+    sportsForm.mode = cloned.mode;
+    sportsForm.pin_sub_disciplines = cloned.pin_sub_disciplines;
+    sportsForm.order = cloned.order;
+    sportsForm.families = cloned.families;
+    sportsForm.secondary = cloned.secondary;
+    sportsForm.rollups = cloned.rollups;
+    sportsForm.best_efforts = cloned.best_efforts;
+    sportsForm.defaults(cloned);
+}
+
 watch(
     () => props.sports_settings.config,
     (nextConfig) => {
-        const cloned = cloneSportsConfig(nextConfig);
-        sportsForm.mode = cloned.mode;
-        sportsForm.pin_sub_disciplines = cloned.pin_sub_disciplines;
-        sportsForm.order = cloned.order;
-        sportsForm.families = cloned.families;
-        sportsForm.secondary = cloned.secondary;
-        sportsForm.rollups = cloned.rollups;
-        sportsForm.best_efforts = cloned.best_efforts;
-        sportsForm.defaults(cloned);
+        if (sportsForm.isDirty) {
+            return;
+        }
+
+        syncSportsFormFromProps(nextConfig);
     },
     { deep: true },
 );
@@ -618,6 +664,19 @@ function setFamilyMode(family: 'running' | 'cycling', mode: FamilyMode): void {
     }
 }
 
+function isLastRemainingDiscipline(
+    family: 'running' | 'cycling',
+    disciplineKey: string,
+): boolean {
+    const familyConfig = sportsForm.families[family];
+
+    return (
+        familyConfig.mode === 'split' &&
+        familyConfig.disciplines.length <= 1 &&
+        familyConfig.disciplines.includes(disciplineKey)
+    );
+}
+
 function toggleFamilyDiscipline(
     family: 'running' | 'cycling',
     disciplineKey: string,
@@ -630,7 +689,7 @@ function toggleFamilyDiscipline(
     const exists = list.includes(disciplineKey);
 
     if (exists) {
-        if (sportsForm.families[family].mode === 'split' && list.length <= 1) {
+        if (isLastRemainingDiscipline(family, disciplineKey)) {
             return;
         }
 
@@ -698,6 +757,8 @@ function isOrderSportEnabled(sportKey: string): boolean {
 }
 
 function enableDiscoveryHint(hint: DiscoveryHint): void {
+    const hadUnsavedEdits = sportsForm.isDirty;
+
     sportsForm.mode = 'custom';
 
     const runKeys = RUNNING_DISCIPLINES.map((item) => item.key);
@@ -741,6 +802,12 @@ function enableDiscoveryHint(hint: DiscoveryHint): void {
         sportsForm.secondary = [...sportsForm.secondary, hint.key];
     }
 
+    if (hadUnsavedEdits) {
+        toast.info('Enabled in draft — click Save Sports Settings to apply.');
+
+        return;
+    }
+
     submitSports(`Enabled ${hint.label} in custom sports configuration.`);
 }
 
@@ -748,6 +815,7 @@ function submitSports(successMessage = 'Sports configuration updated.'): void {
     sportsForm.patch(updateSports.url(), {
         preserveScroll: true,
         onSuccess: () => {
+            syncSportsFormFromProps(props.sports_settings.config);
             toast.success(successMessage);
         },
         onError: () => {
@@ -772,12 +840,20 @@ const healthSourcesForm = useForm<{ sources: Record<string, string> }>({
     sources: buildHealthSourcesMap(props.health_sources),
 });
 
+function syncHealthSourcesFormFromProps(payload: HealthSourcesPayload): void {
+    const nextSources = buildHealthSourcesMap(payload);
+    healthSourcesForm.sources = nextSources;
+    healthSourcesForm.defaults({ sources: { ...nextSources } });
+}
+
 watch(
     () => props.health_sources,
     (nextPayload) => {
-        const nextSources = buildHealthSourcesMap(nextPayload);
-        healthSourcesForm.sources = nextSources;
-        healthSourcesForm.defaults({ sources: { ...nextSources } });
+        if (healthSourcesForm.isDirty) {
+            return;
+        }
+
+        syncHealthSourcesFormFromProps(nextPayload);
     },
     { deep: true },
 );
@@ -786,6 +862,7 @@ function submitHealthSources(): void {
     healthSourcesForm.patch(updateHealthSources.url(), {
         preserveScroll: true,
         onSuccess: () => {
+            syncHealthSourcesFormFromProps(props.health_sources);
             toast.success('Health data source preferences updated.');
         },
         onError: () => {
@@ -803,6 +880,10 @@ const segmentsForm = useForm<{ min_efforts: number }>({
 watch(
     () => props.segments_settings.min_efforts,
     (nextMinEfforts) => {
+        if (segmentsForm.isDirty) {
+            return;
+        }
+
         segmentsForm.min_efforts = nextMinEfforts;
         segmentsForm.defaults({ min_efforts: nextMinEfforts });
     },
@@ -812,7 +893,9 @@ function submitSegmentsSettings(): void {
     segmentsForm.patch(updateSegments.url(), {
         preserveScroll: true,
         onSuccess: () => {
-            const count = segmentsForm.min_efforts;
+            const count = props.segments_settings.min_efforts;
+            segmentsForm.min_efforts = count;
+            segmentsForm.defaults({ min_efforts: count });
             toast.success(
                 `Auto-detected climb threshold set to ${count} ${count === 1 ? 'effort' : 'efforts'}.`,
             );
@@ -829,26 +912,47 @@ function submitSegmentsSettings(): void {
         <Head title="Settings" />
 
         <!-- Page Header -->
-        <div class="flex flex-wrap items-end justify-between gap-4">
-            <h1
-                class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
-            >
-                Settings
-            </h1>
-        </div>
+        <header class="flex flex-wrap items-end justify-between gap-4">
+            <div>
+                <p
+                    class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
+                >
+                    Workspace Configuration
+                </p>
+                <h1
+                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                >
+                    Settings
+                </h1>
+                <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    Manage appearance, measurement units, sport disciplines,
+                    data sources, backups, and background syncing.
+                </p>
+            </div>
+        </header>
 
         <div class="max-w-4xl space-y-6">
             <!-- 1. Appearance -->
             <section
                 class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
-                <h2
-                    class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                >
-                    Appearance
-                </h2>
+                <div class="space-y-1">
+                    <div class="flex items-center gap-2">
+                        <Palette
+                            class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                        />
+                        <h2
+                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        >
+                            Appearance
+                        </h2>
+                    </div>
+                    <p class="text-sm text-zinc-500 dark:text-zinc-400">
+                        Choose light, dark, or match your system color theme.
+                    </p>
+                </div>
 
-                <div class="mt-4">
+                <div class="mt-5">
                     <AppearanceTabs />
                 </div>
             </section>
@@ -859,11 +963,16 @@ function submitSegmentsSettings(): void {
             >
                 <div class="flex flex-wrap items-start justify-between gap-3">
                     <div class="space-y-1">
-                        <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                        >
-                            Measurement Units
-                        </h2>
+                        <div class="flex items-center gap-2">
+                            <Ruler
+                                class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                            />
+                            <h2
+                                class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            >
+                                Measurement Units
+                            </h2>
+                        </div>
                         <p class="text-sm text-zinc-500 dark:text-zinc-400">
                             Applied immediately across dashboards, splits,
                             charts, weather, and equipment mileage.
@@ -934,11 +1043,16 @@ function submitSegmentsSettings(): void {
                         class="flex flex-wrap items-start justify-between gap-4"
                     >
                         <div class="space-y-1">
-                            <h2
-                                class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                            >
-                                Sports &amp; Disciplines
-                            </h2>
+                            <div class="flex items-center gap-2">
+                                <SlidersHorizontal
+                                    class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                                />
+                                <h2
+                                    class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                >
+                                    Sports &amp; Disciplines
+                                </h2>
+                            </div>
                             <p class="text-sm text-zinc-500 dark:text-zinc-400">
                                 Choose which sports appear in your sidebar, how
                                 sub-disciplines roll up, and which efforts count
@@ -1015,7 +1129,7 @@ function submitSegmentsSettings(): void {
                                 <button
                                     type="button"
                                     :disabled="sportsForm.processing"
-                                    class="cursor-pointer rounded-md bg-emerald-600 px-2 py-0.5 font-mono text-[11px] font-medium text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                    class="cursor-pointer rounded-md bg-zinc-900 px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                                     @click="enableDiscoveryHint(hint)"
                                 >
                                     Enable?
@@ -1224,13 +1338,30 @@ function submitSegmentsSettings(): void {
                                 <label
                                     v-for="disc in RUNNING_DISCIPLINES"
                                     :key="disc.key"
+                                    :title="
+                                        isLastRemainingDiscipline(
+                                            'running',
+                                            disc.key,
+                                        )
+                                            ? 'At least one discipline must remain enabled'
+                                            : undefined
+                                    "
                                     class="flex items-center justify-between rounded-lg border border-zinc-200/70 px-3 py-2 text-xs transition-colors dark:border-zinc-800/70"
                                     :class="[
                                         isCustomMode &&
                                         sportsForm.families.running.mode ===
-                                            'split'
+                                            'split' &&
+                                        !isLastRemainingDiscipline(
+                                            'running',
+                                            disc.key,
+                                        )
                                             ? 'cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900/50'
-                                            : 'cursor-not-allowed opacity-60',
+                                            : isLastRemainingDiscipline(
+                                                    'running',
+                                                    disc.key,
+                                                ) && isCustomMode
+                                              ? 'cursor-not-allowed opacity-75'
+                                              : 'cursor-not-allowed opacity-60',
                                     ]"
                                 >
                                     <span class="flex items-center gap-2">
@@ -1244,9 +1375,21 @@ function submitSegmentsSettings(): void {
                                             :disabled="
                                                 !isCustomMode ||
                                                 sportsForm.families.running
-                                                    .mode !== 'split'
+                                                    .mode !== 'split' ||
+                                                isLastRemainingDiscipline(
+                                                    'running',
+                                                    disc.key,
+                                                )
                                             "
-                                            class="size-3.5 rounded border-zinc-300 accent-emerald-600 dark:border-zinc-700"
+                                            :title="
+                                                isLastRemainingDiscipline(
+                                                    'running',
+                                                    disc.key,
+                                                )
+                                                    ? 'At least one discipline must remain enabled'
+                                                    : undefined
+                                            "
+                                            class="size-4 rounded border-zinc-300 accent-emerald-600 disabled:cursor-not-allowed dark:border-zinc-700"
                                             @change="
                                                 toggleFamilyDiscipline(
                                                     'running',
@@ -1330,13 +1473,30 @@ function submitSegmentsSettings(): void {
                                 <label
                                     v-for="disc in CYCLING_DISCIPLINES"
                                     :key="disc.key"
+                                    :title="
+                                        isLastRemainingDiscipline(
+                                            'cycling',
+                                            disc.key,
+                                        )
+                                            ? 'At least one discipline must remain enabled'
+                                            : undefined
+                                    "
                                     class="flex items-center justify-between rounded-lg border border-zinc-200/70 px-3 py-2 text-xs transition-colors dark:border-zinc-800/70"
                                     :class="[
                                         isCustomMode &&
                                         sportsForm.families.cycling.mode ===
-                                            'split'
+                                            'split' &&
+                                        !isLastRemainingDiscipline(
+                                            'cycling',
+                                            disc.key,
+                                        )
                                             ? 'cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-900/50'
-                                            : 'cursor-not-allowed opacity-60',
+                                            : isLastRemainingDiscipline(
+                                                    'cycling',
+                                                    disc.key,
+                                                ) && isCustomMode
+                                              ? 'cursor-not-allowed opacity-75'
+                                              : 'cursor-not-allowed opacity-60',
                                     ]"
                                 >
                                     <span class="flex items-center gap-2">
@@ -1350,9 +1510,21 @@ function submitSegmentsSettings(): void {
                                             :disabled="
                                                 !isCustomMode ||
                                                 sportsForm.families.cycling
-                                                    .mode !== 'split'
+                                                    .mode !== 'split' ||
+                                                isLastRemainingDiscipline(
+                                                    'cycling',
+                                                    disc.key,
+                                                )
                                             "
-                                            class="size-3.5 rounded border-zinc-300 accent-emerald-600 dark:border-zinc-700"
+                                            :title="
+                                                isLastRemainingDiscipline(
+                                                    'cycling',
+                                                    disc.key,
+                                                )
+                                                    ? 'At least one discipline must remain enabled'
+                                                    : undefined
+                                            "
+                                            class="size-4 rounded border-zinc-300 accent-emerald-600 disabled:cursor-not-allowed dark:border-zinc-700"
                                             @change="
                                                 toggleFamilyDiscipline(
                                                     'cycling',
@@ -1428,7 +1600,7 @@ function submitSegmentsSettings(): void {
                                             )
                                         "
                                         :disabled="!isCustomMode"
-                                        class="size-3.5 rounded border-zinc-300 accent-emerald-600 dark:border-zinc-700"
+                                        class="size-4 rounded border-zinc-300 accent-emerald-600 dark:border-zinc-700"
                                         @change="
                                             toggleSecondarySport(sport.key)
                                         "
@@ -1503,7 +1675,7 @@ function submitSegmentsSettings(): void {
                                         v-model="
                                             sportsForm.rollups.trail_running
                                         "
-                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
                                     >
                                         <option value="own">
                                             Keep in Trail Running
@@ -1524,7 +1696,7 @@ function submitSegmentsSettings(): void {
                                         v-model="
                                             sportsForm.rollups.track_running
                                         "
-                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
                                     >
                                         <option value="road_running">
                                             Roll into Road Running
@@ -1545,7 +1717,7 @@ function submitSegmentsSettings(): void {
                                         v-model="
                                             sportsForm.rollups.gravel_cycling
                                         "
-                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
                                     >
                                         <option value="own">
                                             Keep in Gravel / CX
@@ -1569,7 +1741,7 @@ function submitSegmentsSettings(): void {
                                         v-model="
                                             sportsForm.rollups.indoor_cycling
                                         "
-                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
                                     >
                                         <option value="road_cycling">
                                             Roll into Road Cycling
@@ -1590,7 +1762,7 @@ function submitSegmentsSettings(): void {
                                         v-model="
                                             sportsForm.rollups.ebike_cycling
                                         "
-                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                        class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
                                     >
                                         <option value="own">
                                             Keep in E-Bike
@@ -1645,7 +1817,7 @@ function submitSegmentsSettings(): void {
                                                         item.value,
                                                     )
                                                 "
-                                                class="size-3.5 cursor-pointer rounded border-zinc-300 accent-emerald-600 dark:border-zinc-700"
+                                                class="size-4 cursor-pointer rounded border-zinc-300 accent-emerald-600 dark:border-zinc-700"
                                                 @change="
                                                     toggleCyclingBestEffortDiscipline(
                                                         item.value,
@@ -1688,8 +1860,10 @@ function submitSegmentsSettings(): void {
                         </span>
                         <button
                             type="submit"
-                            :disabled="sportsForm.processing"
-                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                            :disabled="
+                                sportsForm.processing || !sportsForm.isDirty
+                            "
+                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                         >
                             {{
                                 sportsForm.processing
@@ -1802,8 +1976,9 @@ function submitSegmentsSettings(): void {
                                     v-model="
                                         healthSourcesForm.sources[domain.key]
                                     "
+                                    :disabled="domain.providers.length === 0"
                                     :aria-label="`${domain.label} primary source`"
-                                    class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100"
+                                    class="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-emerald-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-400 dark:border-zinc-700 dark:bg-[#141417] dark:text-zinc-100 dark:disabled:bg-zinc-900/70 dark:disabled:text-zinc-500"
                                 >
                                     <option value="auto">
                                         Auto{{
@@ -1820,6 +1995,12 @@ function submitSegmentsSettings(): void {
                                         {{ source.label }}
                                     </option>
                                 </select>
+                                <p
+                                    v-if="domain.providers.length === 0"
+                                    class="mt-1 text-[11px] text-zinc-400 dark:text-zinc-500"
+                                >
+                                    Sync data to choose a provider
+                                </p>
                             </div>
                         </div>
                     </div>
@@ -1850,8 +2031,11 @@ function submitSegmentsSettings(): void {
                         </span>
                         <button
                             type="submit"
-                            :disabled="healthSourcesForm.processing"
-                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                            :disabled="
+                                healthSourcesForm.processing ||
+                                !healthSourcesForm.isDirty
+                            "
+                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                         >
                             {{
                                 healthSourcesForm.processing
@@ -1983,8 +2167,10 @@ function submitSegmentsSettings(): void {
                         </span>
                         <button
                             type="submit"
-                            :disabled="segmentsForm.processing"
-                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                            :disabled="
+                                segmentsForm.processing || !segmentsForm.isDirty
+                            "
+                            class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
                         >
                             {{
                                 segmentsForm.processing
@@ -2007,13 +2193,18 @@ function submitSegmentsSettings(): void {
                 class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
                 <div class="space-y-1">
-                    <h2
-                        class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                    >
-                        Data Provider &amp; Environment
-                    </h2>
+                    <div class="flex items-center gap-2">
+                        <Server
+                            class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                        />
+                        <h2
+                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        >
+                            Data Provider &amp; Environment
+                        </h2>
+                    </div>
                     <p class="text-sm text-zinc-500 dark:text-zinc-400">
-                        Managed via environment variables on the server.
+                        Configured on the server.
                     </p>
                 </div>
 
@@ -2065,10 +2256,18 @@ function submitSegmentsSettings(): void {
                                 v-else
                                 class="inline-flex items-center rounded-full bg-amber-500/15 px-2 py-0.5 font-mono text-[10px] font-medium text-amber-700 dark:text-amber-400"
                             >
-                                Not Configured — Set GARMIN_KEY in environment
+                                Not Configured
                             </span>
                         </div>
                         <p
+                            v-if="!provider.configured"
+                            class="mt-1.5 text-xs text-amber-700 dark:text-amber-400"
+                        >
+                            Add your provider credentials in the server
+                            configuration to enable automatic syncing.
+                        </p>
+                        <p
+                            v-else
                             class="mt-1 text-xs text-zinc-500 dark:text-zinc-400"
                         >
                             Background sync imports activities, wellness
@@ -2120,14 +2319,14 @@ function submitSegmentsSettings(): void {
                             {{
                                 isBackfillActive
                                     ? 'Historical backfill running in background...'
-                                    : 'Garmin sync in progress...'
+                                    : `${provider.name} sync in progress...`
                             }}
                         </span>
                         <span
                             class="font-mono text-[11px] text-amber-700/90 tabular-nums dark:text-amber-300/90"
                         >
                             <template v-if="liveSync.cursor_date">
-                                Cursor {{ liveSync.cursor_date }} ·
+                                Syncing through {{ liveSync.cursor_date }} ·
                             </template>
                             {{ formatNumber(liveSync.items_synced) }} items
                         </span>
@@ -2162,7 +2361,7 @@ function submitSegmentsSettings(): void {
                                         ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
                                         : 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
-                                @click="selectedBackfillRange = option.value"
+                                @click="selectBackfillRange(option.value)"
                             >
                                 {{ option.label }}
                             </button>
@@ -2183,7 +2382,7 @@ function submitSegmentsSettings(): void {
                                         ? `Resumes back to ${backfill.resume_until_date}`
                                         : 'Resumes all-time history backfill'
                                 "
-                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
+                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs font-medium text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-55 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700"
                                 @click="triggerBackfill('resume')"
                             >
                                 <History class="size-3.5" />
@@ -2191,12 +2390,16 @@ function submitSegmentsSettings(): void {
                             </button>
 
                             <button
+                                v-if="
+                                    confirmingBackfillRange === null ||
+                                    isAnySyncRunning
+                                "
                                 type="button"
                                 :disabled="
                                     isAnySyncRunning || !provider.configured
                                 "
-                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
-                                @click="triggerBackfill(selectedBackfillRange)"
+                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                                @click="requestBackfill"
                             >
                                 <RefreshCw
                                     :class="[
@@ -2209,6 +2412,46 @@ function submitSegmentsSettings(): void {
                                         ? 'Backfilling...'
                                         : 'Start Backfill'
                                 }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Inline Confirmation for Heavy Backfills (3y / all) -->
+                    <div
+                        v-if="
+                            confirmingBackfillRange !== null &&
+                            !isAnySyncRunning
+                        "
+                        class="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/8 px-3.5 py-2.5 text-xs dark:border-amber-500/25 dark:bg-amber-500/10"
+                    >
+                        <p class="text-amber-800 dark:text-amber-200">
+                            Backfilling
+                            <strong class="font-medium">{{
+                                selectedBackfillRangeLabel
+                            }}</strong>
+                            may take several minutes and will run in the
+                            background.
+                        </p>
+                        <div class="flex shrink-0 items-center gap-2">
+                            <button
+                                type="button"
+                                class="cursor-pointer rounded-lg border border-zinc-200 bg-white px-3 py-1.5 text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                                @click="confirmingBackfillRange = null"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                :disabled="
+                                    isAnySyncRunning || !provider.configured
+                                "
+                                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                                @click="
+                                    triggerBackfill(confirmingBackfillRange)
+                                "
+                            >
+                                <RefreshCw class="size-3.5" />
+                                Confirm Backfill
                             </button>
                         </div>
                     </div>
@@ -2341,7 +2584,7 @@ function submitSegmentsSettings(): void {
                                     <p
                                         class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                     >
-                                        Default
+                                        General
                                     </p>
                                 </div>
                             </div>
@@ -2357,7 +2600,7 @@ function submitSegmentsSettings(): void {
                                 Pending Enrichments
                             </p>
                             <div
-                                class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-3 lg:grid-cols-6"
+                                class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-3"
                             >
                                 <div
                                     class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
@@ -2451,7 +2694,7 @@ function submitSegmentsSettings(): void {
                                     <p
                                         class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                     >
-                                        Derived
+                                        Metrics
                                     </p>
                                 </div>
                                 <div
@@ -2479,39 +2722,44 @@ function submitSegmentsSettings(): void {
 
                     <!-- Reverse Geocoding Provider & ODbL Attribution -->
                     <div
-                        class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200/80 bg-white px-3 py-2.5 text-xs dark:border-zinc-800 dark:bg-[#141417]"
+                        class="mt-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-200/80 bg-white px-3.5 py-3 text-xs dark:border-zinc-800 dark:bg-[#141417]"
                     >
-                        <div class="flex flex-wrap items-center gap-2">
-                            <span
-                                class="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
-                            >
-                                <MapPin class="size-3" />
-                                Nominatim
-                            </span>
-                            <span
-                                class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
-                            >
-                                {{ geocoding.host }}
-                            </span>
-                            <span
-                                class="inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[10px] font-medium"
-                                :class="
-                                    geocoding.enabled
-                                        ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-400'
-                                        : 'bg-zinc-200/70 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
-                                "
-                            >
-                                {{
-                                    geocoding.enabled
-                                        ? geocoding.is_public_endpoint
-                                            ? 'Enabled · Public OSMF'
-                                            : 'Enabled · Self-hosted'
-                                        : 'Disabled'
-                                }}
-                            </span>
+                        <div class="space-y-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span
+                                    class="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                                >
+                                    <MapPin class="size-3" />
+                                    Place Name Lookup (OpenStreetMap)
+                                </span>
+                                <span
+                                    class="inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[10px] font-medium"
+                                    :class="
+                                        geocoding.enabled
+                                            ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-400'
+                                            : 'bg-zinc-200/70 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                                    "
+                                >
+                                    {{
+                                        geocoding.enabled
+                                            ? geocoding.is_public_endpoint
+                                                ? 'Enabled · Public'
+                                                : 'Enabled · Self-hosted'
+                                            : 'Disabled'
+                                    }}
+                                </span>
+                            </div>
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                Automatically labels activity locations from
+                                GNSS start coordinates via
+                                <span
+                                    class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
+                                    >{{ geocoding.host }}</span
+                                >.
+                            </p>
                         </div>
                         <span
-                            class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                            class="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
                         >
                             Place names &copy;
                             <a
@@ -2533,11 +2781,16 @@ function submitSegmentsSettings(): void {
             >
                 <div class="flex flex-wrap items-center justify-between gap-4">
                     <div class="space-y-1">
-                        <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
-                        >
-                            About {{ appName }}
-                        </h2>
+                        <div class="flex items-center gap-2">
+                            <Info
+                                class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
+                            />
+                            <h2
+                                class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            >
+                                About {{ appName }}
+                            </h2>
+                        </div>
                         <p class="text-sm text-zinc-500 dark:text-zinc-400">
                             Local-first, self-hosted endurance and health
                             telemetry.

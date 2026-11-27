@@ -93,7 +93,7 @@ const statusBadge = computed<{
 const modeLabel = computed<string>(() =>
     props.importWatch.mode === 'archive'
         ? 'Archive to processed/'
-        : 'Keep / Read-only safe',
+        : 'Keep files (read-only safe)',
 );
 
 const lastScannedLabel = computed<string>(() =>
@@ -112,7 +112,7 @@ const errorMessage = computed<string | null>(() => {
         !props.importWatch.directory_exists &&
         props.importWatch.directory
     ) {
-        return `Configured directory not found on disk: ${props.importWatch.directory}`;
+        return `Import folder not found: ${props.importWatch.directory}`;
     }
 
     if (
@@ -120,7 +120,7 @@ const errorMessage = computed<string | null>(() => {
         !props.importWatch.directory_readable &&
         props.importWatch.directory
     ) {
-        return `Configured directory is not readable by the app process: ${props.importWatch.directory}`;
+        return `Import folder cannot be read by Splitline: ${props.importWatch.directory}`;
     }
 
     return props.importWatch.last_run?.last_error ?? null;
@@ -161,26 +161,15 @@ function triggerScan(): void {
         <!-- Header -->
         <div class="flex flex-wrap items-start justify-between gap-3">
             <div class="space-y-1">
-                <div class="flex flex-wrap items-center gap-2">
+                <div class="flex items-center gap-2">
                     <FolderSync
-                        class="size-4 text-emerald-600 dark:text-emerald-400"
+                        class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
                     />
                     <h2
                         class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                     >
-                        Drop-Folder Import Watcher
+                        Folder Auto-Import
                     </h2>
-                    <span
-                        class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium"
-                        :class="statusBadge.classes"
-                    >
-                        <span
-                            v-if="statusBadge.dotClass"
-                            class="size-1.5 rounded-full"
-                            :class="statusBadge.dotClass"
-                        />
-                        {{ statusBadge.label }}
-                    </span>
                 </div>
                 <p class="text-sm text-zinc-500 dark:text-zinc-400">
                     Automatically ingests standalone
@@ -193,21 +182,42 @@ function triggerScan(): void {
                         class="rounded bg-zinc-100 px-1 py-0.5 font-mono text-xs text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
                         >.zip</code
                     >
-                    files every 5 minutes, deduplicating by inner-FIT SHA-256.
+                    files every 5 minutes, automatically skipping duplicate
+                    workouts.
                 </p>
             </div>
 
-            <button
-                type="button"
-                :disabled="!canScan || isScanning"
-                class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
-                @click="triggerScan"
-            >
-                <RefreshCw
-                    :class="['size-3.5', isScanning && 'animate-spin']"
-                />
-                {{ isScanning ? 'Scanning...' : 'Scan Folder Now' }}
-            </button>
+            <div class="flex shrink-0 items-center gap-2.5">
+                <span
+                    class="inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 font-mono text-[10px] font-medium"
+                    :class="statusBadge.classes"
+                >
+                    <span
+                        v-if="statusBadge.dotClass"
+                        class="size-1.5 rounded-full"
+                        :class="statusBadge.dotClass"
+                    />
+                    {{ statusBadge.label }}
+                </span>
+
+                <button
+                    v-if="importWatch.configured"
+                    type="button"
+                    :disabled="!canScan || isScanning"
+                    :title="
+                        !canScan
+                            ? 'Import folder must exist and be readable before scanning.'
+                            : undefined
+                    "
+                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-55 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                    @click="triggerScan"
+                >
+                    <RefreshCw
+                        :class="['size-3.5', isScanning && 'animate-spin']"
+                    />
+                    {{ isScanning ? 'Scanning...' : 'Scan Folder Now' }}
+                </button>
+            </div>
         </div>
 
         <!-- Unconfigured Self-Hosting Tip -->
@@ -215,25 +225,25 @@ function triggerScan(): void {
             v-if="!importWatch.configured"
             class="mt-5 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/60 p-4 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400"
         >
-            <p class="leading-relaxed">
+            <p
+                class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+            >
+                Server Configuration
+            </p>
+            <p class="mt-1.5 leading-relaxed">
                 Set
                 <code
                     class="rounded bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[11px] font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                    >IMPORT_WATCH_DIR=/data/imports</code
+                    >IMPORT_WATCH_DIR</code
                 >
-                in your environment to automatically ingest activities synced
-                from Syncthing, HealthFit, RunGap, or NFS mounts.
-            </p>
-            <p class="mt-1.5 text-zinc-500 dark:text-zinc-400">
-                Optional: set
+                on the server to auto-import workouts synced from Syncthing,
+                HealthFit, RunGap, or shared folders. Optional:
                 <code
                     class="rounded bg-zinc-200/70 px-1 py-0.5 font-mono text-[11px] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200"
                     >IMPORT_WATCH_MODE=archive</code
                 >
-                to move processed files into
-                <span class="font-mono">processed/</span> and errors into
-                <span class="font-mono">failed/</span> (defaults to read-only
-                safe <span class="font-mono">keep</span>).
+                moves completed files into
+                <span class="font-mono">processed/</span>.
             </p>
         </div>
 
@@ -351,7 +361,10 @@ function triggerScan(): void {
                     </span>
                     <template v-if="importWatch.last_run.deferred_recent > 0">
                         <span class="text-zinc-300 dark:text-zinc-700">·</span>
-                        <span class="text-amber-700 dark:text-amber-400">
+                        <span
+                            title="Waiting for file transfer to finish"
+                            class="cursor-help text-amber-700 underline decoration-amber-500/40 decoration-dotted underline-offset-2 dark:text-amber-400"
+                        >
                             {{
                                 formatNumber(
                                     importWatch.last_run.deferred_recent,
@@ -368,7 +381,7 @@ function triggerScan(): void {
                 <p
                     class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Recent Watch Imports
+                    Recent Folder Imports
                 </p>
                 <div
                     class="divide-y divide-zinc-200/80 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/40 dark:divide-zinc-800/80 dark:border-zinc-800 dark:bg-zinc-900/30"
@@ -404,6 +417,17 @@ function triggerScan(): void {
                         </div>
                     </Link>
                 </div>
+            </div>
+
+            <!-- Subtle Empty State when Watching with 0 Recent Imports -->
+            <div
+                v-else-if="canScan"
+                class="rounded-xl border border-dashed border-zinc-200/80 bg-[#f7f7f5]/40 px-4 py-3 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/25 dark:text-zinc-400"
+            >
+                Watching folder — no recent imports yet. Drop
+                <code class="font-mono text-[11px]">.fit</code> or
+                <code class="font-mono text-[11px]">.zip</code> files into the
+                watched folder to import them automatically.
             </div>
         </div>
     </section>
