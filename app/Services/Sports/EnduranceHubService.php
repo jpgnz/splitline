@@ -10,6 +10,7 @@ use App\Services\Activities\AnnualActivitySummaryService;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Goals\GoalProgressService;
 use App\Support\DateWindowResolver;
+use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
@@ -193,11 +194,17 @@ class EnduranceHubService
         private readonly GoalProgressService $goalProgressService,
         private readonly ?DateWindowResolver $dateWindows = null,
         private readonly AnnualActivitySummaryService $annualActivitySummaryService = new AnnualActivitySummaryService,
+        private readonly ?HealthSourceRegistry $healthSources = null,
     ) {}
 
     private function dateWindowResolver(): DateWindowResolver
     {
         return $this->dateWindows ?? app(DateWindowResolver::class);
+    }
+
+    private function healthSources(): HealthSourceRegistry
+    {
+        return $this->healthSources ?? app(HealthSourceRegistry::class);
     }
 
     /**
@@ -275,7 +282,7 @@ class EnduranceHubService
             ?? (in_array($entry['key'], ['running', 'cycling'], true) ? $entry['key'] : null);
         $tabs = $familyKey !== null ? $this->sports->familyTabs($familyKey) : [];
 
-        $latestWeight = WeightMeasurement::query()
+        $latestWeight = $this->healthSources()->applyScope(WeightMeasurement::query(), 'weight')
             ->orderByDesc('calendar_date')
             ->orderByDesc('measured_at')
             ->orderByDesc('id')
@@ -481,7 +488,7 @@ class EnduranceHubService
         $latestVo2 = null;
 
         if ($vo2Sport !== null) {
-            $latestVo2Record = Vo2MaxRecord::query()
+            $latestVo2Record = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
                 ->where('sport', $vo2Sport)
                 ->orderByDesc('calendar_date')
                 ->orderByDesc('id')
@@ -1203,7 +1210,7 @@ class EnduranceHubService
      */
     private function buildRunningVo2Trend(): array
     {
-        $records = Vo2MaxRecord::query()
+        $records = $this->healthSources()->applyScope(Vo2MaxRecord::query(), 'vo2_max')
             ->where('sport', 'running')
             ->orderBy('calendar_date')
             ->get(['calendar_date', 'vo2_max_precise', 'vo2_max']);

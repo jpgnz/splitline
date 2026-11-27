@@ -2,10 +2,13 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\UpdateHealthSourcesRequest;
 use App\Http\Requests\UpdateSportsSettingsRequest;
 use App\Http\Requests\UpdateUnitsRequest;
 use App\Models\SyncRun;
+use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
+use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Schema;
@@ -14,8 +17,12 @@ use Inertia\Response;
 
 class SettingsController extends Controller
 {
-    public function index(AppSettings $settings, SportRegistry $sports): Response
-    {
+    public function index(
+        AppSettings $settings,
+        SportRegistry $sports,
+        QueueStatusService $queueStatus,
+        HealthSourceRegistry $healthSources,
+    ): Response {
         return Inertia::render('settings/Index', [
             'unit_system' => $settings->unitSystem(),
             'timezone' => $settings->displayTimezone(),
@@ -24,7 +31,9 @@ class SettingsController extends Controller
                 'configured' => trim((string) config('services.garmin.key', '')) !== '',
             ],
             'backfill' => $this->backfillSummary(),
+            'enrichment_queue' => fn (): array => $queueStatus->summary(),
             'sports_settings' => $sports->settingsPayload(),
+            'health_sources' => $healthSources->settingsPayload(),
         ]);
     }
 
@@ -48,6 +57,16 @@ class SettingsController extends Controller
         $sports->saveConfig($validated);
 
         return back()->with('status', 'Sports configuration updated.');
+    }
+
+    public function updateHealthSources(UpdateHealthSourcesRequest $request, HealthSourceRegistry $healthSources): RedirectResponse
+    {
+        /** @var array<string, mixed> $sources */
+        $sources = $request->validated('sources', []);
+
+        $healthSources->saveConfig($sources);
+
+        return back()->with('status', 'Health data source preferences updated.');
     }
 
     /**

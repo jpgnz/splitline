@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Query\Builder as QueryBuilder;
 
 /**
  * @property int $id
@@ -18,8 +19,12 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property ?string $external_id
  * @property ?int $garmin_activity_id
  * @property string $name
+ * @property string|null $garmin_name
+ * @property string|null $name_override
  * @property string $activity_type_key
  * @property string $sport_category
+ * @property string|null $garmin_sport_category
+ * @property string|null $sport_category_override
  * @property string|null $sport_discipline
  * @property string|null $discipline_override
  * @property bool $is_indoor
@@ -112,6 +117,8 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property float|null $walk_duration_seconds
  * @property float|null $idle_duration_seconds
  * @property bool $is_favorite
+ * @property bool $garmin_is_favorite
+ * @property bool|null $favorite_override
  * @property bool $is_pr
  * @property bool $is_manual
  * @property CarbonImmutable|null $streams_synced_at
@@ -138,8 +145,12 @@ class Activity extends Model
         'external_id',
         'garmin_activity_id',
         'name',
+        'garmin_name',
+        'name_override',
         'activity_type_key',
         'sport_category',
+        'garmin_sport_category',
+        'sport_category_override',
         'sport_discipline',
         'discipline_override',
         'is_indoor',
@@ -232,6 +243,8 @@ class Activity extends Model
         'walk_duration_seconds',
         'idle_duration_seconds',
         'is_favorite',
+        'garmin_is_favorite',
+        'favorite_override',
         'is_pr',
         'is_manual',
         'streams_synced_at',
@@ -335,6 +348,8 @@ class Activity extends Model
             'walk_duration_seconds' => 'float',
             'idle_duration_seconds' => 'float',
             'is_favorite' => 'boolean',
+            'garmin_is_favorite' => 'boolean',
+            'favorite_override' => 'boolean',
             'is_pr' => 'boolean',
             'is_manual' => 'boolean',
             'streams_synced_at' => 'immutable_datetime',
@@ -451,5 +466,72 @@ class Activity extends Model
         return $query
             ->whereNull("{$table}.streams_synced_at")
             ->whereNull("{$table}.streams_unavailable_at");
+    }
+
+    /**
+     * Outdoor activities with a start coordinate or a stored stream that weather can be sampled along.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeWithWeatherCoordinates(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->where("{$table}.is_indoor", false)
+            ->where(function (Builder $coordinateQuery) use ($table): void {
+                $coordinateQuery
+                    ->where(function (Builder $startCoords) use ($table): void {
+                        $startCoords
+                            ->whereNotNull("{$table}.start_lat")
+                            ->whereNotNull("{$table}.start_lng");
+                    })
+                    ->orWhereExists(function (QueryBuilder $streamSub) use ($table): void {
+                        $streamSub
+                            ->selectRaw('1')
+                            ->from('activity_streams')
+                            ->whereColumn('activity_streams.activity_id', "{$table}.id");
+                    });
+            });
+    }
+
+    /**
+     * Weather-eligible activities that have no weather yet, or only start-point weather that can be upgraded to route sampling.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingWeather(Builder $query): Builder
+    {
+        $table = $this->getTable();
+
+        return $query
+            ->withWeatherCoordinates()
+            ->where(function (Builder $missingOrUpgradeQuery) use ($table): void {
+                $missingOrUpgradeQuery
+                    ->whereNotExists(function (QueryBuilder $weatherSub) use ($table): void {
+                        $weatherSub
+                            ->selectRaw('1')
+                            ->from('activity_weathers')
+                            ->whereColumn('activity_weathers.activity_id', "{$table}.id");
+                    })
+                    ->orWhere(function (Builder $upgradeQuery) use ($table): void {
+                        $upgradeQuery
+                            ->whereExists(function (QueryBuilder $weatherSub) use ($table): void {
+                                $weatherSub
+                                    ->selectRaw('1')
+                                    ->from('activity_weathers')
+                                    ->whereColumn('activity_weathers.activity_id', "{$table}.id")
+                                    ->where('activity_weathers.sampling_mode', 'start_point');
+                            })
+                            ->whereExists(function (QueryBuilder $streamSub) use ($table): void {
+                                $streamSub
+                                    ->selectRaw('1')
+                                    ->from('activity_streams')
+                                    ->whereColumn('activity_streams.activity_id', "{$table}.id");
+                            });
+                    });
+            });
     }
 }

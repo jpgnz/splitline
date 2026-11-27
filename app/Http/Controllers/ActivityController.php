@@ -63,8 +63,11 @@ class ActivityController extends Controller
 
     public function toggleFavorite(Activity $activity): RedirectResponse
     {
+        $nextFavorite = ! $activity->is_favorite;
+
         $activity->update([
-            'is_favorite' => ! $activity->is_favorite,
+            'favorite_override' => $nextFavorite,
+            'is_favorite' => $nextFavorite,
         ]);
 
         return back();
