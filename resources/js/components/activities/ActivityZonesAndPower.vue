@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { EChartsOption } from 'echarts';
 import { computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { formatDurationClock } from '@/lib/format';
@@ -326,9 +327,16 @@ const powerCurveOption = computed<EChartsOption>(() => {
             >
                 <div class="mb-4 flex items-center justify-between">
                     <span
-                        class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        {{ isRunning ? 'Running Power Zones' : 'Power Zones' }}
+                        <span>
+                            {{
+                                isRunning
+                                    ? 'Running Power Zones'
+                                    : 'Power Zones'
+                            }}
+                        </span>
+                        <InfoPopover topic="power_zones" />
                     </span>
                     <span
                         class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
@@ -407,9 +415,10 @@ const powerCurveOption = computed<EChartsOption>(() => {
                 class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
             >
                 <span
-                    class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    class="inline-flex items-center gap-1.5 font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Mean Maximal Power Curve
+                    <span>Mean Maximal Power Curve</span>
+                    <InfoPopover topic="mmp_curve" />
                 </span>
                 <div
                     class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"

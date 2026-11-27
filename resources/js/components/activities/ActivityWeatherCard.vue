@@ -12,6 +12,7 @@ import {
     Wind,
 } from '@lucide/vue';
 import { type Component, computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import { useUnits } from '@/lib/units';
 import { formatCompass } from '@/lib/wind';
 import type { ActivityWeatherPayload } from '@/types/activity';
@@ -483,9 +484,10 @@ const precipitationSub = computed<string | null>(() => {
                 <div v-if="hasWindImpact" class="min-w-0">
                     <div class="flex items-center justify-between gap-1">
                         <span
-                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                            class="inline-flex items-center gap-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                         >
-                            Wind Impact
+                            <span>Wind Impact</span>
+                            <InfoPopover topic="wind_impact" />
                         </span>
                         <span
                             v-if="netEffectiveWind"

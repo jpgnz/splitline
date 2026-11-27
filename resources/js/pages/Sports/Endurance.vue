@@ -20,6 +20,7 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed, ref, watch } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import ActivitySummaryCharts from '@/components/charts/ActivitySummaryCharts.vue';
 import type { AnnualActivitySummaryPayload } from '@/components/charts/annualSummaryTypes';
@@ -38,6 +39,7 @@ import {
     formatShortDate,
     formatTimeOfDay,
 } from '@/lib/format';
+import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import { useSports } from '@/lib/sports';
 import { M_TO_FT, useUnits } from '@/lib/units';
 import {
@@ -3051,6 +3053,7 @@ interface OffroadKpiCard {
     value: string;
     subtitle: string | null;
     barClass: string;
+    infoTopic?: MetricGlossaryTopic;
 }
 
 interface OffroadTabOption {
@@ -3074,6 +3077,7 @@ const offroadKpiCards = computed<OffroadKpiCard[]>(() => {
             value: formatNumber(offroad.avg_grit, 1),
             subtitle: 'Higher = more technical',
             barClass: 'bg-emerald-500',
+            infoTopic: 'grit_flow',
         });
     }
 
@@ -3084,6 +3088,7 @@ const offroadKpiCards = computed<OffroadKpiCard[]>(() => {
             value: formatNumber(offroad.avg_flow, 1),
             subtitle: 'Lower = smoother riding',
             barClass: 'bg-sky-500',
+            infoTopic: 'grit_flow',
         });
     }
 
@@ -3786,9 +3791,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 <div>
                     <div class="space-y-2.5">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            HR Zone Distribution &amp; Polarization
+                            <span>HR Zone Distribution &amp; Polarization</span>
+                            <InfoPopover topic="hr_polarization" size="sm" />
                         </h2>
 
                         <DateRangeControl
@@ -4033,9 +4039,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 <div>
                     <div class="flex flex-wrap items-center gap-2">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            Aerobic Efficiency &amp; Drift
+                            <span>Aerobic Efficiency &amp; Drift</span>
+                            <InfoPopover topic="decoupling" size="sm" />
                         </h2>
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
@@ -4066,9 +4073,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800 dark:bg-zinc-900/60"
                     >
                         <span
-                            class="text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1 text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Latest EF
+                            <span>Latest EF</span>
+                            <InfoPopover topic="efficiency_factor" />
                         </span>
                         <div class="mt-0.5 flex items-baseline gap-1.5">
                             <span
@@ -4977,9 +4985,13 @@ const recentHasOffroad = computed<boolean>(() =>
                                     Riegel Equivalence Model
                                 </p>
                                 <h2
-                                    class="mt-0.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                    class="mt-0.5 flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                                 >
-                                    Race Predictor
+                                    <span>Race Predictor</span>
+                                    <InfoPopover
+                                        topic="race_predictor"
+                                        size="sm"
+                                    />
                                 </h2>
                             </div>
                             <Trophy
@@ -5052,9 +5064,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="flex items-center justify-between gap-2">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            VO2 Max Trend
+                            <span>VO2 Max Trend</span>
+                            <InfoPopover topic="vo2_max" size="sm" />
                         </h2>
 
                         <div
@@ -5117,9 +5130,13 @@ const recentHasOffroad = computed<boolean>(() =>
                                 Grade-Adjusted vs Raw Pace
                             </p>
                             <h2
-                                class="mt-0.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                                class="mt-0.5 flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                             >
-                                Aerobic Efficiency
+                                <span>Aerobic Efficiency</span>
+                                <InfoPopover
+                                    topic="gap_vs_raw_pace"
+                                    size="sm"
+                                />
                             </h2>
                         </div>
                         <span
@@ -5344,9 +5361,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <span class="absolute top-0 left-0 h-0.5 w-10 bg-sky-500" />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        FTP &amp; W/kg
+                        <span>FTP &amp; W/kg</span>
+                        <InfoPopover topic="ftp_wkg" />
                     </p>
                     <div class="mt-1.5 flex items-baseline gap-2 tabular-nums">
                         <span
@@ -5383,9 +5401,10 @@ const recentHasOffroad = computed<boolean>(() =>
                     <span class="absolute top-0 left-0 h-0.5 w-10 bg-sky-500" />
                     <div class="flex items-center justify-between gap-2">
                         <span
-                            class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Fitness / Form
+                            <span>Fitness / Form</span>
+                            <InfoPopover topic="tsb" />
                         </span>
                         <span
                             class="font-mono text-[10px] font-medium"
@@ -5428,9 +5447,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-indigo-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg NP / IF / VI
+                        <span>Avg NP / IF / VI</span>
+                        <InfoPopover topic="normalized_power" />
                     </p>
                     <p
                         class="mt-1.5 text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -5498,6 +5518,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         >
                             Mean Maximal Power Curve
                         </h2>
+                        <InfoPopover topic="mmp_curve" />
                     </div>
 
                     <div
@@ -5584,9 +5605,13 @@ const recentHasOffroad = computed<boolean>(() =>
                     class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                 >
                     <h2
-                        class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        180-Day Fitness, Fatigue &amp; Form (CTL / ATL / TSB)
+                        <span>
+                            180-Day Fitness, Fatigue &amp; Form (CTL / ATL /
+                            TSB)
+                        </span>
+                        <InfoPopover topic="tsb" />
                     </h2>
                     <div
                         class="flex flex-wrap items-center gap-3 font-mono text-xs tabular-nums"
@@ -5614,9 +5639,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="mb-4 flex items-center justify-between gap-2">
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Weekly TSS &amp; Distance
+                            <span>Weekly TSS &amp; Distance</span>
+                            <InfoPopover topic="weekly_tss" />
                         </h2>
                         <span
                             class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"
@@ -5647,9 +5673,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="mb-4 flex items-center justify-between gap-2">
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            FTP &amp; 20-Min Power History
+                            <span>FTP &amp; 20-Min Power History</span>
+                            <InfoPopover topic="ftp_wkg" />
                         </h2>
                         <span
                             v-if="modules.power.ftp !== null"
@@ -5689,9 +5716,10 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="mb-4 flex items-center justify-between">
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Power Zones Distribution
+                            <span>Power Zones Distribution</span>
+                            <InfoPopover topic="power_zones" />
                         </h2>
                         <span
                             class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
@@ -6151,9 +6179,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-emerald-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg Climb Density
+                        <span>Avg Climb Density</span>
+                        <InfoPopover topic="climb_density" />
                     </p>
                     <p
                         class="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6173,9 +6202,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-emerald-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg VAM
+                        <span>Avg VAM</span>
+                        <InfoPopover topic="vam" />
                     </p>
                     <p
                         class="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6191,9 +6221,10 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="absolute top-0 left-0 h-0.5 w-10 bg-emerald-500"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Peak VAM
+                        <span>Peak VAM</span>
+                        <InfoPopover topic="vam" />
                     </p>
                     <p
                         class="mt-1.5 text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6498,9 +6529,13 @@ const recentHasOffroad = computed<boolean>(() =>
                         :class="card.barClass"
                     />
                     <p
-                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        {{ card.label }}
+                        <span>{{ card.label }}</span>
+                        <InfoPopover
+                            v-if="card.infoTopic"
+                            :topic="card.infoTopic"
+                        />
                     </p>
                     <p
                         class="mt-1.5 text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -6535,9 +6570,12 @@ const recentHasOffroad = computed<boolean>(() =>
                         class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
                     >
                         <h2
-                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            class="flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
-                            Off-Road Dynamics · Grit &amp; Flow Trend
+                            <span
+                                >Off-Road Dynamics · Grit &amp; Flow Trend</span
+                            >
+                            <InfoPopover topic="grit_flow" />
                         </h2>
                         <span
                             class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"

@@ -3,12 +3,14 @@ import { Head, Link, router } from '@inertiajs/vue3';
 import { ArrowLeft } from '@lucide/vue';
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { computed } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import DateRangeControl, {
     type DateRangePreset,
     type DateWindowMeta,
 } from '@/components/DateRangeControl.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
+import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import { useUnits } from '@/lib/units';
 import { dashboard } from '@/routes';
 import { show as healthShow } from '@/routes/health';
@@ -40,6 +42,16 @@ interface HealthMetricProps {
 }
 
 const props = defineProps<HealthMetricProps>();
+
+const METRIC_INFO_TOPICS: Record<string, MetricGlossaryTopic> = {
+    'body-battery': 'body_battery',
+    hrv: 'hrv_status',
+    'vo2-max': 'vo2_max',
+};
+
+const metricInfoTopic = computed<MetricGlossaryTopic | null>(
+    () => METRIC_INFO_TOPICS[props.metric] ?? null,
+);
 const theme = useChartTheme();
 const units = useUnits();
 
@@ -3173,9 +3185,14 @@ const chartOption = computed<EChartsOption>(() => {
                     <template v-if="unit"> · {{ unit }}</template>
                 </p>
                 <h1
-                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    class="mt-1 flex items-center gap-2 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
                 >
-                    {{ title }}
+                    <span>{{ title }}</span>
+                    <InfoPopover
+                        v-if="metricInfoTopic"
+                        :topic="metricInfoTopic"
+                        size="sm"
+                    />
                 </h1>
                 <p
                     v-if="subtitle"

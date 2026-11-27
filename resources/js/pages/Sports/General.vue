@@ -3,6 +3,7 @@ import { Head, Link, router } from '@inertiajs/vue3';
 import { Activity, ArrowUpRight, Flame, MapPin } from '@lucide/vue';
 import type { EChartsOption } from 'echarts';
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import DateRangeControl, {
     type DateRangePreset,
@@ -823,9 +824,10 @@ const activeAvgHr = computed<number | null>(
                 <div>
                     <div class="space-y-2.5">
                         <h2
-                            class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                            class="flex items-center gap-1.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                         >
-                            HR Zone Distribution
+                            <span>HR Zone Distribution</span>
+                            <InfoPopover topic="hr_polarization" size="sm" />
                         </h2>
 
                         <DateRangeControl
