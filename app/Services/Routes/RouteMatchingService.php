@@ -312,13 +312,9 @@ class RouteMatchingService
     {
         $clustersBefore = RouteCluster::query()->count();
 
-        $ids = $this->pendingActivitiesQuery()
-            ->orderBy('started_at_local')
-            ->orderBy('id')
-            ->pluck('id')
-            ->all();
+        $ids = $this->orderedActivityIds($this->pendingActivitiesQuery());
 
-        [$scanned, $matched] = $this->matchActivityIds($ids, max(1, $chunkSize), forceRecompute: false);
+        [$scanned, $matched] = $this->matchActivityIds($ids, $chunkSize, forceRecompute: false);
 
         $this->restorePreservedOverrides();
 
@@ -369,24 +365,19 @@ class RouteMatchingService
             RouteCluster::query()->delete();
         });
 
-        $ids = $this->eligibleActivitiesQuery()
-            ->orderBy('started_at_local')
-            ->orderBy('id')
-            ->pluck('id')
-            ->all();
+        $ids = $this->orderedActivityIds($this->eligibleActivitiesQuery());
 
-        /** @var array<int, true> $unlinkedActivityIds */
-        $unlinkedActivityIds = array_fill_keys(
+        $unlinkedActivityIds = array_flip(array_map(
+            intval(...),
             ActivityRouteFingerprint::query()->where('is_unlinked', true)->pluck('activity_id')->all(),
-            true,
-        );
+        ));
 
         $idsToMatch = array_values(array_filter(
             $ids,
             static fn (int $id): bool => ! isset($unlinkedActivityIds[$id]),
         ));
 
-        [, $matched] = $this->matchActivityIds($idsToMatch, max(1, $chunkSize), forceRecompute: true);
+        [, $matched] = $this->matchActivityIds($idsToMatch, $chunkSize, forceRecompute: true);
 
         $this->restorePreservedOverrides();
 
@@ -509,6 +500,20 @@ class RouteMatchingService
     }
 
     /**
+     * Activity IDs from the given query in chronological matching order.
+     *
+     * @param  Builder<Activity>  $query
+     * @return list<int>
+     */
+    private function orderedActivityIds(Builder $query): array
+    {
+        return array_values(array_map(
+            intval(...),
+            $query->orderBy('started_at_local')->orderBy('id')->pluck('id')->all(),
+        ));
+    }
+
+    /**
      * Match activities in chunks, batching cluster aggregate refreshes once per chunk.
      *
      * @param  list<int>  $ids
@@ -516,6 +521,7 @@ class RouteMatchingService
      */
     private function matchActivityIds(array $ids, int $chunkSize, bool $forceRecompute): array
     {
+        $chunkSize = max(1, $chunkSize);
         $scanned = 0;
         $matched = 0;
         $this->deferredClusterIds = [];
