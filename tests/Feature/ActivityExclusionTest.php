@@ -18,7 +18,7 @@ use App\Services\Activities\ActivityQueryService;
 use App\Services\Activities\PaceDistributionService;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Gear\GearService;
-use App\Services\Ingestion\ImportWatchService;
+use App\Services\Ingestion\AutoImportService;
 use App\Services\Ingestion\TelemetryPersistenceService;
 use App\Services\Recap\AnnualRecapService;
 use App\Services\Routes\RouteMatchingService;
@@ -187,12 +187,12 @@ it('prevents Garmin re-syncs from recreating, overwriting, or enriching an exclu
     Queue::assertNotPushed(GeocodeActivityLocationJob::class);
 });
 
-it('prevents ImportWatchService and import:fit from re-importing an excluded FIT file', function () {
-    $watchDir = storage_path('framework/testing/excluded-import-watch-'.uniqid());
-    File::ensureDirectoryExists($watchDir);
+it('prevents AutoImportService and import:fit from re-importing an excluded FIT file', function () {
+    $importDir = storage_path('framework/testing/excluded-auto-import-'.uniqid());
+    File::ensureDirectoryExists($importDir);
 
     try {
-        $fitPath = $watchDir.DIRECTORY_SEPARATOR.'bung.fit';
+        $fitPath = $importDir.DIRECTORY_SEPARATOR.'bung.fit';
         $fakeFitBytes = str_repeat('F', 64);
         file_put_contents($fitPath, $fakeFitBytes);
         touch($fitPath, time() - 120);
@@ -206,10 +206,10 @@ it('prevents ImportWatchService and import:fit from re-importing an excluded FIT
             'name' => 'Excluded Bung Upload',
         ]);
 
-        $watchService = app(ImportWatchService::class);
-        $result = $watchService->scan(
-            directoryOverride: $watchDir,
-            modeOverride: ImportWatchService::MODE_KEEP,
+        $autoImportService = app(AutoImportService::class);
+        $result = $autoImportService->scan(
+            directoryOverride: $importDir,
+            modeOverride: AutoImportService::MODE_KEEP,
             minFileAgeSeconds: 0,
             requireStableAcrossScans: false,
         );
@@ -219,7 +219,7 @@ it('prevents ImportWatchService and import:fit from re-importing an excluded FIT
             ->and($result['failed'])->toBe(0)
             ->and(Activity::withExcluded()->count())->toBe(1);
     } finally {
-        File::deleteDirectory($watchDir);
+        File::deleteDirectory($importDir);
     }
 });
 

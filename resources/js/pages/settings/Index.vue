@@ -33,12 +33,12 @@ import {
 } from '@/actions/App/Http/Controllers/SettingsController';
 import AppearanceTabs from '@/components/AppearanceTabs.vue';
 import { useEnrichmentQueueFeed } from '@/composables/useEnrichmentQueueFeed';
+import AutoImportCard, {
+    type AutoImportStatus,
+} from '@/components/settings/AutoImportCard.vue';
 import DataExportCard, {
     type DataExportSummary,
 } from '@/components/settings/DataExportCard.vue';
-import ImportWatcherCard, {
-    type ImportWatchStatus,
-} from '@/components/settings/ImportWatcherCard.vue';
 import { formatNumber, formatRelativeTime } from '@/lib/format';
 import {
     backfill as syncBackfill,
@@ -142,7 +142,7 @@ interface SettingsProps {
     backfill: BackfillSummary;
     enrichment_queue: EnrichmentQueueSummary;
     geocoding: GeocodingConfigSummary;
-    import_watch: ImportWatchStatus;
+    auto_import: AutoImportStatus;
     data_export: DataExportSummary;
     sports_settings: {
         config: SportsConfig;
@@ -2234,8 +2234,8 @@ function submitSegmentsSettings(): void {
                 </form>
             </section>
 
-            <!-- 4B. Automated Drop-Folder Import Watcher -->
-            <ImportWatcherCard :import-watch="import_watch" />
+            <!-- 4B. Automated Drop-Folder Import -->
+            <AutoImportCard :auto-import="auto_import" />
 
             <!-- 4C. Backup, Export & Data Portability -->
             <DataExportCard :summary="data_export" />

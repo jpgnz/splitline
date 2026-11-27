@@ -72,6 +72,13 @@ class SportRegistry
 
     private const array DEFAULT_ORDER = ['running', 'cycling', 'hiking', 'walking', 'swimming', 'cardio'];
 
+    /**
+     * Generic sport keys ignored during dominant-discipline resolution whenever specific disciplines exist.
+     *
+     * @var list<string>
+     */
+    private const array GENERIC_SPORT_KEYS = ['cycling', 'other'];
+
     /** @var ResolvedSportsConfig|null */
     private ?array $resolvedConfig = null;
 
@@ -584,26 +591,36 @@ class SportRegistry
      */
     public function resolveActivitySportKey(Activity $activity): string
     {
-        $discipline = $activity->effectiveDiscipline();
+        return $this->resolveSportKey(
+            $activity->sport_category,
+            $activity->effectiveDiscipline(),
+            (bool) $activity->is_indoor,
+        );
+    }
 
-        if ($activity->sport_category === 'running') {
-            if ($activity->is_indoor) {
+    /**
+     * Resolve the canonical sport key from raw activity sport attributes.
+     */
+    public function resolveSportKey(string $sportCategory, ?string $effectiveDiscipline, bool $isIndoor = false): string
+    {
+        if ($sportCategory === 'running') {
+            if ($isIndoor) {
                 return 'treadmill_running';
             }
 
-            return match ($discipline) {
+            return match ($effectiveDiscipline) {
                 'trail' => 'trail_running',
                 'track' => 'track_running',
                 default => 'road_running',
             };
         }
 
-        if ($activity->sport_category === 'biking') {
-            if ($activity->is_indoor && $this->resolvedConfig()['rollups']['indoor_cycling'] === 'own') {
+        if ($sportCategory === 'biking') {
+            if ($isIndoor && $this->resolvedConfig()['rollups']['indoor_cycling'] === 'own') {
                 return 'indoor_cycling';
             }
 
-            return match ($discipline) {
+            return match ($effectiveDiscipline) {
                 'road' => 'road_cycling',
                 'gravel' => 'gravel_cycling',
                 'mtb' => 'mtb_cycling',
@@ -613,10 +630,177 @@ class SportRegistry
             };
         }
 
-        return match ($activity->sport_category) {
-            'hiking', 'walking', 'swimming', 'cardio' => $activity->sport_category,
+        return match ($sportCategory) {
+            'hiking', 'walking', 'swimming', 'cardio' => $sportCategory,
             default => 'other',
         };
+    }
+
+    /**
+     * Map a resolved sport key onto the bucket it rolls up into under the active rollup settings
+     * (e.g. `gravel_cycling` becomes `road_cycling` when gravel is rolled into road), mirroring `applyScope()`.
+     */
+    public function rollUpSportKey(string $sportKey): string
+    {
+        $key = $this->normalizeKey($sportKey);
+        $rollups = $this->resolvedConfig()['rollups'];
+
+        return match ($key) {
+            'trail_running' => $rollups['trail_running'] === 'running' ? 'road_running' : $key,
+            'track_running' => $rollups['track_running'] === 'road_running' ? 'road_running' : $key,
+            'gravel_cycling' => $rollups['gravel_cycling'] === 'own' ? $key : $rollups['gravel_cycling'],
+            'ebike_cycling' => $rollups['ebike_cycling'] === 'mtb_cycling' ? 'mtb_cycling' : $key,
+            default => $key,
+        };
+    }
+
+    /**
+     * Determine whether two resolved sport keys fall into the same rolled-up bucket.
+     */
+    public function sportKeysShareBucket(string $sportKey, string $otherSportKey): bool
+    {
+        return $this->rollUpSportKey($sportKey) === $this->rollUpSportKey($otherSportKey);
+    }
+
+    /**
+     * Determine whether a resolved canonical sport key matches a filter scope key, respecting rollups and parents.
+     */
+    public function sportKeyMatchesScope(string $sportKey, string $scopeKey): bool
+    {
+        $key = $this->normalizeKey($sportKey);
+        $scope = $this->normalizeKey($scopeKey);
+
+        if ($scope === 'all' || $key === $scope || $this->rollUpSportKey($key) === $scope) {
+            return true;
+        }
+
+        if ($key === 'ebike_cycling' && $this->resolvedConfig()['rollups']['ebike_cycling'] === 'exclude') {
+            return false;
+        }
+
+        return ($this->get($key)['parent'] ?? null) === $scope;
+    }
+
+    /**
+     * Add occurrences of a resolved sport key to a running tally, keeping the latest timestamp seen.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $sportCounts
+     *
+     * @param-out array<string, array{count: int, latest_at: string}>  $sportCounts
+     */
+    public function addSportKeyCount(array &$sportCounts, string $sportKey, string $latestAt, int $count = 1): void
+    {
+        if (! isset($sportCounts[$sportKey])) {
+            $sportCounts[$sportKey] = [
+                'count' => $count,
+                'latest_at' => $latestAt,
+            ];
+
+            return;
+        }
+
+        $sportCounts[$sportKey]['count'] += $count;
+
+        if ($latestAt > $sportCounts[$sportKey]['latest_at']) {
+            $sportCounts[$sportKey]['latest_at'] = $latestAt;
+        }
+    }
+
+    /**
+     * Pick the canonical sport key for a multi-activity entity (Segment, Matched Route, etc.)
+     * from its activities' resolved sport-key counts.
+     *
+     * Prefers specific disciplines over generic fallbacks (`cycling`, `other`) whenever specific
+     * disciplines exist, then picks the rolled-up bucket with the most activities. A bucket holding
+     * several keys resolves to the bucket key; a single-key bucket keeps that key so it stays specific.
+     * Ties break on `$fallbackSportKey`, then most recent activity, then key.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $sportCounts
+     */
+    public function resolveDominantSportKey(
+        array $sportCounts,
+        ?string $fallbackSportKey,
+        string $sportCategory,
+    ): string {
+        if ($sportCounts === []) {
+            return $fallbackSportKey ?? $this->normalizeKey($sportCategory);
+        }
+
+        $specificCounts = array_filter(
+            $sportCounts,
+            static fn (string $key): bool => ! in_array($key, self::GENERIC_SPORT_KEYS, true),
+            ARRAY_FILTER_USE_KEY,
+        );
+
+        $buckets = $this->groupSportCountsByBucket($specificCounts !== [] ? $specificCounts : $sportCounts);
+        $winningBucket = $this->pickTopSportKey(
+            $buckets,
+            $fallbackSportKey !== null ? $this->rollUpSportKey($fallbackSportKey) : null,
+        );
+
+        return $this->bucketDisplayKey($winningBucket, $buckets[$winningBucket]['members']);
+    }
+
+    /**
+     * Build ordered sport/discipline filter pills with counts for a multi-activity detail page.
+     *
+     * Keys that roll up into the same bucket share a pill keyed by the bucket; a bucket with a
+     * single member keeps that member's key so its label stays specific.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $sportCounts
+     * @return list<array{key: string, label: string, short_label: string, accent_hex: string, count: int}>
+     */
+    public function buildSportFilterOptions(array $sportCounts): array
+    {
+        $options = [];
+
+        foreach ($this->groupSportCountsByBucket($sportCounts) as $bucketKey => $bucket) {
+            $optionKey = $this->bucketDisplayKey($bucketKey, $bucket['members']);
+            $entry = $this->get($optionKey);
+            $fallbackLabel = ucfirst(str_replace('_', ' ', $optionKey));
+
+            $options[] = [
+                'key' => $entry['key'] ?? $optionKey,
+                'label' => $entry['label'] ?? $fallbackLabel,
+                'short_label' => $entry['short_label'] ?? $fallbackLabel,
+                'accent_hex' => $entry['accent_hex'] ?? '#f59e0b',
+                'count' => $bucket['count'],
+            ];
+        }
+
+        usort($options, static function (array $a, array $b): int {
+            $countCmp = $b['count'] <=> $a['count'];
+
+            if ($countCmp !== 0) {
+                return $countCmp;
+            }
+
+            return $a['key'] <=> $b['key'];
+        });
+
+        return $options;
+    }
+
+    /**
+     * Resolve a requested detail-page sport filter against the available filter options, ignoring unknown keys.
+     *
+     * @param  list<array{key: string, label: string, short_label: string, accent_hex: string, count: int}>  $options
+     */
+    public function resolveSportFilterSelection(array $options, ?string $sport): ?string
+    {
+        if ($sport === null) {
+            return null;
+        }
+
+        $normalized = $this->normalizeKey($sport);
+
+        foreach ($options as $option) {
+            if ($option['key'] === $normalized) {
+                return $normalized;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -717,6 +901,84 @@ class SportRegistry
             static fn (array $item): string => $item['value'],
             $this->disciplinesForCategory($sportCategory),
         );
+    }
+
+    /**
+     * Group resolved sport-key counts by the bucket each key rolls up into.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $sportCounts
+     * @return ($sportCounts is non-empty-array
+     *     ? non-empty-array<string, array{count: int, latest_at: string, members: non-empty-array<string, array{count: int, latest_at: string}>}>
+     *     : array<string, array{count: int, latest_at: string, members: non-empty-array<string, array{count: int, latest_at: string}>}>)
+     */
+    private function groupSportCountsByBucket(array $sportCounts): array
+    {
+        $buckets = [];
+
+        foreach ($sportCounts as $sportKey => $stats) {
+            $bucketKey = $this->rollUpSportKey($sportKey);
+
+            if (! isset($buckets[$bucketKey])) {
+                $buckets[$bucketKey] = [
+                    'count' => 0,
+                    'latest_at' => '',
+                    'members' => [],
+                ];
+            }
+
+            $buckets[$bucketKey]['count'] += $stats['count'];
+            $buckets[$bucketKey]['members'][$sportKey] = $stats;
+
+            if ($stats['latest_at'] > $buckets[$bucketKey]['latest_at']) {
+                $buckets[$bucketKey]['latest_at'] = $stats['latest_at'];
+            }
+        }
+
+        return $buckets;
+    }
+
+    /**
+     * Resolve the key shown for a rolled-up bucket: its single member when only one key rolled into it.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $members
+     */
+    private function bucketDisplayKey(string $bucketKey, array $members): string
+    {
+        return count($members) === 1 ? (string) array_key_first($members) : $bucketKey;
+    }
+
+    /**
+     * Pick the key with the highest count, breaking ties on the preferred key, then most recent, then key.
+     *
+     * @param  non-empty-array<string, array{count: int, latest_at: string}>  $pool
+     */
+    private function pickTopSportKey(array $pool, ?string $preferredKey): string
+    {
+        $maxCount = max(array_column($pool, 'count'));
+        $topKeys = array_keys(array_filter(
+            $pool,
+            static fn (array $stats): bool => $stats['count'] === $maxCount,
+        ));
+
+        if (count($topKeys) === 1) {
+            return (string) $topKeys[0];
+        }
+
+        if ($preferredKey !== null && in_array($preferredKey, $topKeys, true)) {
+            return $preferredKey;
+        }
+
+        usort($topKeys, static function (string|int $a, string|int $b) use ($pool): int {
+            $latestCmp = $pool[$b]['latest_at'] <=> $pool[$a]['latest_at'];
+
+            if ($latestCmp !== 0) {
+                return $latestCmp;
+            }
+
+            return (string) $a <=> (string) $b;
+        });
+
+        return (string) $topKeys[0];
     }
 
     /**

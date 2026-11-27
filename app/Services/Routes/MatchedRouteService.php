@@ -29,6 +29,7 @@ use Illuminate\Database\Eloquent\Builder;
  * @phpstan-type RouteAttemptItem array{
  *     activity_id: int,
  *     name: string,
+ *     sport_key: string,
  *     date: string,
  *     started_at_local: string,
  *     distance_meters: float,
@@ -97,6 +98,10 @@ class MatchedRouteService
      */
     private const array INDEX_ACTIVITY_COLUMNS = [
         'id',
+        'sport_category',
+        'sport_discipline',
+        'discipline_override',
+        'is_indoor',
         'distance_meters',
         'duration_seconds',
         'avg_speed',
@@ -138,23 +143,14 @@ class MatchedRouteService
                 },
             ]);
 
+        $registry = $this->sportRegistry();
+
         if ($sport !== 'all') {
-            $registry = $this->sportRegistry();
             $entry = $registry->get($sport);
 
-            $query->where(function (Builder $sub) use ($sport, $entry, $registry): void {
-                $sub->whereHas('representativeActivity', function (Builder $activityQuery) use ($sport, $registry): void {
-                    $registry->applyScope($activityQuery, $sport);
-                });
-
-                if ($entry !== null && $entry['parent'] === null) {
-                    $sub->orWhere(function (Builder $fallback) use ($entry): void {
-                        $fallback
-                            ->whereNull('representative_activity_id')
-                            ->where('sport_category', $entry['sport_category']);
-                    });
-                }
-            });
+            if ($entry !== null) {
+                $query->where('sport_category', $entry['sport_category']);
+            }
         }
 
         if ($search !== null) {
@@ -212,8 +208,14 @@ class MatchedRouteService
                 }
             }
 
+            $sportCounts = $this->buildActivitySportCounts($activities);
+            $sportMeta = $this->resolveClusterSportMeta($cluster, $sportCounts);
+
+            if ($sport !== 'all' && ! $registry->sportKeyMatchesScope($sportMeta['sport_key'], $sport)) {
+                continue;
+            }
+
             $stats = $this->summarizeAttemptStats($activities);
-            $sportMeta = $this->resolveClusterSportMeta($cluster);
             $locationName = $this->resolveClusterLocation($cluster, $activities);
 
             $attemptCount = max($cluster->activity_count, count($activities));
@@ -234,7 +236,7 @@ class MatchedRouteService
                 'name_override' => $cluster->name_override,
                 'place_label' => $cluster->place_label,
                 'sport_category' => $cluster->sport_category,
-                'effective_discipline' => $cluster->representativeActivity?->effectiveDiscipline(),
+                'effective_discipline' => $sportMeta['effective_discipline'],
                 'sport_key' => $sportMeta['sport_key'],
                 'accent_hex' => $sportMeta['accent_hex'],
                 'metric_mode' => $sportMeta['metric_mode'],
@@ -283,13 +285,25 @@ class MatchedRouteService
      *
      * @return array<string, mixed>
      */
-    public function show(RouteCluster $cluster): array
+    public function show(RouteCluster $cluster, ?string $sport = null): array
     {
+        $registry = $this->sportRegistry();
         $cluster->load(['representativeActivity.stream:id,activity_id,polyline']);
 
         $activities = $this->loadClusterActivities($cluster);
-        $analyzed = $this->analyzeAttempts($activities);
-        $sportMeta = $this->resolveClusterSportMeta($cluster);
+        $sportCounts = $this->buildActivitySportCounts($activities);
+        $sportMeta = $this->resolveClusterSportMeta($cluster, $sportCounts);
+        $availableSports = $registry->buildSportFilterOptions($sportCounts);
+        $selectedSport = $registry->resolveSportFilterSelection($availableSports, $sport);
+
+        $filteredActivities = $selectedSport !== null
+            ? array_values(array_filter(
+                $activities,
+                static fn (Activity $act): bool => $registry->sportKeysShareBucket($registry->resolveActivitySportKey($act), $selectedSport),
+            ))
+            : $activities;
+
+        $analyzed = $this->analyzeAttempts($filteredActivities);
         $locationName = $this->resolveClusterLocation($cluster, $activities);
 
         return [
@@ -300,7 +314,7 @@ class MatchedRouteService
                 'name_override' => $cluster->name_override,
                 'place_label' => $cluster->place_label,
                 'sport_category' => $cluster->sport_category,
-                'effective_discipline' => $cluster->representativeActivity?->effectiveDiscipline(),
+                'effective_discipline' => $sportMeta['effective_discipline'],
                 'sport_key' => $sportMeta['sport_key'],
                 'accent_hex' => $sportMeta['accent_hex'],
                 'metric_mode' => $sportMeta['metric_mode'],
@@ -313,6 +327,8 @@ class MatchedRouteService
             ],
             'polyline' => $this->resolveCanonicalPolyline($cluster),
             'summary' => $analyzed['summary'],
+            'available_sports' => $availableSports,
+            'selected_sport' => $selectedSport,
             'progression' => $analyzed['progression'],
             'attempts' => $analyzed['attempts'],
             'weather_impact' => $analyzed['weather_impact'],
@@ -353,7 +369,7 @@ class MatchedRouteService
         }
 
         $analyzed = $this->analyzeAttempts($activities, $activity->id);
-        $sportMeta = $this->resolveClusterSportMeta($cluster);
+        $sportMeta = $this->resolveClusterSportMeta($cluster, $this->buildActivitySportCounts($activities));
         $locationName = $this->resolveClusterLocation($cluster, $activities);
 
         $currentAttempt = null;
@@ -375,7 +391,7 @@ class MatchedRouteService
                 'name' => $cluster->displayName(),
                 'place_label' => $cluster->place_label,
                 'sport_category' => $cluster->sport_category,
-                'effective_discipline' => $cluster->representativeActivity?->effectiveDiscipline(),
+                'effective_discipline' => $sportMeta['effective_discipline'],
                 'sport_key' => $sportMeta['sport_key'],
                 'accent_hex' => $sportMeta['accent_hex'],
                 'metric_mode' => $sportMeta['metric_mode'],
@@ -543,6 +559,7 @@ class MatchedRouteService
         $avgHr = $hrs !== [] ? round(array_sum($hrs) / count($hrs), 1) : null;
         $avgPower = $powers !== [] ? round(array_sum($powers) / count($powers), 1) : null;
 
+        $registry = $this->sportRegistry();
         /** @var list<RouteAttemptItem> $progression */
         $progression = [];
 
@@ -556,6 +573,7 @@ class MatchedRouteService
             $progression[] = [
                 'activity_id' => $act->id,
                 'name' => $act->name,
+                'sport_key' => $registry->resolveActivitySportKey($act),
                 'date' => $act->started_at_local->format('Y-m-d'),
                 'started_at_local' => $act->started_at_local->format('Y-m-d H:i:s'),
                 'distance_meters' => round($act->distance_meters, 1),
@@ -994,23 +1012,51 @@ class MatchedRouteService
     }
 
     /**
-     * @return array{sport_key: string, accent_hex: string, metric_mode: string}
+     * Aggregate resolved sport-key counts and latest timestamps across a route cluster's activities.
+     *
+     * @param  list<Activity>  $activities
+     * @return array<string, array{count: int, latest_at: string}>
      */
-    private function resolveClusterSportMeta(RouteCluster $cluster): array
+    private function buildActivitySportCounts(array $activities): array
+    {
+        $registry = $this->sportRegistry();
+        /** @var array<string, array{count: int, latest_at: string}> $counts */
+        $counts = [];
+
+        foreach ($activities as $activity) {
+            $registry->addSportKeyCount(
+                $counts,
+                $registry->resolveActivitySportKey($activity),
+                $activity->started_at_local->format('Y-m-d H:i:s'),
+            );
+        }
+
+        return $counts;
+    }
+
+    /**
+     * Resolve cluster sport metadata from the majority specific discipline across matched attempts,
+     * ignoring generic fallbacks (`cycling`, `other`) whenever specific disciplines exist, and falling
+     * back to `representativeActivity` / `sport_category` when no activities are loaded.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $activitySportCounts
+     * @return array{sport_key: string, accent_hex: string, metric_mode: string, effective_discipline: ?string}
+     */
+    private function resolveClusterSportMeta(RouteCluster $cluster, array $activitySportCounts = []): array
     {
         $registry = $this->sportRegistry();
         $rep = $cluster->representativeActivity;
-
-        $sportKey = $rep instanceof Activity
+        $fallbackSportKey = $rep instanceof Activity
             ? $registry->resolveActivitySportKey($rep)
-            : $registry->normalizeKey($cluster->sport_category);
-
+            : null;
+        $sportKey = $registry->resolveDominantSportKey($activitySportCounts, $fallbackSportKey, $cluster->sport_category);
         $entry = $registry->get($sportKey) ?? $registry->get($cluster->sport_category);
 
         return [
             'sport_key' => $entry['key'] ?? $sportKey,
             'accent_hex' => $entry['accent_hex'] ?? '#10b981',
             'metric_mode' => $entry['metric_mode'] ?? 'pace',
+            'effective_discipline' => $entry['discipline'] ?? null,
         ];
     }
 

@@ -12,7 +12,7 @@ use App\Models\Segment;
 use App\Models\SyncRun;
 use App\Services\Export\DataExportService;
 use App\Services\Geocoding\NominatimClient;
-use App\Services\Ingestion\ImportWatchService;
+use App\Services\Ingestion\AutoImportService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
@@ -30,7 +30,7 @@ class SettingsController extends Controller
         QueueStatusService $queueStatus,
         HealthSourceRegistry $healthSources,
         NominatimClient $nominatim,
-        ImportWatchService $importWatch,
+        AutoImportService $autoImport,
         DataExportService $dataExport,
     ): Response {
         return Inertia::render('settings/Index', [
@@ -49,7 +49,7 @@ class SettingsController extends Controller
                 'is_public_endpoint' => $nominatim->isPublicHost(),
                 'rate_limit_ms' => $nominatim->effectiveRateLimitMs(),
             ],
-            'import_watch' => $importWatch->statusPayload(),
+            'auto_import' => $autoImport->statusPayload(),
             'data_export' => $dataExport->summaryPayload(),
             'sports_settings' => $sports->settingsPayload(),
             'health_sources' => $healthSources->settingsPayload(),

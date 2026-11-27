@@ -1,3 +1,5 @@
+import type { SportFilterOption } from '@/types/sports';
+
 export interface RouteAvailableSport {
     key: string;
     label: string;
@@ -22,6 +24,7 @@ export interface RouteAttemptWeather {
 export interface RouteAttemptItem {
     activity_id: number;
     name: string;
+    sport_key: string;
     date: string;
     started_at_local: string;
     distance_meters: number;
@@ -164,6 +167,8 @@ export interface MatchedRouteShowProps {
     route: MatchedRouteDetail;
     polyline: [number, number][];
     summary: MatchedRouteDetailSummary;
+    available_sports: SportFilterOption[];
+    selected_sport: string | null;
     progression: RouteAttemptItem[];
     attempts: RouteAttemptItem[];
     weather_impact: RouteWeatherImpact | null;

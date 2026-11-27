@@ -6,7 +6,7 @@ use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\BestEffort;
-use App\Services\Ingestion\ImportWatchService;
+use App\Services\Ingestion\AutoImportService;
 use App\Services\Ingestion\TelemetryPersistenceService;
 use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
@@ -21,7 +21,7 @@ use Mockery\MockInterface;
 /**
  * @param  list<string>  $messages
  */
-function importWatchBuildFitBinary(array $messages, int $headerSize = 14): string
+function autoImportBuildFitBinary(array $messages, int $headerSize = 14): string
 {
     $payload = implode('', $messages);
     $dataSize = strlen($payload);
@@ -42,7 +42,7 @@ function importWatchBuildFitBinary(array $messages, int $headerSize = 14): strin
 /**
  * @param  list<array{0: int, 1: int, 2: int}>  $fields
  */
-function importWatchFitDefinition(int $localType, int $globalMsg, array $fields): string
+function autoImportFitDefinition(int $localType, int $globalMsg, array $fields): string
 {
     $header = 0x40 | ($localType & 0x0F);
 
@@ -59,17 +59,17 @@ function importWatchFitDefinition(int $localType, int $globalMsg, array $fields)
     return $bytes;
 }
 
-function importWatchFitData(int $localType, string $payload): string
+function autoImportFitData(int $localType, string $payload): string
 {
     return chr($localType & 0x0F).$payload;
 }
 
-function importWatchDegreesToSemicircles(float $degrees): int
+function autoImportDegreesToSemicircles(float $degrees): int
 {
     return (int) round($degrees * (2147483648.0 / 180.0));
 }
 
-function importWatchCreateSyntheticRun(
+function autoImportCreateSyntheticRun(
     int $fitStartTs = 1147292100,
     float $distanceMeters = 5200.0,
     float $speedMps = 4.0,
@@ -79,21 +79,21 @@ function importWatchCreateSyntheticRun(
     $durationSec = (int) round($distanceMeters / $speedMps);
     $messages = [];
 
-    $messages[] = importWatchFitDefinition(0, 0, [
+    $messages[] = autoImportFitDefinition(0, 0, [
         [0, 1, 0x00],
         [1, 2, 0x84],
         [2, 2, 0x84],
     ]);
-    $messages[] = importWatchFitData(0, chr(4).pack('v', 1).pack('v', 4257));
+    $messages[] = autoImportFitData(0, chr(4).pack('v', 1).pack('v', 4257));
 
-    $messages[] = importWatchFitDefinition(1, 19, [
+    $messages[] = autoImportFitDefinition(1, 19, [
         [7, 4, 0x86],
         [8, 4, 0x86],
         [9, 4, 0x86],
         [15, 1, 0x02],
         [110, 4, 0x86],
     ]);
-    $messages[] = importWatchFitData(
+    $messages[] = autoImportFitData(
         1,
         pack('V', $durationSec * 1000)
         .pack('V', $durationSec * 1000)
@@ -102,7 +102,7 @@ function importWatchCreateSyntheticRun(
         .pack('V', (int) round($speedMps * 1000)),
     );
 
-    $messages[] = importWatchFitDefinition(2, 20, [
+    $messages[] = autoImportFitDefinition(2, 20, [
         [253, 4, 0x86],
         [0, 4, 0x85],
         [1, 4, 0x85],
@@ -119,11 +119,11 @@ function importWatchCreateSyntheticRun(
         $lng = 174.7633 + ($s * 0.00001);
         $alt = 120.0 + ($dist * 0.01);
 
-        $messages[] = importWatchFitData(
+        $messages[] = autoImportFitData(
             2,
             pack('V', $fitStartTs + $s)
-            .pack('V', importWatchDegreesToSemicircles($lat))
-            .pack('V', importWatchDegreesToSemicircles($lng))
+            .pack('V', autoImportDegreesToSemicircles($lat))
+            .pack('V', autoImportDegreesToSemicircles($lng))
             .chr(155)
             .chr(87)
             .pack('V', (int) round($dist * 100))
@@ -132,7 +132,7 @@ function importWatchCreateSyntheticRun(
         );
     }
 
-    $messages[] = importWatchFitDefinition(3, 18, [
+    $messages[] = autoImportFitDefinition(3, 18, [
         [2, 4, 0x86],
         [5, 1, 0x00],
         [6, 1, 0x00],
@@ -148,7 +148,7 @@ function importWatchCreateSyntheticRun(
         [124, 4, 0x86],
         [125, 4, 0x86],
     ]);
-    $messages[] = importWatchFitData(
+    $messages[] = autoImportFitData(
         3,
         pack('V', $fitStartTs)
         .chr($sportId)
@@ -166,12 +166,12 @@ function importWatchCreateSyntheticRun(
         .pack('V', (int) round(($speedMps + 1.0) * 1000)),
     );
 
-    return importWatchBuildFitBinary($messages);
+    return autoImportBuildFitBinary($messages);
 }
 
-function importWatchZipBytes(string $contents, string $entryName = 'activity.fit'): string
+function autoImportZipBytes(string $contents, string $entryName = 'activity.fit'): string
 {
-    $path = tempnam(sys_get_temp_dir(), 'splitline_watch_zip_');
+    $path = tempnam(sys_get_temp_dir(), 'splitline_auto_import_zip_');
     expect($path)->toBeString();
 
     $zip = new ZipArchive;
@@ -187,15 +187,15 @@ function importWatchZipBytes(string $contents, string $entryName = 'activity.fit
     return $bytes;
 }
 
-function importWatchCreateTempDir(): string
+function autoImportCreateTempDir(): string
 {
-    $dir = sys_get_temp_dir().'/splitline_import_watch_test_'.bin2hex(random_bytes(8));
+    $dir = sys_get_temp_dir().'/splitline_auto_import_test_'.bin2hex(random_bytes(8));
     mkdir($dir, 0777, true);
 
     return $dir;
 }
 
-function importWatchRemoveDir(string $dir): void
+function autoImportRemoveDir(string $dir): void
 {
     if (! is_dir($dir)) {
         return;
@@ -226,14 +226,14 @@ it('imports .fit and .zip files in keep mode, stores archives, dispatches enrich
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
         config([
             'app.display_timezone' => 'Pacific/Auckland',
-            'services.import_watch.dir' => $tempDir,
-            'services.import_watch.mode' => 'keep',
-            'services.import_watch.min_file_age_seconds' => 0,
+            'services.auto_import.dir' => $tempDir,
+            'services.auto_import.mode' => 'keep',
+            'services.auto_import.min_file_age_seconds' => 0,
             'services.open_meteo.enabled' => true,
             'services.open_meteo.auto_sync' => true,
             'services.nominatim.enabled' => true,
@@ -241,16 +241,16 @@ it('imports .fit and .zip files in keep mode, stores archives, dispatches enrich
         ]);
         app(AppSettings::class)->flushMemo();
 
-        $fitOne = importWatchCreateSyntheticRun(fitStartTs: 1147292100, distanceMeters: 5200.0);
-        $fitTwo = importWatchCreateSyntheticRun(fitStartTs: 1147378500, distanceMeters: 3000.0);
-        $zipTwo = importWatchZipBytes($fitTwo, 'SECOND.FIT');
-        $zipDuplicateOfOne = importWatchZipBytes($fitOne, 'DUP_OF_ONE.FIT');
+        $fitOne = autoImportCreateSyntheticRun(fitStartTs: 1147292100, distanceMeters: 5200.0);
+        $fitTwo = autoImportCreateSyntheticRun(fitStartTs: 1147378500, distanceMeters: 3000.0);
+        $zipTwo = autoImportZipBytes($fitTwo, 'SECOND.FIT');
+        $zipDuplicateOfOne = autoImportZipBytes($fitOne, 'DUP_OF_ONE.FIT');
 
         file_put_contents($tempDir.'/01_morning.fit', $fitOne);
         file_put_contents($tempDir.'/02_evening.zip', $zipTwo);
         file_put_contents($tempDir.'/03_duplicate.zip', $zipDuplicateOfOne);
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $firstScan = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($firstScan['configured'])->toBeTrue()
@@ -299,7 +299,7 @@ it('imports .fit and .zip files in keep mode, stores archives, dispatches enrich
             ->and($status['last_run'])->not->toBeNull()
             ->and($status['last_run']['recent_imports'])->toHaveCount(2);
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -307,20 +307,20 @@ it('tracks unchanged failed files in keep mode and retries them if replaced with
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
         config([
-            'services.import_watch.dir' => $tempDir,
-            'services.import_watch.mode' => 'keep',
-            'services.import_watch.min_file_age_seconds' => 0,
+            'services.auto_import.dir' => $tempDir,
+            'services.auto_import.mode' => 'keep',
+            'services.auto_import.min_file_age_seconds' => 0,
         ]);
         app(AppSettings::class)->flushMemo();
 
         $filePath = $tempDir.'/broken.fit';
         file_put_contents($filePath, 'corrupt-fit-bytes');
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $first = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(0)
@@ -334,7 +334,7 @@ it('tracks unchanged failed files in keep mode and retries them if replaced with
             ->and($second['failed'])->toBe(0)
             ->and($second['last_error'])->toBeNull();
 
-        file_put_contents($filePath, importWatchCreateSyntheticRun());
+        file_put_contents($filePath, autoImportCreateSyntheticRun());
 
         $third = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
@@ -343,7 +343,7 @@ it('tracks unchanged failed files in keep mode and retries them if replaced with
             ->and($third['last_error'])->toBeNull()
             ->and(Activity::query()->count())->toBe(1);
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -351,21 +351,21 @@ it('moves created and duplicate files to processed and corrupt files to failed i
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
         config([
-            'services.import_watch.dir' => $tempDir,
-            'services.import_watch.mode' => 'archive',
-            'services.import_watch.min_file_age_seconds' => 0,
+            'services.auto_import.dir' => $tempDir,
+            'services.auto_import.mode' => 'archive',
+            'services.auto_import.min_file_age_seconds' => 0,
         ]);
         app(AppSettings::class)->flushMemo();
 
-        $fitBytes = importWatchCreateSyntheticRun();
+        $fitBytes = autoImportCreateSyntheticRun();
         file_put_contents($tempDir.'/run.fit', $fitBytes);
         file_put_contents($tempDir.'/corrupt.fit', 'invalid-binary-payload');
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $first = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(1)
@@ -387,7 +387,7 @@ it('moves created and duplicate files to processed and corrupt files to failed i
             ->and(file_exists($tempDir.'/processed/run-2.fit'))->toBeTrue()
             ->and(file_exists($tempDir.'/failed/corrupt-2.fit'))->toBeTrue();
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -395,7 +395,7 @@ it('skips processed and failed subdirectories, hidden dotfiles, Syncthing temp f
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
         mkdir($tempDir.'/processed', 0777, true);
@@ -403,22 +403,22 @@ it('skips processed and failed subdirectories, hidden dotfiles, Syncthing temp f
         mkdir($tempDir.'/.stversions', 0777, true);
         mkdir($tempDir.'/2026/05', 0777, true);
 
-        file_put_contents($tempDir.'/processed/old.fit', importWatchCreateSyntheticRun(fitStartTs: 1147000000));
-        file_put_contents($tempDir.'/failed/bad.fit', importWatchCreateSyntheticRun(fitStartTs: 1147010000));
-        file_put_contents($tempDir.'/.stversions/versioned.fit', importWatchCreateSyntheticRun(fitStartTs: 1147020000));
-        file_put_contents($tempDir.'/.hidden.fit', importWatchCreateSyntheticRun(fitStartTs: 1147030000));
-        file_put_contents($tempDir.'/.syncthing.incoming.fit.tmp', importWatchCreateSyntheticRun(fitStartTs: 1147040000));
+        file_put_contents($tempDir.'/processed/old.fit', autoImportCreateSyntheticRun(fitStartTs: 1147000000));
+        file_put_contents($tempDir.'/failed/bad.fit', autoImportCreateSyntheticRun(fitStartTs: 1147010000));
+        file_put_contents($tempDir.'/.stversions/versioned.fit', autoImportCreateSyntheticRun(fitStartTs: 1147020000));
+        file_put_contents($tempDir.'/.hidden.fit', autoImportCreateSyntheticRun(fitStartTs: 1147030000));
+        file_put_contents($tempDir.'/.syncthing.incoming.fit.tmp', autoImportCreateSyntheticRun(fitStartTs: 1147040000));
         file_put_contents($tempDir.'/notes.txt', 'ignore me');
-        file_put_contents($tempDir.'/2026/05/nested_run.fit', importWatchCreateSyntheticRun(fitStartTs: 1147292100));
+        file_put_contents($tempDir.'/2026/05/nested_run.fit', autoImportCreateSyntheticRun(fitStartTs: 1147292100));
 
         config([
-            'services.import_watch.dir' => $tempDir,
-            'services.import_watch.mode' => 'keep',
-            'services.import_watch.min_file_age_seconds' => 0,
+            'services.auto_import.dir' => $tempDir,
+            'services.auto_import.mode' => 'keep',
+            'services.auto_import.min_file_age_seconds' => 0,
         ]);
         app(AppSettings::class)->flushMemo();
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $discovered = $service->discoverFiles($tempDir);
 
         expect($discovered)->toBe([$tempDir.'/2026/05/nested_run.fit']);
@@ -430,7 +430,7 @@ it('skips processed and failed subdirectories, hidden dotfiles, Syncthing temp f
             ->and($result['failed'])->toBe(0)
             ->and(Activity::query()->count())->toBe(1);
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -441,26 +441,26 @@ it('defers brand-new files younger than min_file_age_seconds without moving or f
     $now = CarbonImmutable::parse('2026-05-12 12:00:00', 'UTC');
     $this->travelTo($now);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
         $oldFile = $tempDir.'/stable.fit';
         $freshFile = $tempDir.'/syncing.fit';
 
-        file_put_contents($oldFile, importWatchCreateSyntheticRun(fitStartTs: 1147292100));
-        file_put_contents($freshFile, importWatchCreateSyntheticRun(fitStartTs: 1147378500));
+        file_put_contents($oldFile, autoImportCreateSyntheticRun(fitStartTs: 1147292100));
+        file_put_contents($freshFile, autoImportCreateSyntheticRun(fitStartTs: 1147378500));
 
         touch($oldFile, $now->subSeconds(30)->getTimestamp());
         touch($freshFile, $now->subSeconds(2)->getTimestamp());
 
         config([
-            'services.import_watch.dir' => $tempDir,
-            'services.import_watch.mode' => 'archive',
-            'services.import_watch.min_file_age_seconds' => 10,
+            'services.auto_import.dir' => $tempDir,
+            'services.auto_import.mode' => 'archive',
+            'services.auto_import.min_file_age_seconds' => 10,
         ]);
         app(AppSettings::class)->flushMemo();
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $first = $service->scan(requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(1)
@@ -479,7 +479,7 @@ it('defers brand-new files younger than min_file_age_seconds without moving or f
             ->and(file_exists($tempDir.'/processed/syncing.fit'))->toBeTrue()
             ->and(Activity::query()->count())->toBe(2);
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -488,12 +488,12 @@ it('reports unconfigured and missing directories cleanly in statusPayload, repor
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
     config([
-        'services.import_watch.dir' => null,
-        'services.import_watch.mode' => 'keep',
+        'services.auto_import.dir' => null,
+        'services.auto_import.mode' => 'keep',
     ]);
     app(AppSettings::class)->flushMemo();
 
-    $service = app(ImportWatchService::class);
+    $service = app(AutoImportService::class);
     $unconfiguredStatus = $service->statusPayload();
 
     expect($unconfiguredStatus)->toMatchArray([
@@ -510,10 +510,10 @@ it('reports unconfigured and missing directories cleanly in statusPayload, repor
     $unconfiguredScan = $service->scan();
 
     expect($unconfiguredScan['configured'])->toBeFalse()
-        ->and(app(AppSettings::class)->get(ImportWatchService::LAST_RUN_SETTING_KEY))->toBeNull();
+        ->and(app(AppSettings::class)->get(AutoImportService::LAST_RUN_SETTING_KEY))->toBeNull();
 
-    $missingPath = sys_get_temp_dir().'/splitline_missing_watch_dir_'.bin2hex(random_bytes(6));
-    config(['services.import_watch.dir' => $missingPath]);
+    $missingPath = sys_get_temp_dir().'/splitline_missing_auto_import_dir_'.bin2hex(random_bytes(6));
+    config(['services.auto_import.dir' => $missingPath]);
 
     $missingStatus = $service->statusPayload();
 
@@ -527,15 +527,15 @@ it('reports unconfigured and missing directories cleanly in statusPayload, repor
     expect($missingScan['directory_exists'])->toBeFalse()
         ->and($missingScan['last_error'])->toContain($missingPath);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
-        config(['services.import_watch.dir' => $tempDir]);
+        config(['services.auto_import.dir' => $tempDir]);
 
         for ($i = 1; $i <= 6; $i++) {
             file_put_contents(
                 sprintf('%s/%02d_run.fit', $tempDir, $i),
-                importWatchCreateSyntheticRun(fitStartTs: 1147292100 + ($i * 3600)),
+                autoImportCreateSyntheticRun(fitStartTs: 1147292100 + ($i * 3600)),
             );
         }
 
@@ -555,7 +555,7 @@ it('reports unconfigured and missing directories cleanly in statusPayload, repor
             ->and($service->statusPayload()['pending_files'])->toBe(0)
             ->and($service->statusPayload()['imported_total'])->toBe(6);
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -567,21 +567,21 @@ it('falls back to keeping files in place when archive mode scans a read-only dir
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
         $filePath = $tempDir.'/readonly_run.fit';
-        file_put_contents($filePath, importWatchCreateSyntheticRun());
+        file_put_contents($filePath, autoImportCreateSyntheticRun());
         chmod($tempDir, 0555);
 
         config([
-            'services.import_watch.dir' => $tempDir,
-            'services.import_watch.mode' => 'archive',
-            'services.import_watch.min_file_age_seconds' => 0,
+            'services.auto_import.dir' => $tempDir,
+            'services.auto_import.mode' => 'archive',
+            'services.auto_import.min_file_age_seconds' => 0,
         ]);
         app(AppSettings::class)->flushMemo();
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $first = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(1)
@@ -597,7 +597,7 @@ it('falls back to keeping files in place when archive mode scans a read-only dir
             ->and($second['failed'])->toBe(0);
     } finally {
         chmod($tempDir, 0777);
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -605,16 +605,16 @@ it('skips the scan without importing while another scan holds the lock', functio
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
-    $lock = Cache::lock(ImportWatchService::SCAN_LOCK_KEY, 60);
+    $tempDir = autoImportCreateTempDir();
+    $lock = Cache::lock(AutoImportService::SCAN_LOCK_KEY, 60);
 
     try {
-        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'keep']);
-        file_put_contents($tempDir.'/run.fit', importWatchCreateSyntheticRun());
+        config(['services.auto_import.dir' => $tempDir, 'services.auto_import.mode' => 'keep']);
+        file_put_contents($tempDir.'/run.fit', autoImportCreateSyntheticRun());
 
         expect($lock->get())->toBeTrue();
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $blocked = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($blocked['busy'])->toBeTrue()
@@ -629,18 +629,18 @@ it('skips the scan without importing while another scan holds the lock', functio
             ->and($unblocked['created'])->toBe(1);
     } finally {
         $lock->release();
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
 it('treats a unique constraint race with another importer as a duplicate and archives the file as processed', function () {
     Storage::fake('local');
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
-        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'archive']);
-        file_put_contents($tempDir.'/raced.fit', importWatchCreateSyntheticRun());
+        config(['services.auto_import.dir' => $tempDir, 'services.auto_import.mode' => 'archive']);
+        file_put_contents($tempDir.'/raced.fit', autoImportCreateSyntheticRun());
 
         $this->mock(TelemetryPersistenceService::class, function (MockInterface $mock): void {
             $mock->shouldReceive('upsertActivity')->andThrow(new UniqueConstraintViolationException(
@@ -651,7 +651,7 @@ it('treats a unique constraint race with another importer as a duplicate and arc
             ));
         });
 
-        $result = app(ImportWatchService::class)->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+        $result = app(AutoImportService::class)->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($result['skipped'])->toBe(1)
             ->and($result['failed'])->toBe(0)
@@ -660,7 +660,7 @@ it('treats a unique constraint race with another importer as a duplicate and arc
             ->and(file_exists($tempDir.'/processed/raced.fit'))->toBeTrue()
             ->and(file_exists($tempDir.'/failed/raced.fit'))->toBeFalse();
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -668,19 +668,19 @@ it('waits until a file keeps the same size and mtime across scans before importi
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
-        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'archive']);
+        config(['services.auto_import.dir' => $tempDir, 'services.auto_import.mode' => 'archive']);
 
         $filePath = $tempDir.'/copying.fit';
-        $fitBytes = importWatchCreateSyntheticRun();
+        $fitBytes = autoImportCreateSyntheticRun();
         $preservedMtime = now()->subDay()->getTimestamp();
 
         file_put_contents($filePath, substr($fitBytes, 0, 40));
         touch($filePath, $preservedMtime);
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
         $partial = $service->scan();
 
         expect($partial['deferred_recent'])->toBe(1)
@@ -703,7 +703,7 @@ it('waits until a file keeps the same size and mtime across scans before importi
             ->and($settled['deferred_recent'])->toBe(0)
             ->and(file_exists($tempDir.'/processed/copying.fit'))->toBeTrue();
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
@@ -715,15 +715,15 @@ it('skips unchanged previously imported files in keep mode without reading them 
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
-        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'keep']);
+        config(['services.auto_import.dir' => $tempDir, 'services.auto_import.mode' => 'keep']);
 
         $filePath = $tempDir.'/run.zip';
-        file_put_contents($filePath, importWatchZipBytes(importWatchCreateSyntheticRun()));
+        file_put_contents($filePath, autoImportZipBytes(autoImportCreateSyntheticRun()));
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
 
         expect($service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false)['created'])->toBe(1);
 
@@ -735,25 +735,25 @@ it('skips unchanged previously imported files in keep mode without reading them 
             ->and($rescan['failed'])->toBe(0);
     } finally {
         @chmod($tempDir.'/run.zip', 0644);
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });
 
-it('ignores symlinked files and directories in the watch folder', function () {
+it('ignores symlinked files and directories in the auto-import folder', function () {
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
-    $tempDir = importWatchCreateTempDir();
-    $outsideDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
+    $outsideDir = autoImportCreateTempDir();
 
     try {
-        file_put_contents($outsideDir.'/secret.fit', importWatchCreateSyntheticRun());
+        file_put_contents($outsideDir.'/secret.fit', autoImportCreateSyntheticRun());
         symlink($outsideDir.'/secret.fit', $tempDir.'/linked.fit');
         symlink($outsideDir, $tempDir.'/linked-dir');
 
-        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'archive']);
+        config(['services.auto_import.dir' => $tempDir, 'services.auto_import.mode' => 'archive']);
 
-        $service = app(ImportWatchService::class);
+        $service = app(AutoImportService::class);
 
         expect($service->discoverFiles($tempDir))->toBe([]);
 
@@ -766,8 +766,8 @@ it('ignores symlinked files and directories in the watch folder', function () {
     } finally {
         @unlink($tempDir.'/linked.fit');
         @unlink($tempDir.'/linked-dir');
-        importWatchRemoveDir($tempDir);
-        importWatchRemoveDir($outsideDir);
+        autoImportRemoveDir($tempDir);
+        autoImportRemoveDir($outsideDir);
     }
 });
 
@@ -775,19 +775,19 @@ it('rolls back the activity, archive, and enrichment jobs when persisting the st
     Storage::fake('local');
     config(['queue.default' => 'database']);
 
-    $tempDir = importWatchCreateTempDir();
+    $tempDir = autoImportCreateTempDir();
 
     try {
-        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'keep']);
+        config(['services.auto_import.dir' => $tempDir, 'services.auto_import.mode' => 'keep']);
 
-        $fitBytes = importWatchCreateSyntheticRun();
+        $fitBytes = autoImportCreateSyntheticRun();
         file_put_contents($tempDir.'/run.fit', $fitBytes);
 
         ActivityStream::creating(function (): never {
             throw new RuntimeException('SQLSTATE[HY000]: disk I/O error at /var/lib/secret.sqlite');
         });
 
-        $result = app(ImportWatchService::class)->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+        $result = app(AutoImportService::class)->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($result['failed'])->toBe(1)
             ->and($result['last_error'])->toContain('run.fit')
@@ -797,6 +797,6 @@ it('rolls back the activity, archive, and enrichment jobs when persisting the st
 
         Storage::disk('local')->assertMissing('fit_upload/fits/'.hash('sha256', $fitBytes).'.fit');
     } finally {
-        importWatchRemoveDir($tempDir);
+        autoImportRemoveDir($tempDir);
     }
 });

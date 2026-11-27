@@ -23,6 +23,7 @@ import BaseChart, {
     type ChartPointClickPayload,
 } from '@/components/charts/BaseChart.vue';
 import ActivityMap from '@/components/maps/ActivityMap.vue';
+import SportFilterPills from '@/components/SportFilterPills.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
     formatDurationClock,
@@ -65,6 +66,38 @@ const sportMeta = computed(() => getSportMeta(props.segment.sport_key));
 const categoryMeta = computed(() =>
     climbCategoryMeta(props.segment.climb_category),
 );
+const hasMixedSports = computed<boolean>(
+    () => props.available_sports.length > 1,
+);
+const selectedSportMeta = computed(() =>
+    props.selected_sport ? getSportMeta(props.selected_sport) : null,
+);
+const effortsKpiLabel = computed<string>(() => {
+    const parts: string[] = [];
+
+    if (props.selected_year !== null) {
+        parts.push(String(props.selected_year));
+    }
+
+    if (selectedSportMeta.value) {
+        parts.push(selectedSportMeta.value.short_label);
+    }
+
+    return parts.length > 0 ? `${parts.join(' ')} Efforts` : 'Efforts';
+});
+const prKpiLabel = computed<string>(() => {
+    const parts: string[] = [];
+
+    if (props.selected_year !== null) {
+        parts.push(String(props.selected_year));
+    }
+
+    if (selectedSportMeta.value) {
+        parts.push(selectedSportMeta.value.short_label);
+    }
+
+    return parts.length > 0 ? `${parts.join(' ')} Best` : 'All-Time PR';
+});
 const usesPace = computed<boolean>(
     () =>
         props.segment.metric_mode === 'pace' ||
@@ -177,18 +210,63 @@ function confirmDeleteSegment(): void {
     });
 }
 
-function selectYear(year: number | null): void {
+function leaderboardFilterUrl(
+    year: number | null,
+    sport: string | null,
+): string {
     const query: Record<string, string> = {};
 
     if (year !== null) {
         query.year = String(year);
     }
 
-    router.get(showSegment.url(props.segment.id), query, {
-        preserveState: true,
-        preserveScroll: true,
-        replace: true,
-    });
+    if (sport !== null) {
+        query.sport = sport;
+    }
+
+    return showSegment.url(props.segment.id, { query });
+}
+
+function applyLeaderboardFilters(
+    year: number | null,
+    sport: string | null,
+): void {
+    router.get(
+        leaderboardFilterUrl(year, sport),
+        {},
+        {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+            onSuccess: (page) => {
+                const resolved = page.props as unknown as SegmentShowProps;
+
+                // The server drops filters with no matching efforts (e.g. a year without efforts
+                // in the chosen discipline), so keep the URL in sync with what is actually applied.
+                if (
+                    resolved.selected_year !== year ||
+                    resolved.selected_sport !== sport
+                ) {
+                    router.replace({
+                        url: leaderboardFilterUrl(
+                            resolved.selected_year,
+                            resolved.selected_sport,
+                        ),
+                        preserveState: true,
+                        preserveScroll: true,
+                    });
+                }
+            },
+        },
+    );
+}
+
+function selectYear(year: number | null): void {
+    applyLeaderboardFilters(year, props.selected_sport);
+}
+
+function selectSport(sport: string | null): void {
+    applyLeaderboardFilters(props.selected_year, sport);
 }
 
 const hasAnyPower = computed<boolean>(() =>
@@ -375,10 +453,16 @@ const elevationProfileOption = computed<EChartsOption>(() => {
 const progressionOption = computed<EChartsOption>(() => {
     const currentUnits = units.value;
     const rows = props.progression;
-    const accent = props.segment.accent_hex || '#10b981';
+    const accent =
+        selectedSportMeta.value?.accent_hex ||
+        props.segment.accent_hex ||
+        '#10b981';
     const labels = rows.map((row) => formatShortDate(row.date));
     const hasVam = rows.some((row) => row.vam !== null && row.vam > 0);
     const isPace = usesPace.value;
+    const showEffortSport = hasMixedSports.value;
+    const tintByEffortSport =
+        hasMixedSports.value && props.selected_sport === null;
 
     const timeData = rows.map((row) => {
         if (row.is_display_pr) {
@@ -390,6 +474,15 @@ const progressionOption = computed<EChartsOption>(() => {
                     color: '#10b981',
                     borderColor: '#f59e0b',
                     borderWidth: 2.5,
+                },
+            };
+        }
+
+        if (tintByEffortSport) {
+            return {
+                value: row.elapsed_seconds,
+                itemStyle: {
+                    color: getSportMeta(row.sport_key).accent_hex,
                 },
             };
         }
@@ -437,9 +530,12 @@ const progressionOption = computed<EChartsOption>(() => {
                 }
 
                 const effort = rows[idx];
+                const effortSportSuffix = showEffortSport
+                    ? ` · ${getSportMeta(effort.sport_key).label}`
+                    : '';
                 const lines = [
                     `<div style="font-weight:600;margin-bottom:2px;">${escapeHtml(effort.activity_name)}${effort.is_display_pr ? ' (◆ PR)' : ''}</div>`,
-                    `<div style="opacity:0.75;margin-bottom:4px;">${escapeHtml(formatDateWithYear(effort.date))}</div>`,
+                    `<div style="opacity:0.75;margin-bottom:4px;">${escapeHtml(formatDateWithYear(effort.date))}${escapeHtml(effortSportSuffix)}</div>`,
                     `<div>Time: <strong>${escapeHtml(formatDurationClock(effort.elapsed_seconds))}</strong></div>`,
                     `<div>${isPace ? 'Pace' : 'Speed'}: <strong>${escapeHtml(formatMetricSpeedOrPace(effort.avg_speed))}</strong></div>`,
                 ];
@@ -816,7 +912,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                 <p
                     class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    {{ selected_year ? `${selected_year} Efforts` : 'Efforts' }}
+                    {{ effortsKpiLabel }}
                 </p>
                 <p
                     class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -841,9 +937,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     class="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-amber-700 uppercase dark:text-amber-400"
                 >
                     <Trophy class="size-3" />
-                    {{
-                        selected_year ? `${selected_year} Best` : 'All-Time PR'
-                    }}
+                    {{ prKpiLabel }}
                 </p>
                 <p
                     class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -1025,37 +1119,52 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     Personal Leaderboard ({{ efforts.length }})
                 </h2>
 
-                <!-- Year Filter Pills -->
-                <div
-                    v-if="available_years.length > 0"
-                    class="flex flex-wrap items-center gap-1"
-                >
-                    <button
-                        type="button"
-                        class="cursor-pointer rounded-md border px-2 py-1 font-mono text-[11px] font-medium transition-colors"
-                        :class="
-                            selected_year === null
-                                ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
-                                : 'border-zinc-200/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100'
-                        "
-                        @click="selectYear(null)"
+                <div class="flex flex-wrap items-center gap-2">
+                    <!-- Discipline Filter Pills (shown when efforts span multiple disciplines) -->
+                    <SportFilterPills
+                        v-if="hasMixedSports"
+                        :options="available_sports"
+                        :selected="selected_sport"
+                        @select="selectSport"
+                    />
+
+                    <span
+                        v-if="hasMixedSports && available_years.length > 0"
+                        class="hidden h-4 w-px bg-zinc-200 sm:inline-block dark:bg-zinc-800"
+                    />
+
+                    <!-- Year Filter Pills -->
+                    <div
+                        v-if="available_years.length > 0"
+                        class="flex flex-wrap items-center gap-1"
                     >
-                        All-Time
-                    </button>
-                    <button
-                        v-for="year in available_years"
-                        :key="year"
-                        type="button"
-                        class="cursor-pointer rounded-md border px-2 py-1 font-mono text-[11px] font-medium tabular-nums transition-colors"
-                        :class="
-                            selected_year === year
-                                ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
-                                : 'border-zinc-200/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100'
-                        "
-                        @click="selectYear(year)"
-                    >
-                        {{ year }}
-                    </button>
+                        <button
+                            type="button"
+                            class="cursor-pointer rounded-md border px-2 py-1 font-mono text-[11px] font-medium transition-colors"
+                            :class="
+                                selected_year === null
+                                    ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+                                    : 'border-zinc-200/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100'
+                            "
+                            @click="selectYear(null)"
+                        >
+                            All-Time
+                        </button>
+                        <button
+                            v-for="year in available_years"
+                            :key="year"
+                            type="button"
+                            class="cursor-pointer rounded-md border px-2 py-1 font-mono text-[11px] font-medium tabular-nums transition-colors"
+                            :class="
+                                selected_year === year
+                                    ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
+                                    : 'border-zinc-200/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100'
+                            "
+                            @click="selectYear(year)"
+                        >
+                            {{ year }}
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -1117,12 +1226,31 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                 {{ formatDateWithYear(effort.date) }}
                             </td>
                             <td class="max-w-xs px-4 py-2.5">
-                                <Link
-                                    :href="showActivity.url(effort.activity_id)"
-                                    class="block truncate font-medium text-zinc-900 transition-colors hover:text-emerald-600 dark:text-zinc-100 dark:hover:text-emerald-400"
-                                >
-                                    {{ effort.activity_name }}
-                                </Link>
+                                <div class="flex items-center gap-2">
+                                    <Link
+                                        :href="
+                                            showActivity.url(effort.activity_id)
+                                        "
+                                        class="min-w-0 truncate font-medium text-zinc-900 transition-colors hover:text-emerald-600 dark:text-zinc-100 dark:hover:text-emerald-400"
+                                    >
+                                        {{ effort.activity_name }}
+                                    </Link>
+                                    <span
+                                        v-if="hasMixedSports"
+                                        :class="[
+                                            'shrink-0 rounded border px-1.5 py-0.25 font-mono text-[10px] font-medium',
+                                            sportBadgeClasses(
+                                                getSportMeta(effort.sport_key)
+                                                    .color_token,
+                                            ),
+                                        ]"
+                                    >
+                                        {{
+                                            getSportMeta(effort.sport_key)
+                                                .short_label
+                                        }}
+                                    </span>
+                                </div>
                             </td>
                             <td
                                 class="px-4 py-2.5 text-right font-mono text-xs font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"

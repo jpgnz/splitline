@@ -2,31 +2,31 @@
 
 namespace App\Http\Controllers;
 
-use App\Services\Ingestion\ImportWatchService;
+use App\Services\Ingestion\AutoImportService;
 use Illuminate\Http\RedirectResponse;
 
-class ImportWatchController extends Controller
+class AutoImportController extends Controller
 {
-    public function scan(ImportWatchService $watcher): RedirectResponse
+    public function scan(AutoImportService $autoImport): RedirectResponse
     {
-        $directory = $watcher->configuredDirectory();
+        $directory = $autoImport->configuredDirectory();
 
         if ($directory === null) {
-            return back()->with('status', 'Import watch folder is not configured. Set IMPORT_WATCH_DIR in your environment.');
+            return back()->with('status', 'Auto-import folder is not configured. Set AUTO_IMPORT_DIR in your environment.');
         }
 
         if (! is_dir($directory)) {
-            return back()->with('status', "Import watch folder does not exist: {$directory}");
+            return back()->with('status', "Auto-import folder does not exist: {$directory}");
         }
 
         if (! is_readable($directory)) {
-            return back()->with('status', "Import watch folder is not readable: {$directory}");
+            return back()->with('status', "Auto-import folder is not readable: {$directory}");
         }
 
-        $result = $watcher->scan();
+        $result = $autoImport->scan();
 
         if ($result['busy']) {
-            return back()->with('status', 'An import folder scan is already running. Try again in a moment.');
+            return back()->with('status', 'An auto-import folder scan is already running. Try again in a moment.');
         }
 
         $message = sprintf(
