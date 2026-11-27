@@ -3,6 +3,7 @@ import { Head, Link, router, useForm, usePage } from '@inertiajs/vue3';
 import {
     ArrowDown,
     ArrowLeft,
+    ArrowLeftRight,
     ArrowUp,
     ArrowUpDown,
     Check,
@@ -33,7 +34,10 @@ import {
 } from '@/lib/format';
 import { useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
-import { show as showActivity } from '@/routes/activities';
+import {
+    compare as activitiesCompare,
+    show as showActivity,
+} from '@/routes/activities';
 import { index as routesIndex, update as updateRoute } from '@/routes/routes';
 import { unlink as unlinkActivityRoute } from '@/routes/routes/activities';
 import type { RouteAttemptItem, MatchedRouteShowProps } from '@/types/routes';
@@ -172,6 +176,45 @@ const hasAnyPower = computed<boolean>(() =>
 const hasAnyWeather = computed<boolean>(() =>
     props.attempts.some((a) => a.weather !== null),
 );
+
+const prActivityId = computed<number | null>(
+    () =>
+        props.summary.pr_activity_id ??
+        props.attempts.find((a) => a.is_pr)?.activity_id ??
+        null,
+);
+
+const latestAttempt = computed<RouteAttemptItem | null>(() => {
+    if (props.attempts.length === 0) {
+        return null;
+    }
+
+    return [...props.attempts].sort((a, b) =>
+        b.started_at_local.localeCompare(a.started_at_local),
+    )[0];
+});
+
+const latestVsPrCompareUrl = computed<string | null>(() => {
+    if (
+        prActivityId.value === null ||
+        latestAttempt.value === null ||
+        latestAttempt.value.activity_id === prActivityId.value
+    ) {
+        return null;
+    }
+
+    return activitiesCompare.url({
+        query: {
+            ids: `${prActivityId.value},${latestAttempt.value.activity_id}`,
+        },
+    });
+});
+
+function compareVsPrUrl(activityId: number): string {
+    return activitiesCompare.url({
+        query: { ids: `${prActivityId.value},${activityId}` },
+    });
+}
 
 const sortedAttempts = computed<RouteAttemptItem[]>(() => {
     const list = [...props.attempts];
@@ -561,6 +604,14 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                         Last completed
                         {{ formatDateWithYear(route.last_activity_at) }}
                     </span>
+                    <Link
+                        v-if="latestVsPrCompareUrl"
+                        :href="latestVsPrCompareUrl"
+                        class="inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2.5 py-1.5 font-mono text-[11px] font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
+                    >
+                        <ArrowLeftRight class="size-3" />
+                        Compare Latest vs PR
+                    </Link>
                 </div>
             </div>
 
@@ -1501,18 +1552,38 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                         Cancel
                                     </button>
                                 </div>
-                                <button
+                                <div
                                     v-else
-                                    type="button"
-                                    title="Unlink this activity from the route"
-                                    class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200/90 px-2 py-1 font-mono text-[10px] text-zinc-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10 dark:hover:text-rose-300"
-                                    @click="
-                                        confirmingUnlinkId = attempt.activity_id
-                                    "
+                                    class="inline-flex items-center justify-end gap-1.5"
                                 >
-                                    <Unlink class="size-3" />
-                                    Unlink
-                                </button>
+                                    <Link
+                                        v-if="
+                                            prActivityId !== null &&
+                                            !attempt.is_pr &&
+                                            attempt.activity_id !== prActivityId
+                                        "
+                                        :href="
+                                            compareVsPrUrl(attempt.activity_id)
+                                        "
+                                        title="Compare this attempt against Route PR"
+                                        class="inline-flex items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/[0.06] px-2 py-1 font-mono text-[10px] font-medium whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
+                                    >
+                                        <ArrowLeftRight class="size-3" />
+                                        Compare vs PR
+                                    </Link>
+                                    <button
+                                        type="button"
+                                        title="Unlink this activity from the route"
+                                        class="inline-flex cursor-pointer items-center gap-1 rounded-md border border-zinc-200/90 px-2 py-1 font-mono text-[10px] text-zinc-500 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-600 dark:border-zinc-800 dark:text-zinc-400 dark:hover:border-rose-500/40 dark:hover:bg-rose-500/10 dark:hover:text-rose-300"
+                                        @click="
+                                            confirmingUnlinkId =
+                                                attempt.activity_id
+                                        "
+                                    >
+                                        <Unlink class="size-3" />
+                                        Unlink
+                                    </button>
+                                </div>
                             </td>
                         </tr>
                     </tbody>
