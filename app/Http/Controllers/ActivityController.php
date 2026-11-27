@@ -87,7 +87,7 @@ class ActivityController extends Controller
     public function syncWeather(Activity $activity, ActivityWeatherSyncService $weatherSync): RedirectResponse
     {
         if (! $weatherSync->isEligible($activity)) {
-            return back()->with('status', 'Weather is only available for outdoor activities with GNSS coordinates.');
+            return back()->with('status', 'Weather is only available for outdoor activities with GPS coordinates.');
         }
 
         try {
