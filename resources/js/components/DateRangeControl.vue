@@ -246,6 +246,12 @@ onBeforeUnmount(() => {
                 v-for="preset in allPresets"
                 :key="preset.value"
                 type="button"
+                :aria-expanded="
+                    preset.value === 'custom' ? popoverOpen : undefined
+                "
+                :aria-haspopup="
+                    preset.value === 'custom' ? 'dialog' : undefined
+                "
                 :class="[
                     'cursor-pointer rounded-md font-mono font-medium whitespace-nowrap transition-colors',
                     isPageSurface
@@ -254,7 +260,7 @@ onBeforeUnmount(() => {
                     isPresetActive(preset.value)
                         ? isPageSurface
                             ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                            : 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                            : 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                         : isPageSurface
                           ? 'text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
                           : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100',
@@ -265,10 +271,10 @@ onBeforeUnmount(() => {
             </button>
         </div>
 
-        <!-- Fixed-Width Period Stepper (stable geometry across all states) -->
+        <!-- Period Stepper (responsive on narrow screens, stable width on desktop) -->
         <div
             :class="[
-                'inline-flex shrink-0 items-center rounded-lg border border-zinc-200/90 dark:border-zinc-800/90',
+                'inline-flex max-w-full min-w-0 shrink-0 items-center rounded-lg border border-zinc-200/90 dark:border-zinc-800/90',
                 isPageSurface
                     ? 'bg-white dark:bg-[#141417]'
                     : 'bg-white dark:bg-zinc-900/70',
@@ -294,11 +300,13 @@ onBeforeUnmount(() => {
             <button
                 type="button"
                 title="Click to select a custom date range"
+                :aria-expanded="popoverOpen"
+                aria-haspopup="dialog"
                 :class="[
-                    'flex shrink-0 cursor-pointer items-center justify-center gap-1.5 border-x border-zinc-200/80 px-2 font-mono whitespace-nowrap text-zinc-700 tabular-nums transition-colors hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800/80 dark:text-zinc-300 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100',
+                    'flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 border-x border-zinc-200/80 px-2 font-mono whitespace-nowrap text-zinc-700 tabular-nums transition-colors hover:bg-zinc-50 hover:text-zinc-950 sm:flex-none dark:border-zinc-800/80 dark:text-zinc-300 dark:hover:bg-zinc-800/60 dark:hover:text-zinc-100',
                     isPageSurface
-                        ? 'h-8 w-[232px] text-xs'
-                        : 'h-7 w-[218px] text-[11px]',
+                        ? 'h-8 max-w-[232px] text-xs sm:w-[232px]'
+                        : 'h-7 max-w-[218px] text-[11px] sm:w-[218px]',
                 ]"
                 @click="toggleCustomPopover"
             >
@@ -347,7 +355,7 @@ onBeforeUnmount(() => {
         <form
             v-if="popoverOpen"
             :class="[
-                'absolute top-full z-40 mt-1.5 w-[296px] rounded-xl border border-zinc-200/90 bg-white p-3.5 shadow-lg dark:border-zinc-800 dark:bg-[#141417]',
+                'absolute top-full z-40 mt-1.5 w-[296px] max-w-[calc(100vw-2rem)] rounded-xl border border-zinc-200/90 bg-white p-3.5 shadow-lg dark:border-zinc-800 dark:bg-[#141417]',
                 popoverAlign === 'right' ? 'right-0' : 'left-0',
             ]"
             @submit.prevent="submitCustomRange"

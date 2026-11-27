@@ -88,6 +88,16 @@ function formatSignedDelta(seconds: number): string {
     return `${sign}${formatDurationClock(Math.abs(seconds))}`;
 }
 
+function formatWeatherDelta(seconds: number): string {
+    if (!Number.isFinite(seconds) || Math.abs(seconds) < 1) {
+        return 'Even';
+    }
+
+    const sign = seconds > 0 ? '+' : '-';
+
+    return `${sign}${formatDurationClock(Math.abs(seconds))}`;
+}
+
 function windPillClass(
     label: 'Headwind' | 'Tailwind' | 'Crosswind' | 'Calm',
 ): string {
@@ -116,15 +126,33 @@ const progressionOption = computed<EChartsOption>(() => {
     const rows = props.matchedRoute.progression;
     const accent = props.matchedRoute.route.accent_hex || '#10b981';
     const isPace = usesPace.value;
+    const isPace100m = props.matchedRoute.route.metric_mode === 'pace_100m';
     const labels = rows.map((r) => formatShortDate(r.date));
 
     const data = rows.map((row) => {
         let value: number | null = null;
 
         if (row.avg_speed !== null && row.avg_speed > 0) {
-            value = isPace
-                ? paceSecondsFromMps(row.avg_speed)
-                : Number(speedFromMps(row.avg_speed).toFixed(2));
+            if (isPace100m) {
+                value = Number((100 / row.avg_speed).toFixed(2));
+            } else if (isPace) {
+                value = paceSecondsFromMps(row.avg_speed);
+            } else {
+                value = Number(speedFromMps(row.avg_speed).toFixed(2));
+            }
+        }
+
+        if (row.is_current && row.is_pr) {
+            return {
+                value,
+                symbol: 'diamond',
+                symbolSize: 13,
+                itemStyle: {
+                    color: '#f59e0b',
+                    borderColor: '#0ea5e9',
+                    borderWidth: 2.5,
+                },
+            };
         }
 
         if (row.is_current) {
@@ -133,7 +161,7 @@ const progressionOption = computed<EChartsOption>(() => {
                 symbol: 'circle',
                 symbolSize: 11,
                 itemStyle: {
-                    color: '#10b981',
+                    color: '#0ea5e9',
                     borderColor: theme.isDark.value ? '#141417' : '#ffffff',
                     borderWidth: 2.5,
                 },
@@ -156,13 +184,20 @@ const progressionOption = computed<EChartsOption>(() => {
         return value;
     });
 
+    const primaryYAxisName = isPace100m
+        ? 'Pace (/100m)'
+        : isPace
+          ? `Pace (${paceUnit.value})`
+          : `Speed (${speedUnit.value})`;
+
     return {
         animation: false,
         grid: {
-            left: isPace ? 52 : 44,
-            right: 20,
-            top: 20,
-            bottom: 26,
+            left: 12,
+            right: 16,
+            top: 34,
+            bottom: 12,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -183,7 +218,7 @@ const progressionOption = computed<EChartsOption>(() => {
                 }
 
                 if (attempt.is_pr) {
-                    tags.push('★ PR');
+                    tags.push('◆ PR');
                 }
 
                 const lines = [
@@ -217,13 +252,13 @@ const progressionOption = computed<EChartsOption>(() => {
             type: 'value',
             inverse: isPace,
             scale: true,
-            name: isPace
-                ? `Pace (${paceUnit.value})`
-                : `Speed (${speedUnit.value})`,
+            name: primaryYAxisName,
+            nameGap: 12,
             nameTextStyle: {
                 color: theme.mutedColor.value,
                 fontFamily: theme.fontFamilyMono,
                 fontSize: 10,
+                align: 'left',
             },
             splitLine: { lineStyle: { color: theme.gridLineColor.value } },
             axisLabel: {
@@ -325,7 +360,12 @@ function onPointClick(payload: ChartPointClickPayload): void {
                         {{ formatElevation(matchedRoute.route.elevation_gain) }}
                     </span>
                     <span>
-                        {{ matchedRoute.route.activity_count }} total attempts
+                        {{ matchedRoute.route.activity_count }} total
+                        {{
+                            matchedRoute.route.activity_count === 1
+                                ? 'attempt'
+                                : 'attempts'
+                        }}
                     </span>
                 </div>
             </div>
@@ -362,15 +402,17 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     Attempt Rank
                 </p>
                 <p
-                    class="mt-2 font-mono text-2xl font-semibold text-zinc-900 dark:text-zinc-100"
+                    class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
                 >
                     #{{ matchedRoute.current.rank }}
-                    <span class="text-sm font-normal text-zinc-400">
+                    <span
+                        class="text-sm font-normal text-zinc-500 dark:text-zinc-400"
+                    >
                         of {{ matchedRoute.current.total_attempts }}
                     </span>
                 </p>
                 <p
-                    class="mt-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400"
+                    class="mt-0.5 font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
                     {{
                         matchedRoute.current.is_pr
@@ -391,7 +433,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     vs Route PR
                 </p>
                 <p
-                    class="mt-2 font-mono text-2xl font-semibold"
+                    class="mt-2 font-mono text-2xl font-semibold tabular-nums"
                     :class="
                         matchedRoute.current.is_pr
                             ? 'text-amber-600 dark:text-amber-400'
@@ -400,12 +442,12 @@ function onPointClick(payload: ChartPointClickPayload): void {
                 >
                     {{
                         matchedRoute.current.is_pr
-                            ? 'Route PR'
+                            ? 'Fastest Attempt'
                             : `+${formatDurationClock(Math.max(0, matchedRoute.current.delta_pr_seconds))}`
                     }}
                 </p>
                 <p
-                    class="mt-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400"
+                    class="mt-0.5 font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
                     PR:
                     {{
@@ -425,7 +467,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     vs Median
                 </p>
                 <p
-                    class="mt-2 font-mono text-2xl font-semibold"
+                    class="mt-2 font-mono text-2xl font-semibold tabular-nums"
                     :class="
                         matchedRoute.current.delta_median_seconds < -1
                             ? 'text-emerald-600 dark:text-emerald-400'
@@ -441,7 +483,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     }}
                 </p>
                 <p
-                    class="mt-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400"
+                    class="mt-0.5 font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
                     Median:
                     {{
@@ -461,7 +503,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     This Attempt
                 </p>
                 <p
-                    class="mt-2 font-mono text-2xl font-semibold text-zinc-900 dark:text-zinc-100"
+                    class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
                 >
                     {{
                         formatDurationClock(
@@ -470,7 +512,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     }}
                 </p>
                 <p
-                    class="mt-0.5 font-mono text-xs text-zinc-500 dark:text-zinc-400"
+                    class="mt-0.5 font-mono text-xs text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
                     {{
                         formatMetricSpeedOrPace(matchedRoute.current.avg_speed)
@@ -490,9 +532,9 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     Route {{ usesPace ? 'Pace' : 'Speed' }} Progression
                 </h3>
                 <span
-                    class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                    class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                 >
-                    Green dot = this activity · Gold diamond = PR
+                    Sky dot = this activity · Gold diamond = PR
                 </span>
             </div>
             <BaseChart
@@ -510,14 +552,18 @@ function onPointClick(payload: ChartPointClickPayload): void {
                     ?.headwind_vs_tailwind_delta_seconds !== null ||
                     matchedRoute.weather_impact.temperature !== null)
             "
-            class="flex flex-wrap items-center gap-4 rounded-xl border border-zinc-200/90 bg-white px-4 py-3 font-mono text-xs dark:border-zinc-800/90 dark:bg-[#141417]"
+            class="flex flex-wrap items-center gap-4 rounded-xl border border-zinc-200/90 bg-white px-4 py-3 font-mono text-xs tabular-nums dark:border-zinc-800/90 dark:bg-[#141417]"
         >
             <span
                 class="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-300"
             >
                 <CloudSun class="size-3.5 text-sky-500" />
                 Weather Context ({{ matchedRoute.weather_impact.sample_count }}
-                attempts):
+                {{
+                    matchedRoute.weather_impact.sample_count === 1
+                        ? 'attempt'
+                        : 'attempts'
+                }}):
             </span>
             <span
                 v-if="
@@ -530,7 +576,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                 Headwind vs Tailwind
                 <strong class="text-zinc-900 dark:text-zinc-100">
                     {{
-                        formatSignedDelta(
+                        formatWeatherDelta(
                             matchedRoute.weather_impact.wind
                                 .headwind_vs_tailwind_delta_seconds,
                         )
@@ -544,7 +590,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                 Warm vs Cool
                 <strong class="text-zinc-900 dark:text-zinc-100">
                     {{
-                        formatSignedDelta(
+                        formatWeatherDelta(
                             matchedRoute.weather_impact.temperature
                                 .warm_vs_cool_delta_seconds,
                         )
@@ -570,7 +616,9 @@ function onPointClick(payload: ChartPointClickPayload): void {
             </div>
 
             <div class="overflow-x-auto">
-                <table class="w-full min-w-[640px] border-collapse text-left">
+                <table
+                    class="w-full min-w-[640px] border-collapse text-left tabular-nums"
+                >
                     <thead>
                         <tr
                             class="border-b border-zinc-200/80 bg-zinc-50/70 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:border-zinc-800/80 dark:bg-zinc-900/40 dark:text-zinc-400"
@@ -609,7 +657,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                             <td class="px-4 py-2.5">
                                 <div class="flex items-center gap-2">
                                     <span
-                                        class="w-6 shrink-0 font-mono text-[11px] text-zinc-400"
+                                        class="w-6 shrink-0 font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"
                                     >
                                         #{{ attempt.rank }}
                                     </span>
@@ -758,7 +806,7 @@ function onPointClick(payload: ChartPointClickPayload): void {
                                 </div>
                                 <span
                                     v-else
-                                    class="font-mono text-xs text-zinc-400"
+                                    class="font-mono text-xs text-zinc-500 dark:text-zinc-400"
                                 >
                                     —
                                 </span>
@@ -768,5 +816,21 @@ function onPointClick(payload: ChartPointClickPayload): void {
                 </table>
             </div>
         </section>
+
+        <!-- ODbL Place Naming Attribution -->
+        <p
+            v-if="matchedRoute.route.place_label"
+            class="text-right font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+        >
+            Place names &copy;
+            <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-700 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+            >
+                OpenStreetMap contributors
+            </a>
+        </p>
     </div>
 </template>

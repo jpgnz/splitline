@@ -16,7 +16,7 @@ import {
     X,
 } from '@lucide/vue';
 import type { EChartsOption } from 'echarts';
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
 import BaseChart, {
     type ChartPointClickPayload,
@@ -28,7 +28,7 @@ import {
     formatNumber,
     formatShortDate,
 } from '@/lib/format';
-import { climbCategoryMeta, formatGrade, formatVam } from '@/lib/segments';
+import { climbCategoryMeta, formatGrade } from '@/lib/segments';
 import { useSports } from '@/lib/sports';
 import { distanceFromMeters, elevationFromMeters, useUnits } from '@/lib/units';
 import { show as showActivity } from '@/routes/activities';
@@ -49,6 +49,7 @@ const {
     units,
     distanceUnit,
     elevationUnit,
+    vamUnit,
     formatDistance,
     formatElevation,
     formatPace,
@@ -56,14 +57,21 @@ const {
     formatSpeed,
     formatSpeedKmh,
     formatTemp,
+    formatVam,
 } = useUnits();
 
 const sportMeta = computed(() => getSportMeta(props.segment.sport_key));
 const categoryMeta = computed(() =>
     climbCategoryMeta(props.segment.climb_category),
 );
+const usesPace = computed<boolean>(
+    () =>
+        props.segment.metric_mode === 'pace' ||
+        props.segment.metric_mode === 'pace_100m',
+);
 
 const isEditingName = ref<boolean>(false);
+const renameInputRef = ref<HTMLInputElement | null>(null);
 const isTogglingStar = ref<boolean>(false);
 const confirmingDelete = ref<boolean>(false);
 const isDeleting = ref<boolean>(false);
@@ -87,6 +95,10 @@ function startEditingName(): void {
         props.segment.name_override ?? props.segment.name;
     renameForm.clearErrors();
     isEditingName.value = true;
+    nextTick(() => {
+        renameInputRef.value?.focus();
+        renameInputRef.value?.select();
+    });
 }
 
 function cancelEditingName(): void {
@@ -278,10 +290,11 @@ const elevationProfileOption = computed<EChartsOption>(() => {
     return {
         animation: false,
         grid: {
-            left: 48,
+            left: 12,
             right: 16,
-            top: 16,
-            bottom: 28,
+            top: 40,
+            bottom: 24,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -331,10 +344,12 @@ const elevationProfileOption = computed<EChartsOption>(() => {
             type: 'value',
             scale: true,
             name: elevationUnit.value,
+            nameGap: 12,
             nameTextStyle: {
                 color: theme.mutedColor.value,
                 fontFamily: theme.fontFamilyMono,
                 fontSize: 10,
+                align: 'left',
             },
             splitLine: { lineStyle: { color: theme.gridLineColor.value } },
             axisLabel: {
@@ -357,21 +372,23 @@ const elevationProfileOption = computed<EChartsOption>(() => {
 });
 
 const progressionOption = computed<EChartsOption>(() => {
+    const currentUnits = units.value;
     const rows = props.progression;
     const accent = props.segment.accent_hex || '#10b981';
     const labels = rows.map((row) => formatShortDate(row.date));
     const hasVam = rows.some((row) => row.vam !== null && row.vam > 0);
+    const isPace = usesPace.value;
 
     const timeData = rows.map((row) => {
         if (row.is_display_pr) {
             return {
                 value: row.elapsed_seconds,
                 symbol: 'diamond',
-                symbolSize: 11,
+                symbolSize: 12,
                 itemStyle: {
-                    color: '#f59e0b',
-                    borderColor: theme.isDark.value ? '#141417' : '#ffffff',
-                    borderWidth: 2,
+                    color: '#10b981',
+                    borderColor: '#f59e0b',
+                    borderWidth: 2.5,
                 },
             };
         }
@@ -379,15 +396,33 @@ const progressionOption = computed<EChartsOption>(() => {
         return row.elapsed_seconds;
     });
 
-    const vamData = rows.map((row) => row.vam);
+    const vamData = rows.map((row) =>
+        row.vam !== null && row.vam > 0
+            ? Math.round(elevationFromMeters(row.vam, currentUnits))
+            : null,
+    );
 
     return {
         animation: false,
         grid: {
-            left: 56,
-            right: hasVam ? 56 : 20,
-            top: 26,
-            bottom: 28,
+            left: 12,
+            right: 16,
+            top: 56,
+            bottom: 12,
+            containLabel: true,
+        },
+        legend: {
+            top: 0,
+            left: 0,
+            padding: [0, 0, 0, 0],
+            icon: 'roundRect',
+            itemWidth: 10,
+            itemHeight: 6,
+            textStyle: {
+                color: theme.mutedColor.value,
+                fontFamily: theme.fontFamilyMono,
+                fontSize: 11,
+            },
         },
         tooltip: {
             trigger: 'axis',
@@ -402,10 +437,10 @@ const progressionOption = computed<EChartsOption>(() => {
 
                 const effort = rows[idx];
                 const lines = [
-                    `<div style="font-weight:600;margin-bottom:2px;">${escapeHtml(effort.activity_name)}${effort.is_display_pr ? ' (★ PR)' : ''}</div>`,
+                    `<div style="font-weight:600;margin-bottom:2px;">${escapeHtml(effort.activity_name)}${effort.is_display_pr ? ' (◆ PR)' : ''}</div>`,
                     `<div style="opacity:0.75;margin-bottom:4px;">${escapeHtml(formatDateWithYear(effort.date))}</div>`,
                     `<div>Time: <strong>${escapeHtml(formatDurationClock(effort.elapsed_seconds))}</strong></div>`,
-                    `<div>Pace/Speed: <strong>${escapeHtml(formatMetricSpeedOrPace(effort.avg_speed))}</strong></div>`,
+                    `<div>${isPace ? 'Pace' : 'Speed'}: <strong>${escapeHtml(formatMetricSpeedOrPace(effort.avg_speed))}</strong></div>`,
                 ];
 
                 if (effort.vam !== null && effort.vam > 0) {
@@ -450,10 +485,12 @@ const progressionOption = computed<EChartsOption>(() => {
                 inverse: true,
                 scale: true,
                 name: 'Time (faster ↑)',
+                nameGap: 14,
                 nameTextStyle: {
                     color: theme.mutedColor.value,
                     fontFamily: theme.fontFamilyMono,
                     fontSize: 10,
+                    align: 'left',
                 },
                 splitLine: { lineStyle: { color: theme.gridLineColor.value } },
                 axisLabel: {
@@ -468,15 +505,17 @@ const progressionOption = computed<EChartsOption>(() => {
                       {
                           type: 'value' as const,
                           scale: true,
-                          name: 'VAM (m/h)',
+                          name: `VAM (${vamUnit.value})`,
+                          nameGap: 14,
                           nameTextStyle: {
-                              color: theme.mutedColor.value,
+                              color: '#f59e0b',
                               fontFamily: theme.fontFamilyMono,
                               fontSize: 10,
+                              align: 'right' as const,
                           },
                           splitLine: { show: false },
                           axisLabel: {
-                              color: theme.mutedColor.value,
+                              color: '#f59e0b',
                               fontFamily: theme.fontFamilyMono,
                               fontSize: 10,
                           },
@@ -500,7 +539,7 @@ const progressionOption = computed<EChartsOption>(() => {
             ...(hasVam
                 ? [
                       {
-                          name: 'VAM',
+                          name: `VAM (${vamUnit.value})`,
                           type: 'line' as const,
                           yAxisIndex: 1,
                           data: vamData,
@@ -673,7 +712,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                             segment.name_override &&
                             segment.name_override !== segment.auto_name
                         "
-                        class="mt-1 font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+                        class="mt-1 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                     >
                         Auto-detected: {{ segment.auto_name }}
                     </p>
@@ -702,7 +741,11 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                             · {{ formatGrade(segment.max_grade_pct) }} max
                         </template>
                     </span>
-                    <span v-if="segment.fiets_score !== null">
+                    <span
+                        v-if="segment.fiets_score !== null"
+                        title="FIETS climb difficulty index (elevation gain, grade, and length)"
+                        class="cursor-help underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:decoration-zinc-600"
+                    >
                         FIETS {{ segment.fiets_score.toFixed(2) }}
                     </span>
                 </div>
@@ -715,12 +758,15 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
             >
                 <div class="flex-1">
                     <input
+                        ref="renameInputRef"
                         v-model="renameForm.name_override"
                         type="text"
                         maxlength="160"
+                        autofocus
                         placeholder="Custom segment name..."
                         aria-label="Segment name"
                         class="w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                        @keydown.escape="cancelEditingName"
                     />
                     <p
                         v-if="renameForm.errors.name_override"
@@ -807,8 +853,11 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     class="mt-0.5 font-mono text-xs text-zinc-600 tabular-nums dark:text-zinc-300"
                 >
                     {{ formatMetricSpeedOrPace(summary.pr_speed_mps) }}
-                    <span v-if="summary.pr_date" class="text-zinc-400">
-                        · {{ formatShortDate(summary.pr_date) }}
+                    <span
+                        v-if="summary.pr_date"
+                        class="text-zinc-500 dark:text-zinc-400"
+                    >
+                        · {{ formatDateWithYear(summary.pr_date) }}
                     </span>
                 </p>
             </div>
@@ -882,11 +931,6 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     >
                         Segment Map
                     </h2>
-                    <span
-                        class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
-                    >
-                        {{ polyline.length }} pts
-                    </span>
                 </div>
                 <div class="p-3">
                     <ActivityMap
@@ -895,6 +939,12 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                         :accent-color="segment.accent_hex"
                         :height="320"
                     />
+                    <div
+                        v-else
+                        class="flex h-80 items-center justify-center rounded-lg bg-[#f7f7f5] font-mono text-xs text-zinc-500 dark:bg-zinc-900/50 dark:text-zinc-400"
+                    >
+                        No GNSS coordinates available
+                    </div>
                 </div>
             </div>
 
@@ -912,9 +962,9 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                             Effort Progression
                         </h2>
                         <span
-                            class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                            class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                         >
-                            Click any point to inspect activity
+                            Click any point to inspect activity · ◆ marks PR
                         </span>
                     </div>
                     <BaseChart
@@ -925,7 +975,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     />
                     <p
                         v-else
-                        class="py-14 text-center text-sm text-zinc-400 dark:text-zinc-500"
+                        class="py-14 text-center text-sm text-zinc-500 dark:text-zinc-400"
                     >
                         No matched efforts recorded for this timeframe.
                     </p>
@@ -1017,7 +1067,9 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                             <th class="px-4 py-2.5">Activity</th>
                             <th class="px-4 py-2.5 text-right">Time</th>
                             <th class="px-4 py-2.5 text-right">vs PR</th>
-                            <th class="px-4 py-2.5 text-right">Pace / Speed</th>
+                            <th class="px-4 py-2.5 text-right">
+                                {{ usesPace ? 'Pace' : 'Speed' }}
+                            </th>
                             <th v-if="hasAnyVam" class="px-4 py-2.5 text-right">
                                 VAM
                             </th>
@@ -1100,9 +1152,9 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                     {{ Math.round(effort.avg_power) }} W
                                     <span
                                         v-if="effort.w_per_kg !== null"
-                                        class="text-zinc-400 dark:text-zinc-500"
+                                        class="text-zinc-500 dark:text-zinc-400"
                                     >
-                                        · {{ effort.w_per_kg.toFixed(2) }}
+                                        · {{ effort.w_per_kg.toFixed(2) }} W/kg
                                     </span>
                                 </template>
                                 <template v-else>—</template>
@@ -1140,7 +1192,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                     </span>
                                     <span
                                         :class="[
-                                            'rounded border px-1.5 py-0.5 text-[10px]',
+                                            'rounded-md border px-1.5 py-0.5 text-[10px] font-medium',
                                             windPillClass(
                                                 effort.weather.wind_label,
                                             ),
@@ -1150,13 +1202,17 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                         <template
                                             v-if="
                                                 effort.weather
-                                                    .wind_speed_kmh !== null
+                                                    .wind_speed_kmh !== null &&
+                                                effort.weather.wind_label !==
+                                                    'Calm'
                                             "
                                         >
+                                            ·
                                             {{
                                                 formatSpeedKmh(
                                                     effort.weather
                                                         .wind_speed_kmh,
+                                                    0,
                                                 )
                                             }}
                                         </template>
@@ -1164,7 +1220,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                 </div>
                                 <span
                                     v-else
-                                    class="font-mono text-xs text-zinc-400"
+                                    class="font-mono text-xs text-zinc-500 dark:text-zinc-400"
                                 >
                                     —
                                 </span>
@@ -1184,9 +1240,17 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
 
         <!-- ODbL Attribution Footer -->
         <footer
-            class="pt-2 text-right font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+            class="pt-2 text-right font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
         >
-            Place names © OpenStreetMap contributors (ODbL)
+            Place names &copy;
+            <a
+                href="https://www.openstreetmap.org/copyright"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-700 dark:decoration-zinc-700 dark:hover:text-zinc-200"
+            >
+                OpenStreetMap contributors (ODbL)
+            </a>
         </footer>
     </div>
 </template>

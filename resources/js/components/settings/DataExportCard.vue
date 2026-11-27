@@ -90,8 +90,8 @@ function formatBytes(bytes: number | null | undefined): string {
             >
                 {{
                     props.summary.is_sqlite
-                        ? 'SQLite WAL-safe'
-                        : 'External database'
+                        ? 'Live Backup Ready'
+                        : 'External Database'
                 }}
             </span>
         </div>
@@ -115,8 +115,8 @@ function formatBytes(bytes: number | null | undefined): string {
                 <p class="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
                     {{
                         props.summary.is_sqlite
-                            ? 'Compacted snapshot via VACUUM INTO'
-                            : 'Live backup requires file-backed SQLite'
+                            ? 'Consistent point-in-time database snapshot'
+                            : 'Live backup requires a local SQLite database'
                     }}
                 </p>
             </div>
@@ -147,7 +147,7 @@ function formatBytes(bytes: number | null | undefined): string {
                     class="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
                     <FileArchive class="size-3" />
-                    Cached FIT Archives
+                    Original FIT Files
                 </div>
                 <div class="mt-2 flex items-baseline gap-2">
                     <p
@@ -179,7 +179,7 @@ function formatBytes(bytes: number | null | undefined): string {
                 v-if="props.summary.is_sqlite"
                 :href="backupDownloadUrl"
                 download
-                class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 font-mono text-xs font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
+                class="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-zinc-900 px-3.5 py-2 text-xs font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-white"
             >
                 <Download class="size-3.5" />
                 <span>Download SQLite Backup</span>
@@ -188,32 +188,54 @@ function formatBytes(bytes: number | null | undefined): string {
                 v-else
                 type="button"
                 disabled
-                title="Live SQLite backups are only available on file-backed SQLite databases."
-                class="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2 font-mono text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500"
+                title="Live SQLite backups are only available on a local SQLite database."
+                class="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2 text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500"
             >
                 <Download class="size-3.5" />
                 <span>Download SQLite Backup</span>
             </button>
 
             <a
+                v-if="props.summary.activities_count > 0"
                 :href="csvExportUrl"
                 download
-                class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80"
+                class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 text-xs font-medium text-zinc-800 transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80"
             >
                 <FileSpreadsheet
                     class="size-3.5 text-emerald-600 dark:text-emerald-400"
                 />
                 <span>Export All Activities (CSV)</span>
             </a>
+            <button
+                v-else
+                type="button"
+                disabled
+                title="No activities available to export yet."
+                class="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2 text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500"
+            >
+                <FileSpreadsheet class="size-3.5" />
+                <span>Export All Activities (CSV)</span>
+            </button>
 
             <a
+                v-if="props.summary.activities_count > 0"
                 :href="jsonExportUrl"
                 download
-                class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80"
+                class="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200/90 bg-white px-3.5 py-2 text-xs font-medium text-zinc-800 transition-colors hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80"
             >
                 <FileJson class="size-3.5 text-sky-600 dark:text-sky-400" />
                 <span>Export All Activities (JSON)</span>
             </a>
+            <button
+                v-else
+                type="button"
+                disabled
+                title="No activities available to export yet."
+                class="inline-flex cursor-not-allowed items-center gap-2 rounded-lg border border-zinc-200 bg-zinc-100 px-3.5 py-2 text-xs font-medium text-zinc-400 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-500"
+            >
+                <FileJson class="size-3.5" />
+                <span>Export All Activities (JSON)</span>
+            </button>
         </div>
     </section>
 </template>

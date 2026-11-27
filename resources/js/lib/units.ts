@@ -78,6 +78,18 @@ export function climbDensityUnit(units: UnitSystem): 'm/km' | 'ft/mi' {
     return units === 'imperial' ? 'ft/mi' : 'm/km';
 }
 
+export function vamUnit(units: UnitSystem): 'm/h' | 'ft/h' {
+    return units === 'imperial' ? 'ft/h' : 'm/h';
+}
+
+export function oscillationUnit(units: UnitSystem): 'cm' | 'in' {
+    return units === 'imperial' ? 'in' : 'cm';
+}
+
+export function oscillationFromCm(cm: number, units: UnitSystem): number {
+    return units === 'imperial' ? cm / 2.54 : cm;
+}
+
 export function distanceFromMeters(meters: number, units: UnitSystem): number {
     const km = meters / 1000;
 
@@ -340,6 +352,29 @@ export function formatClimbDensity(
     }
 
     return `${formatNumeric(climbDensityFromMPerKm(mPerKm, units), decimals)} ${climbDensityUnit(units)}`;
+}
+
+export function formatVam(
+    metersPerHour: number | null | undefined,
+    units: UnitSystem,
+): string {
+    if (!isFiniteNumber(metersPerHour) || metersPerHour <= 0) {
+        return EMPTY_VALUE;
+    }
+
+    return `${formatNumeric(Math.round(elevationFromMeters(metersPerHour, units)), 0)} ${vamUnit(units)}`;
+}
+
+export function formatOscillation(
+    cm: number | null | undefined,
+    units: UnitSystem,
+    decimals = 1,
+): string {
+    if (!isFiniteNumber(cm) || cm <= 0) {
+        return EMPTY_VALUE;
+    }
+
+    return `${formatNumeric(oscillationFromCm(cm, units), decimals)} ${oscillationUnit(units)}`;
 }
 
 function finalizeImperialSplit(params: {
@@ -681,6 +716,8 @@ export function useUnits() {
         precipUnit: computed(() => precipUnit(units.value)),
         strideUnit: computed(() => strideUnit(units.value)),
         climbDensityUnit: computed(() => climbDensityUnit(units.value)),
+        vamUnit: computed(() => vamUnit(units.value)),
+        oscillationUnit: computed(() => oscillationUnit(units.value)),
         distanceFromMeters: (meters: number) =>
             distanceFromMeters(meters, units.value),
         elevationFromMeters: (meters: number) =>
@@ -695,6 +732,7 @@ export function useUnits() {
         precipFromMm: (mm: number) => precipFromMm(mm, units.value),
         climbDensityFromMPerKm: (mPerKm: number) =>
             climbDensityFromMPerKm(mPerKm, units.value),
+        oscillationFromCm: (cm: number) => oscillationFromCm(cm, units.value),
         kmToInputDistance: (km: number) => kmToInputDistance(km, units.value),
         inputDistanceToKm: (value: number) =>
             inputDistanceToKm(value, units.value),
@@ -731,6 +769,10 @@ export function useUnits() {
             formatStride(meters, units.value),
         formatClimbDensity: (mPerKm: number | null | undefined, decimals = 1) =>
             formatClimbDensity(mPerKm, units.value, decimals),
+        formatVam: (metersPerHour: number | null | undefined) =>
+            formatVam(metersPerHour, units.value),
+        formatOscillation: (cm: number | null | undefined, decimals = 1) =>
+            formatOscillation(cm, units.value, decimals),
         computeSplitsFromSeries: (
             series: StreamPoint[],
             kmSplits: KmSplitItem[],

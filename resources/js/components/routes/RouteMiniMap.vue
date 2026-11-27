@@ -164,9 +164,9 @@ const projected = computed<{
 
         <div
             v-else
-            class="flex h-full w-full items-center justify-center font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
+            class="flex h-full w-full items-center justify-center font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
         >
-            No preview polyline
+            No route preview
         </div>
     </div>
 </template>
