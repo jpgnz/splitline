@@ -168,3 +168,20 @@ it('rejects physically impossible average grades caused by barometer or lift spi
     expect($detector->detectFromSeries($steepRidge, 'biking'))->toBeEmpty()
         ->and($detector->detectFromSeries($steepRidge, 'hiking'))->toHaveCount(1);
 });
+
+it('starts a climb at the foot of the steep section instead of a gentle false-flat approach', function () {
+    // 2000m @ 2% false flat (+40m) leading straight into 1500m @ 8% (+120m)
+    $series = buildSyntheticElevationSeries([
+        ['distance' => 2000.0, 'gain' => 40.0],
+        ['distance' => 1500.0, 'gain' => 120.0],
+        ['distance' => 300.0, 'gain' => 0.0],
+    ]);
+
+    $climbs = (new ClimbDetector)->detectFromSeries($series, 'biking');
+
+    expect($climbs)->toHaveCount(1)
+        ->and($climbs[0]['start_index'])->toBeGreaterThanOrEqual(90)
+        ->and($climbs[0]['distance_meters'])->toBeLessThanOrEqual(1700.0)
+        ->and($climbs[0]['avg_grade_pct'])->toBeGreaterThanOrEqual(7.0)
+        ->and($climbs[0]['climb_category'])->toBe('cat4');
+});

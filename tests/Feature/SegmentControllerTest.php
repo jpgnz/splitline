@@ -1,5 +1,7 @@
 <?php
 
+use App\Jobs\MatchSegmentBackfillJob;
+use App\Jobs\ScanActivitySegmentsJob;
 use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
@@ -7,6 +9,7 @@ use App\Models\Segment;
 use App\Models\SegmentEffort;
 use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function () {
@@ -352,4 +355,78 @@ it('hides auto-climbs below configured min_efforts while always showing custom a
             ->where('summary.total_segments', 4)
             ->has('segments', 4),
         );
+});
+
+it('queues the climb & segment scan instead of running it in the request when many activities are pending', function () {
+    Queue::fake([ScanActivitySegmentsJob::class]);
+
+    $activities = Activity::factory()->roadBiking()->count(11)->create(['segments_scanned_at' => null]);
+
+    foreach ($activities as $activity) {
+        ActivityStream::factory()->create([
+            'activity_id' => $activity->id,
+            'series' => controllerTestSeries(60, 25.0),
+        ]);
+    }
+
+    $this->post(route('segments.scan'))
+        ->assertRedirect()
+        ->assertSessionHas('status', 'Queued background climb & segment scan for 11 activities. Refresh shortly to see results.');
+
+    Queue::assertPushed(ScanActivitySegmentsJob::class, fn (ScanActivitySegmentsJob $job): bool => ! $job->rebuild);
+
+    expect(Activity::query()->whereNotNull('segments_scanned_at')->exists())->toBeFalse()
+        ->and(Segment::query()->exists())->toBeFalse();
+});
+
+it('rejects custom segments from activities without usable outdoor telemetry', function (array $activityAttributes, bool $withStream) {
+    $activity = Activity::factory()->roadBiking()->create($activityAttributes);
+
+    if ($withStream) {
+        ActivityStream::factory()->create([
+            'activity_id' => $activity->id,
+            'series' => controllerTestSeries(40, 25.0),
+        ]);
+    }
+
+    $this->post(route('segments.store'), [
+        'activity_id' => $activity->id,
+        'start_index' => 4,
+        'end_index' => 24,
+    ])->assertSessionHasErrors('start_index');
+
+    expect(Segment::query()->exists())->toBeFalse();
+})->with([
+    'indoor activity' => [['is_indoor' => true], true],
+    'activity without a stream' => [[], false],
+]);
+
+it('queues the historical backfill when a new custom segment has many candidate activities', function () {
+    Queue::fake([MatchSegmentBackfillJob::class]);
+
+    $activities = Activity::factory()->roadBiking()->count(27)->create();
+
+    foreach ($activities as $activity) {
+        ActivityStream::factory()->create([
+            'activity_id' => $activity->id,
+            'series' => controllerTestSeries(40, 25.0),
+        ]);
+    }
+
+    $source = $activities->first();
+
+    $this->post(route('segments.store'), [
+        'activity_id' => $source->id,
+        'start_index' => 4,
+        'end_index' => 24,
+    ])->assertRedirect();
+
+    $segment = Segment::query()->sole();
+
+    Queue::assertPushed(
+        MatchSegmentBackfillJob::class,
+        fn (MatchSegmentBackfillJob $job): bool => $job->segmentId === $segment->id && $job->excludeActivityId === $source->id,
+    );
+
+    expect($segment->effort_count)->toBe(1);
 });

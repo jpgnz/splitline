@@ -72,6 +72,8 @@ class ClimbDetector
 
     public const float TAIL_LOOKAHEAD_METERS = 40.0;
 
+    public const float LEADING_APPROACH_WINDOW_METERS = 200.0;
+
     public const float MAX_GRADE_SUBWINDOW_METERS = 100.0;
 
     public const float ALTITUDE_GAIN_NOISE_THRESHOLD = 0.2;
@@ -423,6 +425,32 @@ class ClimbDetector
             }
 
             break;
+        }
+
+        // Trim a gentle false-flat approach whose grade over the next ~200m stays below the minimum climb grade.
+        while ($start < $end) {
+            $look = $start + 1;
+
+            while (
+                $look < $end
+                && ($points[$look]['distance'] - $points[$start]['distance']) < self::LEADING_APPROACH_WINDOW_METERS
+            ) {
+                $look++;
+            }
+
+            $span = $points[$look]['distance'] - $points[$start]['distance'];
+
+            if ($span < self::LEADING_APPROACH_WINDOW_METERS) {
+                break;
+            }
+
+            $windowGrade = (($smoothedAlt[$look] - $smoothedAlt[$start]) / $span) * 100.0;
+
+            if ($windowGrade >= self::MIN_AVG_GRADE_PCT) {
+                break;
+            }
+
+            $start++;
         }
 
         // Trim trailing flat tail.

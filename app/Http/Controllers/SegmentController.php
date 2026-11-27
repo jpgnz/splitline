@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\StoreSegmentRequest;
 use App\Http\Requests\UpdateSegmentRequest;
+use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Jobs\ScanActivitySegmentsJob;
 use App\Models\Activity;
 use App\Models\Segment;
@@ -11,6 +12,7 @@ use App\Services\Segments\SegmentMatchingService;
 use App\Services\Segments\SegmentQueryService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -18,7 +20,7 @@ use InvalidArgumentException;
 
 class SegmentController extends Controller
 {
-    private const int SYNC_SCAN_LIMIT = 150;
+    private const int SYNC_SCAN_LIMIT = 10;
 
     public function index(Request $request, SegmentQueryService $service): Response
     {
@@ -87,12 +89,31 @@ class SegmentController extends Controller
         return back()->with('status', implode(' ', $messages) ?: 'Segment updated.');
     }
 
+    /**
+     * Custom segments are deleted outright. Auto-detected climbs are dismissed (soft-deleted) instead so
+     * later scans still deduplicate against the hill and never re-create it.
+     */
     public function destroy(Segment $segment): RedirectResponse
     {
         $label = $segment->displayName();
-        $segment->delete();
 
-        return to_route('segments.index')->with('status', "Segment \"{$label}\" deleted.");
+        if ($segment->kind !== Segment::KIND_CLIMB) {
+            $segment->forceDelete();
+
+            return to_route('segments.index')->with('status', "Segment \"{$label}\" deleted.");
+        }
+
+        DB::transaction(function () use ($segment): void {
+            $segment->efforts()->delete();
+            $segment->delete();
+        });
+
+        RefreshSubClimbFlagsJob::dispatch($segment->sport_category);
+
+        return to_route('segments.index')->with(
+            'status',
+            "Climb \"{$label}\" removed. It will not be re-detected by future scans.",
+        );
     }
 
     public function scan(SegmentMatchingService $matcher): RedirectResponse

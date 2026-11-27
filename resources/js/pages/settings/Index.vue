@@ -1875,7 +1875,7 @@ function submitSegmentsSettings(): void {
                                 </h2>
                             </div>
                             <p class="text-sm text-zinc-500 dark:text-zinc-400">
-                                Minimum number of climbs required before an
+                                Minimum number of efforts required before an
                                 auto-detected climb appears in your Segments
                                 directory and activity breakdowns. Custom and
                                 starred segments are always shown.

@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\GeocodeSegmentJob;
+use App\Jobs\MatchActivitySegmentsJob;
 use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\Segment;
@@ -551,4 +552,188 @@ it('enriches segments via Nominatim feature tier without overwriting name_overri
         ->and($customNamed->fresh()?->place_label)->toBe('Scenic Drive · Auckland')
         ->and($customNamed->fresh()?->name_override)->toBe('My Personal Sprint')
         ->and($customNamed->fresh()?->displayName())->toBe('My Personal Sprint');
+});
+
+/**
+ * Reverse a ride series so the same road is travelled in the opposite direction.
+ *
+ * @param  list<array<string, mixed>>  $series
+ * @return list<array<string, mixed>>
+ */
+function reverseRideSeries(array $series): array
+{
+    $last = $series[count($series) - 1];
+    $reversed = [];
+
+    foreach (array_reverse($series) as $point) {
+        $point['time'] = round($last['time'] - $point['time'], 1);
+        $point['distance'] = round($last['distance'] - $point['distance'], 1);
+        $reversed[] = $point;
+    }
+
+    return $reversed;
+}
+
+it('keeps detection and effort counts stable when the same activity stream is synced again', function () {
+    $streamData = new ActivityStreamData(
+        series: makeClimbRideSeries(),
+        polyline: [],
+        laps: [],
+        kmSplits: [],
+        records: [],
+    );
+    $ride = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-11-05 07:00:00')]);
+
+    app(TelemetryPersistenceService::class)->upsertStream($ride, $streamData);
+    app(TelemetryPersistenceService::class)->upsertStream($ride, $streamData);
+
+    $climb = Segment::query()->climbs()->sole();
+
+    expect($climb->detection_count)->toBe(1)
+        ->and($climb->effort_count)->toBe(1)
+        ->and(SegmentEffort::query()->where('activity_id', $ride->id)->count())->toBe(1)
+        ->and($ride->fresh()?->segments_scanned_at)->not->toBeNull();
+});
+
+it('counts a hill-repeat activity as a single detection', function () {
+    $ride = Activity::factory()->roadBiking()->create();
+    $stream = ActivityStream::factory()->create([
+        'activity_id' => $ride->id,
+        'series' => makeClimbRideSeries(repeats: 3),
+    ]);
+
+    app(SegmentMatchingService::class)->scanActivity($ride, $stream);
+
+    $climb = Segment::query()->climbs()->sole();
+
+    expect($climb->detection_count)->toBe(1)
+        ->and($climb->effort_count)->toBe(3);
+});
+
+it('defers stream-sync segment scanning to a queued job and marks the activity for re-scan', function () {
+    Queue::fake([MatchActivitySegmentsJob::class]);
+
+    $ride = Activity::factory()->roadBiking()->create(['segments_scanned_at' => CarbonImmutable::parse('2026-11-01 00:00:00')]);
+
+    app(TelemetryPersistenceService::class)->upsertStream($ride, new ActivityStreamData(
+        series: makeClimbRideSeries(),
+        polyline: [],
+        laps: [],
+        kmSplits: [],
+        records: [],
+    ));
+
+    Queue::assertPushed(MatchActivitySegmentsJob::class, fn (MatchActivitySegmentsJob $job): bool => $job->activityId === $ride->id);
+
+    expect($ride->fresh()?->segments_scanned_at)->toBeNull()
+        ->and(Segment::query()->count())->toBe(0);
+});
+
+it('does not record an effort when the climb is travelled in the opposite direction', function () {
+    $climbRide = Activity::factory()->roadBiking()->create();
+    $climbStream = ActivityStream::factory()->create(['activity_id' => $climbRide->id, 'series' => makeClimbRideSeries()]);
+
+    $descentRide = Activity::factory()->roadBiking()->create();
+    $descentStream = ActivityStream::factory()->create([
+        'activity_id' => $descentRide->id,
+        'series' => reverseRideSeries(makeClimbRideSeries()),
+    ]);
+
+    $matcher = app(SegmentMatchingService::class);
+    $matcher->scanActivity($climbRide, $climbStream);
+    $matcher->scanActivity($descentRide, $descentStream);
+
+    $climb = Segment::query()->climbs()->sole();
+
+    expect($climb->effort_count)->toBe(1)
+        ->and(SegmentEffort::query()->where('activity_id', $descentRide->id)->exists())->toBeFalse();
+});
+
+it('removes stale efforts and detections when a re-scan no longer finds the climb', function () {
+    $ride = Activity::factory()->roadBiking()->create();
+    $stream = ActivityStream::factory()->create(['activity_id' => $ride->id, 'series' => makeClimbRideSeries()]);
+
+    $matcher = app(SegmentMatchingService::class);
+    $matcher->scanActivity($ride, $stream);
+    $climb = Segment::query()->climbs()->sole();
+
+    $stream->update(['series' => makeClimbRideSeries(latOffset: 0.2)]);
+    $matcher->scanActivity($ride->fresh(), $stream->fresh());
+
+    $climb->refresh();
+
+    expect($climb->effort_count)->toBe(0)
+        ->and($climb->detection_count)->toBe(0)
+        ->and($climb->best_effort_id)->toBeNull()
+        ->and(SegmentEffort::query()->where('segment_id', $climb->id)->exists())->toBeFalse();
+});
+
+it('backfills a newly detected climb against activities scanned before it existed', function () {
+    $earlierRide = Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-10-01 07:00:00'),
+        'segments_scanned_at' => CarbonImmutable::parse('2026-10-01 09:00:00'),
+    ]);
+    ActivityStream::factory()->create(['activity_id' => $earlierRide->id, 'series' => makeClimbRideSeries(climbSpeedMps: 4.0)]);
+
+    $newRide = Activity::factory()->roadBiking()->create(['started_at_local' => CarbonImmutable::parse('2026-11-01 07:00:00')]);
+    $newStream = ActivityStream::factory()->create(['activity_id' => $newRide->id, 'series' => makeClimbRideSeries(climbSpeedMps: 5.0)]);
+
+    app(SegmentMatchingService::class)->scanActivity($newRide, $newStream);
+
+    $climb = Segment::query()->climbs()->sole();
+
+    expect($climb->effort_count)->toBe(2)
+        ->and($climb->detection_count)->toBe(1)
+        ->and(SegmentEffort::query()->where('segment_id', $climb->id)->where('activity_id', $earlierRide->id)->exists())->toBeTrue();
+});
+
+it('backfills climbs discovered by a bulk scan against previously scanned activities', function () {
+    $earlierRide = Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-10-01 07:00:00'),
+        'segments_scanned_at' => CarbonImmutable::parse('2026-10-01 09:00:00'),
+    ]);
+    ActivityStream::factory()->create(['activity_id' => $earlierRide->id, 'series' => makeClimbRideSeries(climbSpeedMps: 4.0)]);
+
+    $unscannedRide = Activity::factory()->roadBiking()->create(['segments_scanned_at' => null]);
+    ActivityStream::factory()->create(['activity_id' => $unscannedRide->id, 'series' => makeClimbRideSeries(climbSpeedMps: 5.0)]);
+
+    $summary = app(SegmentMatchingService::class)->scanUnscanned();
+
+    $climb = Segment::query()->climbs()->sole();
+
+    expect($summary['scanned'])->toBe(1)
+        ->and($climb->effort_count)->toBe(2)
+        ->and(SegmentEffort::query()->where('segment_id', $climb->id)->where('activity_id', $earlierRide->id)->exists())->toBeTrue();
+});
+
+it('keeps a deleted auto-detected climb dismissed across later scans and rebuilds', function () {
+    $firstRide = Activity::factory()->roadBiking()->create();
+    $firstStream = ActivityStream::factory()->create(['activity_id' => $firstRide->id, 'series' => makeClimbRideSeries()]);
+
+    $matcher = app(SegmentMatchingService::class);
+    $matcher->scanActivity($firstRide, $firstStream);
+    $climb = Segment::query()->climbs()->sole();
+
+    $this->delete(route('segments.destroy', $climb))->assertRedirect(route('segments.index'));
+
+    expect(Segment::query()->count())->toBe(0)
+        ->and(Segment::withTrashed()->whereKey($climb->id)->exists())->toBeTrue()
+        ->and(SegmentEffort::query()->where('segment_id', $climb->id)->exists())->toBeFalse();
+
+    $this->get(route('segments.show', $climb->id))->assertNotFound();
+
+    $secondRide = Activity::factory()->roadBiking()->create();
+    $secondStream = ActivityStream::factory()->create(['activity_id' => $secondRide->id, 'series' => makeClimbRideSeries()]);
+
+    $summary = $matcher->scanActivity($secondRide, $secondStream);
+
+    expect($summary['climbs_created'])->toBe(0)
+        ->and($summary['efforts_recorded'])->toBe(0)
+        ->and(Segment::query()->count())->toBe(0);
+
+    $rebuildSummary = $matcher->rebuildAll();
+
+    expect($rebuildSummary['climbs_created'])->toBe(0)
+        ->and(Segment::query()->count())->toBe(0)
+        ->and(SegmentEffort::query()->count())->toBe(0);
 });

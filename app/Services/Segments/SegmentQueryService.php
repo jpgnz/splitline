@@ -261,7 +261,7 @@ class SegmentQueryService
      */
     public function show(Segment $segment, ?int $year = null): array
     {
-        $segment->load(['sourceActivity.stream', 'bestEffort.activity.stream']);
+        $segment->load(['sourceActivity', 'bestEffort.activity.stream']);
 
         $allEfforts = SegmentEffort::query()
             ->with(['activity.weather'])

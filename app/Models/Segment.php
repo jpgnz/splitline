@@ -10,7 +10,9 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
  * @property int $id
@@ -46,16 +48,20 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  * @property int|null $best_effort_id
  * @property CarbonImmutable|null $last_effort_at
  * @property CarbonImmutable|null $geocoded_at
+ * @property CarbonImmutable|null $deleted_at
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
  * @property-read Activity|null $sourceActivity
  * @property-read SegmentEffort|null $bestEffort
  * @property-read Collection<int, SegmentEffort> $efforts
+ * @property-read Collection<int, Activity> $detectedActivities
  */
 class Segment extends Model
 {
     /** @use HasFactory<SegmentFactory> */
     use HasFactory;
+
+    use SoftDeletes;
 
     public const string KIND_CLIMB = 'climb';
 
@@ -146,6 +152,7 @@ class Segment extends Model
             'best_effort_id' => 'integer',
             'last_effort_at' => 'immutable_datetime',
             'geocoded_at' => 'immutable_datetime',
+            'deleted_at' => 'immutable_datetime',
         ];
     }
 
@@ -171,6 +178,16 @@ class Segment extends Model
     public function bestEffort(): BelongsTo
     {
         return $this->belongsTo(SegmentEffort::class, 'best_effort_id');
+    }
+
+    /**
+     * Activities in which the climb detector independently found this climb (one row per activity).
+     *
+     * @return BelongsToMany<Activity, $this>
+     */
+    public function detectedActivities(): BelongsToMany
+    {
+        return $this->belongsToMany(Activity::class, 'segment_detections')->withTimestamps();
     }
 
     public function displayName(): string
