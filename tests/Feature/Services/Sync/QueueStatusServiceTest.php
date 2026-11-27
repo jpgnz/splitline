@@ -110,6 +110,25 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         'activity_id' => $fullyEnriched->id,
     ]);
 
+    // Non-GPS outdoor stream (empty polyline + null start coordinates) must NOT count as awaiting weather
+    $nonGpsStreamed = Activity::factory()->create([
+        'is_manual' => false,
+        'is_indoor' => false,
+        'start_lat' => null,
+        'start_lng' => null,
+        'streams_synced_at' => CarbonImmutable::now(),
+        'segments_scanned_at' => CarbonImmutable::now(),
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $nonGpsStreamed->id,
+        'polyline' => [],
+    ]);
+
+    ActivityDerivedMetric::factory()->create([
+        'activity_id' => $nonGpsStreamed->id,
+    ]);
+
     // 5. Matched route cluster awaiting geocoding + segment awaiting geocoding
     RouteCluster::factory()->create([
         'activity_count' => 2,
