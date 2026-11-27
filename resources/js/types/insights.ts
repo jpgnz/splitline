@@ -8,7 +8,11 @@ export interface InsightsAvailableSport {
 }
 
 export type CorrelationStrength =
-    'strong' | 'moderate' | 'weak' | 'negligible' | 'inconclusive';
+    | 'strong'
+    | 'moderate'
+    | 'weak'
+    | 'negligible'
+    | 'inconclusive';
 
 export interface CorrelationStat {
     r: number | null;
