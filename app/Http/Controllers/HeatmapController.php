@@ -4,7 +4,9 @@ namespace App\Http\Controllers;
 
 use App\Jobs\SyncActivityStreamJob;
 use App\Models\Activity;
+use App\Services\Heatmap\ExplorerTileService;
 use App\Services\Heatmap\HeatmapService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +35,15 @@ class HeatmapController extends Controller
             'Heatmap/Index',
             $service->tracks($sport, $timeframe, $end, $from, $to, $order),
         );
+    }
+
+    /**
+     * Lifetime z14 Explorer tiles for all outdoor activities, independent of the heatmap filters.
+     * Fetched on demand when the Explorer overlay is toggled on.
+     */
+    public function explorer(ExplorerTileService $explorerTiles): JsonResponse
+    {
+        return response()->json($explorerTiles->lifetimeSummary());
     }
 
     public function syncStreams(): RedirectResponse

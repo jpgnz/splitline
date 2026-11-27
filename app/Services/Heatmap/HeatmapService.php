@@ -149,7 +149,7 @@ class HeatmapService
                 ? json_decode($row->polyline, true)
                 : $row->polyline;
 
-            $polyline = $this->normalizePolyline($rawPolyline);
+            $polyline = self::normalizePolyline($rawPolyline);
 
             if (count($polyline) < 2) {
                 continue;
@@ -374,9 +374,11 @@ class HeatmapService
     }
 
     /**
+     * Normalize a stored polyline into valid, finite [lat, lng] pairs rounded to 1e-5 degrees.
+     *
      * @return list<array{0: float, 1: float}>
      */
-    private function normalizePolyline(mixed $rawPolyline): array
+    public static function normalizePolyline(mixed $rawPolyline): array
     {
         if (! is_array($rawPolyline)) {
             return [];
