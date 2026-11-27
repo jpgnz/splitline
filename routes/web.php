@@ -3,6 +3,7 @@
 use App\Http\Controllers\ActivityController;
 use App\Http\Controllers\BestEffortController;
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\FitnessController;
 use App\Http\Controllers\GearController;
 use App\Http\Controllers\GoalController;
 use App\Http\Controllers\HealthMetricController;
@@ -17,6 +18,7 @@ Route::get('/', DashboardController::class)->name('dashboard');
 Route::redirect('/dashboard', '/');
 
 Route::get('/health/{metric}', [HealthMetricController::class, 'show'])->name('health.show');
+Route::get('/fitness', [FitnessController::class, 'index'])->name('fitness.index');
 
 Route::get('/activities', [ActivityController::class, 'index'])->name('activities.index');
 Route::get('/activities/{activity}', [ActivityController::class, 'show'])->name('activities.show');
