@@ -18,6 +18,7 @@ use App\Models\WeightGoal;
 use App\Models\WeightMeasurement;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Gear\GearService;
+use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
 use Splitline\Core\Data\ActivityStreamData;
 use Splitline\Core\Data\ActivityWeatherData;
@@ -30,6 +31,7 @@ use Splitline\Core\Data\SleepData;
 use Splitline\Core\Data\Vo2MaxData;
 use Splitline\Core\Data\WeightGoalData;
 use Splitline\Core\Data\WeightMeasurementData;
+use Throwable;
 
 /**
  * Single-user Eloquent persistence layer for normalized splitline/core telemetry DTOs.
@@ -113,6 +115,7 @@ class TelemetryPersistenceService
     public function __construct(
         private readonly BestEffortCalculator $bestEffortCalculator,
         private readonly GearService $gearService = new GearService,
+        private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
     ) {}
 
     /**
@@ -332,6 +335,13 @@ class TelemetryPersistenceService
         }
 
         $activity->update($activityUpdates);
+
+        try {
+            $this->routeMatchingService->matchActivity($activity, $activityStream);
+        } catch (Throwable $exception) {
+            // Route matching is best-effort enrichment; the scheduled routes:match scan retries it.
+            report($exception);
+        }
 
         if (
             ! $activity->is_indoor
