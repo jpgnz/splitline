@@ -7,11 +7,16 @@ use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\BestEffort;
 use App\Services\Ingestion\ImportWatchService;
+use App\Services\Ingestion\TelemetryPersistenceService;
 use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Mockery\MockInterface;
 
 /**
  * @param  list<string>  $messages
@@ -246,7 +251,7 @@ it('imports .fit and .zip files in keep mode, stores archives, dispatches enrich
         file_put_contents($tempDir.'/03_duplicate.zip', $zipDuplicateOfOne);
 
         $service = app(ImportWatchService::class);
-        $firstScan = $service->scan(minFileAgeSeconds: 0);
+        $firstScan = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($firstScan['configured'])->toBeTrue()
             ->and($firstScan['mode'])->toBe('keep')
@@ -275,7 +280,7 @@ it('imports .fit and .zip files in keep mode, stores archives, dispatches enrich
         Queue::assertPushed(SyncActivityWeatherJob::class, 2);
         Queue::assertPushed(GeocodeActivityLocationJob::class, 2);
 
-        $secondScan = $service->scan(minFileAgeSeconds: 0);
+        $secondScan = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($secondScan['created'])->toBe(0)
             ->and($secondScan['skipped'])->toBe(3)
@@ -316,13 +321,13 @@ it('tracks unchanged failed files in keep mode and retries them if replaced with
         file_put_contents($filePath, 'corrupt-fit-bytes');
 
         $service = app(ImportWatchService::class);
-        $first = $service->scan(minFileAgeSeconds: 0);
+        $first = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(0)
             ->and($first['failed'])->toBe(1)
             ->and($first['last_error'])->toContain('broken.fit');
 
-        $second = $service->scan(minFileAgeSeconds: 0);
+        $second = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($second['created'])->toBe(0)
             ->and($second['skipped'])->toBe(1)
@@ -331,7 +336,7 @@ it('tracks unchanged failed files in keep mode and retries them if replaced with
 
         file_put_contents($filePath, importWatchCreateSyntheticRun());
 
-        $third = $service->scan(minFileAgeSeconds: 0);
+        $third = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($third['created'])->toBe(1)
             ->and($third['failed'])->toBe(0)
@@ -361,7 +366,7 @@ it('moves created and duplicate files to processed and corrupt files to failed i
         file_put_contents($tempDir.'/corrupt.fit', 'invalid-binary-payload');
 
         $service = app(ImportWatchService::class);
-        $first = $service->scan(minFileAgeSeconds: 0);
+        $first = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(1)
             ->and($first['failed'])->toBe(1)
@@ -374,7 +379,7 @@ it('moves created and duplicate files to processed and corrupt files to failed i
         file_put_contents($tempDir.'/run.fit', $fitBytes);
         file_put_contents($tempDir.'/corrupt.fit', 'still-invalid');
 
-        $second = $service->scan(minFileAgeSeconds: 0);
+        $second = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($second['created'])->toBe(0)
             ->and($second['skipped'])->toBe(1)
@@ -418,7 +423,7 @@ it('skips processed and failed subdirectories, hidden dotfiles, Syncthing temp f
 
         expect($discovered)->toBe([$tempDir.'/2026/05/nested_run.fit']);
 
-        $result = $service->scan(minFileAgeSeconds: 0);
+        $result = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($result['created'])->toBe(1)
             ->and($result['skipped'])->toBe(0)
@@ -456,7 +461,7 @@ it('defers brand-new files younger than min_file_age_seconds without moving or f
         app(AppSettings::class)->flushMemo();
 
         $service = app(ImportWatchService::class);
-        $first = $service->scan();
+        $first = $service->scan(requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(1)
             ->and($first['deferred_recent'])->toBe(1)
@@ -467,7 +472,7 @@ it('defers brand-new files younger than min_file_age_seconds without moving or f
 
         $this->travel(15)->seconds();
 
-        $second = $service->scan();
+        $second = $service->scan(requireStableAcrossScans: false);
 
         expect($second['created'])->toBe(1)
             ->and($second['deferred_recent'])->toBe(0)
@@ -478,7 +483,7 @@ it('defers brand-new files younger than min_file_age_seconds without moving or f
     }
 });
 
-it('reports unconfigured and missing directories cleanly in statusPayload and caps recent_imports to 5 items', function () {
+it('reports unconfigured and missing directories cleanly in statusPayload, reports settling files as pending, and caps recent_imports to 5 items', function () {
     Storage::fake('local');
     Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
 
@@ -534,7 +539,13 @@ it('reports unconfigured and missing directories cleanly in statusPayload and ca
             );
         }
 
-        expect($service->statusPayload()['pending_files'])->toBe(6);
+        expect($service->statusPayload()['pending_files'])->toBe(0);
+
+        $settlingScan = $service->scan(minFileAgeSeconds: 0);
+
+        expect($settlingScan['created'])->toBe(0)
+            ->and($settlingScan['deferred_recent'])->toBe(6)
+            ->and($service->statusPayload()['pending_files'])->toBe(6);
 
         $scanResult = $service->scan(minFileAgeSeconds: 0);
 
@@ -571,7 +582,7 @@ it('falls back to keeping files in place when archive mode scans a read-only dir
         app(AppSettings::class)->flushMemo();
 
         $service = app(ImportWatchService::class);
-        $first = $service->scan(minFileAgeSeconds: 0);
+        $first = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($first['created'])->toBe(1)
             ->and($first['failed'])->toBe(0)
@@ -579,13 +590,213 @@ it('falls back to keeping files in place when archive mode scans a read-only dir
             ->and(is_dir($tempDir.'/processed'))->toBeFalse()
             ->and(Activity::query()->where('provider', 'fit_upload')->count())->toBe(1);
 
-        $second = $service->scan(minFileAgeSeconds: 0);
+        $second = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
 
         expect($second['created'])->toBe(0)
             ->and($second['skipped'])->toBe(1)
             ->and($second['failed'])->toBe(0);
     } finally {
         chmod($tempDir, 0777);
+        importWatchRemoveDir($tempDir);
+    }
+});
+
+it('skips the scan without importing while another scan holds the lock', function () {
+    Storage::fake('local');
+    Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
+
+    $tempDir = importWatchCreateTempDir();
+    $lock = Cache::lock(ImportWatchService::SCAN_LOCK_KEY, 60);
+
+    try {
+        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'keep']);
+        file_put_contents($tempDir.'/run.fit', importWatchCreateSyntheticRun());
+
+        expect($lock->get())->toBeTrue();
+
+        $service = app(ImportWatchService::class);
+        $blocked = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+
+        expect($blocked['busy'])->toBeTrue()
+            ->and($blocked['created'])->toBe(0)
+            ->and(Activity::query()->count())->toBe(0);
+
+        $lock->release();
+
+        $unblocked = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+
+        expect($unblocked['busy'])->toBeFalse()
+            ->and($unblocked['created'])->toBe(1);
+    } finally {
+        $lock->release();
+        importWatchRemoveDir($tempDir);
+    }
+});
+
+it('treats a unique constraint race with another importer as a duplicate and archives the file as processed', function () {
+    Storage::fake('local');
+
+    $tempDir = importWatchCreateTempDir();
+
+    try {
+        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'archive']);
+        file_put_contents($tempDir.'/raced.fit', importWatchCreateSyntheticRun());
+
+        $this->mock(TelemetryPersistenceService::class, function (MockInterface $mock): void {
+            $mock->shouldReceive('upsertActivity')->andThrow(new UniqueConstraintViolationException(
+                'sqlite',
+                'insert into "activities"',
+                [],
+                new PDOException('UNIQUE constraint failed: activities.provider, activities.external_id'),
+            ));
+        });
+
+        $result = app(ImportWatchService::class)->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+
+        expect($result['skipped'])->toBe(1)
+            ->and($result['failed'])->toBe(0)
+            ->and($result['last_error'])->toBeNull()
+            ->and($result['entries'][0]['message'])->toBe('skipped (duplicate)')
+            ->and(file_exists($tempDir.'/processed/raced.fit'))->toBeTrue()
+            ->and(file_exists($tempDir.'/failed/raced.fit'))->toBeFalse();
+    } finally {
+        importWatchRemoveDir($tempDir);
+    }
+});
+
+it('waits until a file keeps the same size and mtime across scans before importing it, even when the mtime is old', function () {
+    Storage::fake('local');
+    Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
+
+    $tempDir = importWatchCreateTempDir();
+
+    try {
+        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'archive']);
+
+        $filePath = $tempDir.'/copying.fit';
+        $fitBytes = importWatchCreateSyntheticRun();
+        $preservedMtime = now()->subDay()->getTimestamp();
+
+        file_put_contents($filePath, substr($fitBytes, 0, 40));
+        touch($filePath, $preservedMtime);
+
+        $service = app(ImportWatchService::class);
+        $partial = $service->scan();
+
+        expect($partial['deferred_recent'])->toBe(1)
+            ->and($partial['failed'])->toBe(0)
+            ->and($partial['entries'][0]['message'])->toBe('deferred (waiting for file to settle)')
+            ->and(file_exists($filePath))->toBeTrue();
+
+        file_put_contents($filePath, $fitBytes);
+        touch($filePath, $preservedMtime);
+
+        $grown = $service->scan();
+
+        expect($grown['deferred_recent'])->toBe(1)
+            ->and($grown['failed'])->toBe(0)
+            ->and(Activity::query()->count())->toBe(0);
+
+        $settled = $service->scan();
+
+        expect($settled['created'])->toBe(1)
+            ->and($settled['deferred_recent'])->toBe(0)
+            ->and(file_exists($tempDir.'/processed/copying.fit'))->toBeTrue();
+    } finally {
+        importWatchRemoveDir($tempDir);
+    }
+});
+
+it('skips unchanged previously imported files in keep mode without reading them again', function () {
+    if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
+        $this->markTestSkipped('Unreadable file permission test requires non-root execution.');
+    }
+
+    Storage::fake('local');
+    Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
+
+    $tempDir = importWatchCreateTempDir();
+
+    try {
+        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'keep']);
+
+        $filePath = $tempDir.'/run.zip';
+        file_put_contents($filePath, importWatchZipBytes(importWatchCreateSyntheticRun()));
+
+        $service = app(ImportWatchService::class);
+
+        expect($service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false)['created'])->toBe(1);
+
+        chmod($filePath, 0000);
+
+        $rescan = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+
+        expect($rescan['skipped'])->toBe(1)
+            ->and($rescan['failed'])->toBe(0);
+    } finally {
+        @chmod($tempDir.'/run.zip', 0644);
+        importWatchRemoveDir($tempDir);
+    }
+});
+
+it('ignores symlinked files and directories in the watch folder', function () {
+    Storage::fake('local');
+    Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
+
+    $tempDir = importWatchCreateTempDir();
+    $outsideDir = importWatchCreateTempDir();
+
+    try {
+        file_put_contents($outsideDir.'/secret.fit', importWatchCreateSyntheticRun());
+        symlink($outsideDir.'/secret.fit', $tempDir.'/linked.fit');
+        symlink($outsideDir, $tempDir.'/linked-dir');
+
+        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'archive']);
+
+        $service = app(ImportWatchService::class);
+
+        expect($service->discoverFiles($tempDir))->toBe([]);
+
+        $result = $service->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+
+        expect($result['created'])->toBe(0)
+            ->and($result['failed'])->toBe(0)
+            ->and(Activity::query()->count())->toBe(0)
+            ->and(is_link($tempDir.'/linked.fit'))->toBeTrue();
+    } finally {
+        @unlink($tempDir.'/linked.fit');
+        @unlink($tempDir.'/linked-dir');
+        importWatchRemoveDir($tempDir);
+        importWatchRemoveDir($outsideDir);
+    }
+});
+
+it('rolls back the activity, archive, and enrichment jobs when persisting the stream fails, without exposing the raw error', function () {
+    Storage::fake('local');
+    config(['queue.default' => 'database']);
+
+    $tempDir = importWatchCreateTempDir();
+
+    try {
+        config(['services.import_watch.dir' => $tempDir, 'services.import_watch.mode' => 'keep']);
+
+        $fitBytes = importWatchCreateSyntheticRun();
+        file_put_contents($tempDir.'/run.fit', $fitBytes);
+
+        ActivityStream::creating(function (): never {
+            throw new RuntimeException('SQLSTATE[HY000]: disk I/O error at /var/lib/secret.sqlite');
+        });
+
+        $result = app(ImportWatchService::class)->scan(minFileAgeSeconds: 0, requireStableAcrossScans: false);
+
+        expect($result['failed'])->toBe(1)
+            ->and($result['last_error'])->toContain('run.fit')
+            ->and($result['last_error'])->not->toContain('secret.sqlite')
+            ->and(Activity::query()->count())->toBe(0)
+            ->and(DB::table('jobs')->count())->toBe(0);
+
+        Storage::disk('local')->assertMissing('fit_upload/fits/'.hash('sha256', $fitBytes).'.fit');
+    } finally {
         importWatchRemoveDir($tempDir);
     }
 });

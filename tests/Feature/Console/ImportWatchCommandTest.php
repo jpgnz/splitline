@@ -4,9 +4,11 @@ use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
+use App\Services\Ingestion\ImportWatchService;
 use App\Support\AppSettings;
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 
@@ -216,15 +218,53 @@ it('handles POST /settings/import-watch/scan for unconfigured, missing, and vali
         ]);
         app(AppSettings::class)->flushMemo();
 
+        file_put_contents($tempDir.'/still_copying.fit', importWatchCmdSyntheticFit());
         file_put_contents($tempDir.'/manual_scan.fit', importWatchCmdSyntheticFit());
+        touch($tempDir.'/manual_scan.fit', now()->subMinutes(10)->getTimestamp());
 
         $this->from('/settings')
             ->post(route('settings.import-watch.scan'))
             ->assertRedirect('/settings')
-            ->assertSessionHas('status', 'Scanned import folder: 1 imported, 0 skipped, 0 failed.');
+            ->assertSessionHas('status', 'Scanned import folder: 0 imported, 0 skipped, 0 failed. 2 files are still settling and will be imported on the next scan.');
+
+        expect(Activity::query()->where('provider', 'fit_upload')->count())->toBe(0);
+
+        $this->from('/settings')
+            ->post(route('settings.import-watch.scan'))
+            ->assertRedirect('/settings')
+            ->assertSessionHas('status', 'Scanned import folder: 1 imported, 0 skipped, 0 failed. 1 file is still settling and will be imported on the next scan.');
 
         expect(Activity::query()->where('provider', 'fit_upload')->count())->toBe(1);
     } finally {
+        importWatchCmdRemoveDir($tempDir);
+    }
+});
+
+it('reports a busy scan from both the command and the settings scan button while the scan lock is held', function () {
+    Storage::fake('local');
+    Queue::fake([SyncActivityStreamJob::class, SyncActivityWeatherJob::class, GeocodeActivityLocationJob::class]);
+
+    $tempDir = importWatchCmdCreateTempDir();
+    $lock = Cache::lock(ImportWatchService::SCAN_LOCK_KEY, 60);
+
+    try {
+        config(['services.import_watch.dir' => $tempDir]);
+        file_put_contents($tempDir.'/locked.fit', importWatchCmdSyntheticFit());
+
+        expect($lock->get())->toBeTrue();
+
+        $this->artisan('import:watch', ['--no-age-check' => true])
+            ->expectsOutputToContain('already running')
+            ->assertSuccessful();
+
+        $this->from('/settings')
+            ->post(route('settings.import-watch.scan'))
+            ->assertRedirect('/settings')
+            ->assertSessionHas('status', 'An import folder scan is already running. Try again in a moment.');
+
+        expect(Activity::query()->count())->toBe(0);
+    } finally {
+        $lock->release();
         importWatchCmdRemoveDir($tempDir);
     }
 });

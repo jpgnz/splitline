@@ -6,11 +6,18 @@ use App\Models\Activity;
 use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 use FilesystemIterator;
+use Illuminate\Contracts\Filesystem\Filesystem;
+use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use JsonException;
 use RecursiveCallbackFilterIterator;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 use SplFileInfo;
+use Splitline\Core\Data\ImportedActivityBundle;
+use Splitline\Parsers\Exceptions\ParseException;
 use Splitline\ProviderFileImport\FitFileImportProvider;
 use Throwable;
 
@@ -41,12 +48,28 @@ use Throwable;
  *     activity_id?: int
  * }
  * @phpstan-type FileIndexEntry array{
- *     status: 'processed'|'failed',
+ *     status: 'pending'|'processed'|'failed',
  *     mtime: int,
  *     size: int,
  *     sha256: string,
  *     external_id: ?string,
  *     error: ?string
+ * }
+ * @phpstan-type ScanResult array{
+ *     configured: bool,
+ *     busy: bool,
+ *     directory: ?string,
+ *     directory_exists: bool,
+ *     directory_readable: bool,
+ *     mode: 'keep'|'archive',
+ *     created: int,
+ *     skipped: int,
+ *     failed: int,
+ *     deferred_recent: int,
+ *     last_error: ?string,
+ *     recent_imports: list<RecentImportItem>,
+ *     ran_at: string,
+ *     entries: list<ScanEntry>
  * }
  */
 class ImportWatchService
@@ -57,11 +80,21 @@ class ImportWatchService
 
     public const string LAST_RUN_SETTING_KEY = 'import_watch.last_run';
 
-    public const string FILE_INDEX_SETTING_KEY = 'import_watch.file_index';
+    /**
+     * Local-disk path of the per-file fingerprint index (kept out of app_settings so it never bloats shared props).
+     */
+    public const string FILE_INDEX_PATH = 'import-watch/file-index.json';
+
+    /**
+     * Cache lock shared by the scheduled command and the Settings "Scan now" button.
+     */
+    public const string SCAN_LOCK_KEY = 'import-watch:scan';
+
+    private const int SCAN_LOCK_SECONDS = 1800;
 
     private const int MAX_RECENT_IMPORTS = 5;
 
-    private const int MAX_INDEXED_FILES = 1000;
+    private const string GENERIC_IMPORT_ERROR = 'Unexpected error while importing this file. Check the application log for details.';
 
     /**
      * Subdirectory names managed by archive mode and skipped during recursive discovery.
@@ -131,59 +164,35 @@ class ImportWatchService
     /**
      * Scan the configured (or overridden) drop folder and ingest eligible .fit / .zip files.
      *
-     * @return array{
-     *     configured: bool,
-     *     directory: ?string,
-     *     directory_exists: bool,
-     *     directory_readable: bool,
-     *     mode: 'keep'|'archive',
-     *     created: int,
-     *     skipped: int,
-     *     failed: int,
-     *     deferred_recent: int,
-     *     last_error: ?string,
-     *     recent_imports: list<RecentImportItem>,
-     *     ran_at: string,
-     *     entries: list<ScanEntry>
-     * }
+     * Files are only ingested once they are older than the minimum age and (unless disabled) their
+     * size and mtime are unchanged since the previous scan, so partially-copied files are never parsed.
+     *
+     * @return ScanResult
      */
     public function scan(
         ?string $directoryOverride = null,
         ?string $modeOverride = null,
         ?int $minFileAgeSeconds = null,
+        bool $requireStableAcrossScans = true,
     ): array {
         $directory = $this->configuredDirectory($directoryOverride);
         $mode = $this->resolveMode($modeOverride);
         $ranAt = CarbonImmutable::now('UTC')->toIso8601String();
 
         if ($directory === null) {
-            return [
-                'configured' => false,
-                'directory' => null,
-                'directory_exists' => false,
-                'directory_readable' => false,
-                'mode' => $mode,
-                'created' => 0,
-                'skipped' => 0,
-                'failed' => 0,
-                'deferred_recent' => 0,
-                'last_error' => null,
-                'recent_imports' => [],
-                'ran_at' => $ranAt,
-                'entries' => [],
-            ];
+            return $this->emptyResult(configured: false, directory: null, exists: false, readable: false, mode: $mode, ranAt: $ranAt);
         }
 
         $directoryExists = is_dir($directory);
         $directoryReadable = $directoryExists && is_readable($directory);
-        $previousRecent = $this->lastRunSummary()['recent_imports'] ?? [];
 
         if (! $directoryExists || ! $directoryReadable) {
             $error = ! $directoryExists
                 ? "Import watch directory does not exist: {$directory}"
                 : "Import watch directory is not readable: {$directory}";
+            $previousRecent = $this->lastRunSummary()['recent_imports'] ?? [];
 
-            $lastRun = [
+            $this->settings->set(self::LAST_RUN_SETTING_KEY, [
                 'ran_at' => $ranAt,
                 'directory' => $directory,
                 'mode' => $mode,
@@ -193,310 +202,36 @@ class ImportWatchService
                 'deferred_recent' => 0,
                 'last_error' => $error,
                 'recent_imports' => $previousRecent,
-            ];
-            $this->settings->set(self::LAST_RUN_SETTING_KEY, $lastRun);
+            ]);
 
             return [
-                'configured' => true,
-                'directory' => $directory,
-                'directory_exists' => $directoryExists,
-                'directory_readable' => $directoryReadable,
-                'mode' => $mode,
-                'created' => 0,
-                'skipped' => 0,
-                'failed' => 0,
-                'deferred_recent' => 0,
+                ...$this->emptyResult(configured: true, directory: $directory, exists: $directoryExists, readable: $directoryReadable, mode: $mode, ranAt: $ranAt),
                 'last_error' => $error,
                 'recent_imports' => $previousRecent,
-                'ran_at' => $ranAt,
-                'entries' => [],
             ];
         }
 
-        $effectiveMinAge = $this->minFileAgeSeconds($minFileAgeSeconds);
-        $nowTimestamp = CarbonImmutable::now('UTC')->getTimestamp();
-        $timezone = $this->settings->displayTimezone();
-        $disk = Storage::disk('local');
-        $providerId = $this->provider->id();
+        $lock = Cache::lock(self::SCAN_LOCK_KEY, self::SCAN_LOCK_SECONDS);
 
-        $files = $this->discoverFiles($directory);
-        $fileIndex = $this->loadFileIndex($directory);
-        /** @var array<string, FileIndexEntry> $nextFileIndex */
-        $nextFileIndex = [];
-
-        $created = 0;
-        $skipped = 0;
-        $failed = 0;
-        $deferredRecent = 0;
-        $lastError = null;
-        /** @var list<RecentImportItem> $newImports */
-        $newImports = [];
-        /** @var list<ScanEntry> $entries */
-        $entries = [];
-
-        $canArchive = $mode === self::MODE_ARCHIVE && is_writable($directory);
-
-        foreach ($files as $file) {
-            $filename = basename($file);
-            $relativePath = $this->relativePath($directory, $file);
-
-            clearstatcache(true, $file);
-            $mtime = @filemtime($file);
-            $size = @filesize($file);
-            $mtimeInt = $mtime !== false ? $mtime : 0;
-            $sizeInt = $size !== false ? $size : 0;
-
-            if ($effectiveMinAge > 0 && $mtime !== false && ($nowTimestamp - $mtime) < $effectiveMinAge) {
-                $deferredRecent++;
-                $entries[] = [
-                    'filename' => $filename,
-                    'status' => 'deferred',
-                    'message' => 'deferred (recently modified)',
-                ];
-
-                continue;
-            }
-
-            $indexed = $fileIndex[$relativePath] ?? null;
-
-            $bytes = @file_get_contents($file);
-
-            if ($bytes === false || $bytes === '') {
-                $errorMessage = $bytes === false
-                    ? 'Unable to read file contents.'
-                    : 'File is empty.';
-
-                if (! $canArchive && $indexed !== null && $indexed['status'] === 'failed' && $indexed['mtime'] === $mtimeInt && $indexed['size'] === $sizeInt) {
-                    $skipped++;
-                    $nextFileIndex[$relativePath] = $indexed;
-                    $entries[] = [
-                        'filename' => $filename,
-                        'status' => 'skipped',
-                        'message' => 'skipped (previously failed)',
-                    ];
-
-                    continue;
-                }
-
-                $failed++;
-                $lastError = "{$filename}: {$errorMessage}";
-                $entries[] = [
-                    'filename' => $filename,
-                    'status' => 'failed',
-                    'message' => $errorMessage,
-                ];
-
-                $moved = $canArchive && $this->moveToSubdirectory($directory, $file, 'failed');
-
-                if (! $moved) {
-                    $nextFileIndex[$relativePath] = [
-                        'status' => 'failed',
-                        'mtime' => $mtimeInt,
-                        'size' => $sizeInt,
-                        'sha256' => '',
-                        'external_id' => null,
-                        'error' => $errorMessage,
-                    ];
-                }
-
-                continue;
-            }
-
-            $rawSha256 = hash('sha256', $bytes);
-
-            if (
-                ! $canArchive
-                && $indexed !== null
-                && $indexed['status'] === 'failed'
-                && $indexed['sha256'] === $rawSha256
-            ) {
-                $skipped++;
-                $nextFileIndex[$relativePath] = [
-                    ...$indexed,
-                    'mtime' => $mtimeInt,
-                    'size' => $sizeInt,
-                ];
-                $entries[] = [
-                    'filename' => $filename,
-                    'status' => 'skipped',
-                    'message' => 'skipped (previously failed)',
-                ];
-
-                continue;
-            }
-
-            $isRawFit = ! str_starts_with($bytes, "PK\x03\x04")
-                && strtolower(pathinfo($filename, PATHINFO_EXTENSION)) === 'fit';
-
-            $fastExternalId = null;
-
-            if ($isRawFit) {
-                $fastExternalId = $rawSha256;
-            } elseif (
-                $indexed !== null
-                && $indexed['status'] === 'processed'
-                && $indexed['sha256'] === $rawSha256
-                && $indexed['external_id'] !== null
-            ) {
-                $fastExternalId = $indexed['external_id'];
-            }
-
-            if (
-                $fastExternalId !== null
-                && Activity::query()
-                    ->where('provider', $providerId)
-                    ->where('external_id', $fastExternalId)
-                    ->exists()
-            ) {
-                $skipped++;
-                $entries[] = [
-                    'filename' => $filename,
-                    'status' => 'skipped',
-                    'message' => 'skipped (duplicate)',
-                ];
-
-                $moved = $canArchive && $this->moveToSubdirectory($directory, $file, 'processed');
-
-                if (! $moved) {
-                    $nextFileIndex[$relativePath] = [
-                        'status' => 'processed',
-                        'mtime' => $mtimeInt,
-                        'size' => $sizeInt,
-                        'sha256' => $rawSha256,
-                        'external_id' => $fastExternalId,
-                        'error' => null,
-                    ];
-                }
-
-                continue;
-            }
-
-            try {
-                $bundle = $this->provider->importBytes($bytes, $filename, $timezone);
-
-                $exists = Activity::query()
-                    ->where('provider', $bundle->activity->provider)
-                    ->where('external_id', $bundle->activity->externalId)
-                    ->exists();
-
-                if ($exists) {
-                    $skipped++;
-                    $entries[] = [
-                        'filename' => $filename,
-                        'status' => 'skipped',
-                        'message' => 'skipped (duplicate)',
-                    ];
-
-                    $moved = $canArchive && $this->moveToSubdirectory($directory, $file, 'processed');
-
-                    if (! $moved) {
-                        $nextFileIndex[$relativePath] = [
-                            'status' => 'processed',
-                            'mtime' => $mtimeInt,
-                            'size' => $sizeInt,
-                            'sha256' => $rawSha256,
-                            'external_id' => $bundle->activity->externalId,
-                            'error' => null,
-                        ];
-                    }
-
-                    continue;
-                }
-
-                $ext = $bundle->format === 'fit_zip' ? 'zip' : 'fit';
-                $archivePath = "fit_upload/fits/{$bundle->activity->externalId}.{$ext}";
-                $disk->put($archivePath, $bundle->rawBytes);
-
-                $activity = $this->persistence->upsertActivity($bundle->activity, dispatchEnrichments: true);
-                $this->persistence->upsertStream($activity, $bundle->stream);
-
-                $created++;
-                $newImports[] = [
-                    'activity_id' => (int) $activity->id,
-                    'name' => (string) $activity->name,
-                    'filename' => $filename,
-                    'imported_at' => CarbonImmutable::now('UTC')->toIso8601String(),
-                ];
-                $entries[] = [
-                    'filename' => $filename,
-                    'status' => 'created',
-                    'message' => "created (#{$activity->id} {$activity->name})",
-                    'activity_id' => (int) $activity->id,
-                ];
-
-                $moved = $canArchive && $this->moveToSubdirectory($directory, $file, 'processed');
-
-                if (! $moved) {
-                    $nextFileIndex[$relativePath] = [
-                        'status' => 'processed',
-                        'mtime' => $mtimeInt,
-                        'size' => $sizeInt,
-                        'sha256' => $rawSha256,
-                        'external_id' => $bundle->activity->externalId,
-                        'error' => null,
-                    ];
-                }
-            } catch (Throwable $exception) {
-                $failed++;
-                $errorMessage = $exception->getMessage();
-                $lastError = "{$filename}: {$errorMessage}";
-                $entries[] = [
-                    'filename' => $filename,
-                    'status' => 'failed',
-                    'message' => $errorMessage,
-                ];
-
-                $moved = $canArchive && $this->moveToSubdirectory($directory, $file, 'failed');
-
-                if (! $moved) {
-                    $nextFileIndex[$relativePath] = [
-                        'status' => 'failed',
-                        'mtime' => $mtimeInt,
-                        'size' => $sizeInt,
-                        'sha256' => $rawSha256,
-                        'external_id' => null,
-                        'error' => $errorMessage,
-                    ];
-                }
-            }
+        if (! $lock->get()) {
+            return [
+                ...$this->emptyResult(configured: true, directory: $directory, exists: true, readable: true, mode: $mode, ranAt: $ranAt),
+                'busy' => true,
+            ];
         }
 
-        $recentImports = $this->mergeRecentImports($newImports, $previousRecent);
-
-        $lastRun = [
-            'ran_at' => $ranAt,
-            'directory' => $directory,
-            'mode' => $mode,
-            'created' => $created,
-            'skipped' => $skipped,
-            'failed' => $failed,
-            'deferred_recent' => $deferredRecent,
-            'last_error' => $lastError,
-            'recent_imports' => $recentImports,
-        ];
-
-        $this->settings->set(self::LAST_RUN_SETTING_KEY, $lastRun);
-        $this->persistFileIndex($directory, $nextFileIndex);
-
-        return [
-            'configured' => true,
-            'directory' => $directory,
-            'directory_exists' => true,
-            'directory_readable' => true,
-            'mode' => $mode,
-            'created' => $created,
-            'skipped' => $skipped,
-            'failed' => $failed,
-            'deferred_recent' => $deferredRecent,
-            'last_error' => $lastError,
-            'recent_imports' => $recentImports,
-            'ran_at' => $ranAt,
-            'entries' => $entries,
-        ];
+        try {
+            return $this->scanDirectory($directory, $mode, $ranAt, $this->minFileAgeSeconds($minFileAgeSeconds), $requireStableAcrossScans);
+        } finally {
+            $lock->release();
+        }
     }
 
     /**
      * Build the status payload consumed by SettingsController and diagnostics.
+     *
+     * Intentionally avoids walking or hashing the drop folder: `pending_files` reflects the
+     * files still waiting to settle at the most recent scan.
      *
      * @return array{
      *     configured: bool,
@@ -515,14 +250,10 @@ class ImportWatchService
         $configured = $directory !== null;
         $directoryExists = $configured && is_dir($directory);
         $directoryReadable = $directoryExists && is_readable($directory);
-        $mode = $this->resolveMode();
+        $lastRun = $this->lastRunSummary();
 
-        $importedTotal = Activity::query()
-            ->where('provider', $this->provider->id())
-            ->count();
-
-        $pendingFiles = $directoryReadable
-            ? $this->countPendingFiles($directory)
+        $pendingFiles = $directoryReadable && $lastRun !== null && $lastRun['directory'] === $directory
+            ? $lastRun['deferred_recent']
             : 0;
 
         return [
@@ -530,15 +261,15 @@ class ImportWatchService
             'directory' => $directory,
             'directory_exists' => $directoryExists,
             'directory_readable' => $directoryReadable,
-            'mode' => $mode,
+            'mode' => $this->resolveMode(),
             'pending_files' => $pendingFiles,
-            'imported_total' => $importedTotal,
-            'last_run' => $this->lastRunSummary(),
+            'imported_total' => Activity::query()->where('provider', $this->provider->id())->count(),
+            'last_run' => $lastRun,
         ];
     }
 
     /**
-     * Recursively discover eligible .fit and .zip files, skipping processed/, failed/, and hidden files.
+     * Recursively discover eligible .fit and .zip files, skipping processed/, failed/, hidden files, and symlinks.
      *
      * @return list<string>
      */
@@ -554,7 +285,7 @@ class ImportWatchService
             static function (SplFileInfo $current): bool {
                 $name = $current->getFilename();
 
-                if ($name === '' || str_starts_with($name, '.')) {
+                if ($name === '' || str_starts_with($name, '.') || $current->isLink()) {
                     return false;
                 }
 
@@ -582,7 +313,7 @@ class ImportWatchService
         $matches = [];
 
         foreach ($iterator as $fileInfo) {
-            if (! $fileInfo instanceof SplFileInfo || ! $fileInfo->isFile()) {
+            if (! $fileInfo instanceof SplFileInfo || $fileInfo->isLink() || ! $fileInfo->isFile()) {
                 continue;
             }
 
@@ -595,60 +326,332 @@ class ImportWatchService
     }
 
     /**
-     * Count eligible files in the watch directory that have not yet been imported or permanently failed.
+     * @param  'keep'|'archive'  $mode
+     * @return ScanResult
      */
-    private function countPendingFiles(string $directory): int
-    {
+    private function scanDirectory(
+        string $directory,
+        string $mode,
+        string $ranAt,
+        int $minFileAgeSeconds,
+        bool $requireStableAcrossScans,
+    ): array {
+        $previousRecent = $this->lastRunSummary()['recent_imports'] ?? [];
+        $nowTimestamp = CarbonImmutable::now('UTC')->getTimestamp();
+        $timezone = $this->settings->displayTimezone();
+        $disk = Storage::disk('local');
+        $providerId = $this->provider->id();
+
         $files = $this->discoverFiles($directory);
-
-        if ($files === []) {
-            return 0;
-        }
-
-        /** @var array<string, true> $existingExternalIds */
-        $existingExternalIds = [];
-
-        foreach (Activity::query()->where('provider', $this->provider->id())->pluck('external_id') as $externalId) {
-            if (is_string($externalId) && $externalId !== '') {
-                $existingExternalIds[$externalId] = true;
-            }
-        }
-
         $fileIndex = $this->loadFileIndex($directory);
-        $pending = 0;
+        /** @var array<string, FileIndexEntry> $nextFileIndex */
+        $nextFileIndex = [];
+
+        $created = 0;
+        $skipped = 0;
+        $failed = 0;
+        $deferredRecent = 0;
+        $lastError = null;
+        /** @var list<RecentImportItem> $newImports */
+        $newImports = [];
+        /** @var list<ScanEntry> $entries */
+        $entries = [];
+
+        $canArchive = $mode === self::MODE_ARCHIVE && is_writable($directory);
 
         foreach ($files as $file) {
+            $filename = basename($file);
             $relativePath = $this->relativePath($directory, $file);
+
             clearstatcache(true, $file);
+
+            if (is_link($file)) {
+                continue;
+            }
+
             $mtime = @filemtime($file);
             $size = @filesize($file);
-            $mtimeInt = $mtime !== false ? $mtime : 0;
-            $sizeInt = $size !== false ? $size : 0;
+
+            if ($mtime === false || $size === false) {
+                continue;
+            }
 
             $indexed = $fileIndex[$relativePath] ?? null;
+            $unchangedSinceLastScan = $indexed !== null && $indexed['mtime'] === $mtime && $indexed['size'] === $size;
 
-            if ($indexed !== null && $indexed['mtime'] === $mtimeInt && $indexed['size'] === $sizeInt) {
-                if ($indexed['status'] === 'failed') {
-                    continue;
-                }
+            if ($unchangedSinceLastScan && $indexed['status'] === 'failed' && ! $canArchive) {
+                $skipped++;
+                $nextFileIndex[$relativePath] = $indexed;
+                $entries[] = ['filename' => $filename, 'status' => 'skipped', 'message' => 'skipped (previously failed)'];
 
-                if ($indexed['external_id'] !== null && isset($existingExternalIds[$indexed['external_id']])) {
-                    continue;
-                }
+                continue;
             }
 
-            if (strtolower(pathinfo($file, PATHINFO_EXTENSION)) === 'fit') {
-                $hash = @hash_file('sha256', $file);
+            if (
+                $unchangedSinceLastScan
+                && $indexed['status'] === 'processed'
+                && $indexed['external_id'] !== null
+                && $this->activityExists($providerId, $indexed['external_id'])
+            ) {
+                $skipped++;
+                $entries[] = ['filename' => $filename, 'status' => 'skipped', 'message' => 'skipped (duplicate)'];
+                $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'processed', $mtime, $size, $indexed['sha256'], $indexed['external_id']);
 
-                if (is_string($hash) && isset($existingExternalIds[$hash])) {
-                    continue;
-                }
+                continue;
             }
 
-            $pending++;
+            $isTooRecent = $minFileAgeSeconds > 0 && ($nowTimestamp - $mtime) < $minFileAgeSeconds;
+            $isUnsettled = $requireStableAcrossScans && ! $unchangedSinceLastScan;
+
+            if ($isTooRecent || $isUnsettled) {
+                $deferredRecent++;
+                $nextFileIndex[$relativePath] = $this->pendingIndexEntry($mtime, $size);
+                $entries[] = [
+                    'filename' => $filename,
+                    'status' => 'deferred',
+                    'message' => $isTooRecent ? 'deferred (recently modified)' : 'deferred (waiting for file to settle)',
+                ];
+
+                continue;
+            }
+
+            $bytes = @file_get_contents($file);
+
+            clearstatcache(true, $file);
+
+            if ($bytes !== false && $bytes !== '' && (strlen($bytes) !== @filesize($file) || @filemtime($file) !== $mtime)) {
+                $deferredRecent++;
+                $nextFileIndex[$relativePath] = $this->pendingIndexEntry((int) @filemtime($file), (int) @filesize($file));
+                $entries[] = ['filename' => $filename, 'status' => 'deferred', 'message' => 'deferred (file changed while reading)'];
+
+                continue;
+            }
+
+            if ($bytes === false || $bytes === '') {
+                $errorMessage = $bytes === false ? 'Unable to read file contents.' : 'File is empty.';
+
+                $failed++;
+                $lastError = "{$filename}: {$errorMessage}";
+                $entries[] = ['filename' => $filename, 'status' => 'failed', 'message' => $errorMessage];
+                $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'failed', $mtime, $size, error: $errorMessage);
+
+                continue;
+            }
+
+            $rawSha256 = hash('sha256', $bytes);
+
+            $isRawFit = ! str_starts_with($bytes, "PK\x03\x04")
+                && strtolower(pathinfo($filename, PATHINFO_EXTENSION)) === 'fit';
+
+            if ($isRawFit && $this->activityExists($providerId, $rawSha256)) {
+                $skipped++;
+                $entries[] = ['filename' => $filename, 'status' => 'skipped', 'message' => 'skipped (duplicate)'];
+                $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'processed', $mtime, $size, $rawSha256, $rawSha256);
+
+                continue;
+            }
+
+            $externalId = null;
+
+            try {
+                $bundle = $this->provider->importBytes($bytes, $filename, $timezone);
+                $externalId = $bundle->activity->externalId;
+
+                if ($this->activityExists($bundle->activity->provider, $externalId)) {
+                    $skipped++;
+                    $entries[] = ['filename' => $filename, 'status' => 'skipped', 'message' => 'skipped (duplicate)'];
+                    $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'processed', $mtime, $size, $rawSha256, $externalId);
+
+                    continue;
+                }
+
+                $activity = $this->persistBundle($bundle, $disk);
+
+                $created++;
+                $newImports[] = [
+                    'activity_id' => (int) $activity->id,
+                    'name' => (string) $activity->name,
+                    'filename' => $filename,
+                    'imported_at' => CarbonImmutable::now('UTC')->toIso8601String(),
+                ];
+                $entries[] = [
+                    'filename' => $filename,
+                    'status' => 'created',
+                    'message' => "created (#{$activity->id} {$activity->name})",
+                    'activity_id' => (int) $activity->id,
+                ];
+                $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'processed', $mtime, $size, $rawSha256, $externalId);
+            } catch (UniqueConstraintViolationException) {
+                $skipped++;
+                $entries[] = ['filename' => $filename, 'status' => 'skipped', 'message' => 'skipped (duplicate)'];
+                $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'processed', $mtime, $size, $rawSha256, $externalId);
+            } catch (Throwable $exception) {
+                if (! $exception instanceof ParseException) {
+                    report($exception);
+                }
+
+                $errorMessage = $exception instanceof ParseException
+                    ? $exception->getMessage()
+                    : self::GENERIC_IMPORT_ERROR;
+
+                $failed++;
+                $lastError = "{$filename}: {$errorMessage}";
+                $entries[] = ['filename' => $filename, 'status' => 'failed', 'message' => $errorMessage];
+                $this->recordOutcome($nextFileIndex, $canArchive, $directory, $file, $relativePath, 'failed', $mtime, $size, $rawSha256, error: $errorMessage);
+            }
         }
 
-        return $pending;
+        $recentImports = $this->mergeRecentImports($newImports, $previousRecent);
+
+        $this->settings->set(self::LAST_RUN_SETTING_KEY, [
+            'ran_at' => $ranAt,
+            'directory' => $directory,
+            'mode' => $mode,
+            'created' => $created,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'deferred_recent' => $deferredRecent,
+            'last_error' => $lastError,
+            'recent_imports' => $recentImports,
+        ]);
+        $this->persistFileIndex($directory, $nextFileIndex);
+
+        return [
+            'configured' => true,
+            'busy' => false,
+            'directory' => $directory,
+            'directory_exists' => true,
+            'directory_readable' => true,
+            'mode' => $mode,
+            'created' => $created,
+            'skipped' => $skipped,
+            'failed' => $failed,
+            'deferred_recent' => $deferredRecent,
+            'last_error' => $lastError,
+            'recent_imports' => $recentImports,
+            'ran_at' => $ranAt,
+            'entries' => $entries,
+        ];
+    }
+
+    /**
+     * Atomically store the original archive, activity summary, and telemetry stream.
+     *
+     * Enrichment jobs are dispatched after commit, and a freshly written archive is removed on rollback.
+     */
+    private function persistBundle(ImportedActivityBundle $bundle, Filesystem $disk): Activity
+    {
+        $ext = $bundle->format === 'fit_zip' ? 'zip' : 'fit';
+        $archivePath = "fit_upload/fits/{$bundle->activity->externalId}.{$ext}";
+        $archiveExisted = $disk->exists($archivePath);
+
+        try {
+            return DB::transaction(function () use ($bundle, $disk, $archivePath, $archiveExisted): Activity {
+                if (! $archiveExisted) {
+                    $disk->put($archivePath, $bundle->rawBytes);
+                }
+
+                $activity = $this->persistence->upsertActivity($bundle->activity, dispatchEnrichments: true);
+                $this->persistence->upsertStream($activity, $bundle->stream);
+
+                return $activity;
+            });
+        } catch (UniqueConstraintViolationException $exception) {
+            // Another importer stored this activity (and its identical archive) concurrently.
+            throw $exception;
+        } catch (Throwable $exception) {
+            if (! $archiveExisted) {
+                $disk->delete($archivePath);
+            }
+
+            throw $exception;
+        }
+    }
+
+    /**
+     * Archive the file into processed/ or failed/ (archive mode), or remember its outcome in the file index.
+     *
+     * @param  array<string, FileIndexEntry>  $nextFileIndex
+     * @param  'processed'|'failed'  $status
+     */
+    private function recordOutcome(
+        array &$nextFileIndex,
+        bool $canArchive,
+        string $directory,
+        string $file,
+        string $relativePath,
+        string $status,
+        int $mtime,
+        int $size,
+        string $sha256 = '',
+        ?string $externalId = null,
+        ?string $error = null,
+    ): void {
+        if ($canArchive && $this->moveToSubdirectory($directory, $file, $status)) {
+            return;
+        }
+
+        $nextFileIndex[$relativePath] = [
+            'status' => $status,
+            'mtime' => $mtime,
+            'size' => $size,
+            'sha256' => $sha256,
+            'external_id' => $externalId,
+            'error' => $error,
+        ];
+    }
+
+    private function activityExists(string $provider, string $externalId): bool
+    {
+        return Activity::query()
+            ->where('provider', $provider)
+            ->where('external_id', $externalId)
+            ->exists();
+    }
+
+    /**
+     * @return FileIndexEntry
+     */
+    private function pendingIndexEntry(int $mtime, int $size): array
+    {
+        return [
+            'status' => 'pending',
+            'mtime' => $mtime,
+            'size' => $size,
+            'sha256' => '',
+            'external_id' => null,
+            'error' => null,
+        ];
+    }
+
+    /**
+     * @param  'keep'|'archive'  $mode
+     * @return ScanResult
+     */
+    private function emptyResult(
+        bool $configured,
+        ?string $directory,
+        bool $exists,
+        bool $readable,
+        string $mode,
+        string $ranAt,
+    ): array {
+        return [
+            'configured' => $configured,
+            'busy' => false,
+            'directory' => $directory,
+            'directory_exists' => $exists,
+            'directory_readable' => $readable,
+            'mode' => $mode,
+            'created' => 0,
+            'skipped' => 0,
+            'failed' => 0,
+            'deferred_recent' => 0,
+            'last_error' => null,
+            'recent_imports' => [],
+            'ran_at' => $ranAt,
+            'entries' => [],
+        ];
     }
 
     /**
@@ -656,7 +659,7 @@ class ImportWatchService
      */
     private function moveToSubdirectory(string $watchDir, string $sourceFile, string $subdirectory): bool
     {
-        if (! is_writable($watchDir) || ! is_writable(dirname($sourceFile))) {
+        if (is_link($sourceFile) || ! is_writable($watchDir) || ! is_writable(dirname($sourceFile))) {
             return false;
         }
 
@@ -668,7 +671,7 @@ class ImportWatchService
             }
         }
 
-        if (! is_writable($targetDir)) {
+        if (is_link($targetDir) || ! is_writable($targetDir)) {
             return false;
         }
 
@@ -679,7 +682,7 @@ class ImportWatchService
         $destination = $targetDir.DIRECTORY_SEPARATOR.$filename;
         $counter = 2;
 
-        while (file_exists($destination)) {
+        while (file_exists($destination) || is_link($destination)) {
             $candidateName = $extension !== ''
                 ? "{$stem}-{$counter}.{$extension}"
                 : "{$stem}-{$counter}";
@@ -796,7 +799,17 @@ class ImportWatchService
      */
     private function loadFileIndex(string $directory): array
     {
-        $raw = $this->settings->get(self::FILE_INDEX_SETTING_KEY);
+        $contents = Storage::disk('local')->get(self::FILE_INDEX_PATH);
+
+        if (! is_string($contents) || $contents === '') {
+            return [];
+        }
+
+        try {
+            $raw = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
+        } catch (JsonException) {
+            return [];
+        }
 
         if (! is_array($raw) || ($raw['directory'] ?? null) !== $directory || ! is_array($raw['entries'] ?? null)) {
             return [];
@@ -810,10 +823,11 @@ class ImportWatchService
                 continue;
             }
 
-            $status = ($entry['status'] ?? null) === 'failed' ? 'failed' : 'processed';
-            $mtime = is_numeric($entry['mtime'] ?? null) ? (int) $entry['mtime'] : 0;
-            $size = is_numeric($entry['size'] ?? null) ? (int) $entry['size'] : 0;
-            $sha256 = is_string($entry['sha256'] ?? null) ? $entry['sha256'] : '';
+            $status = match ($entry['status'] ?? null) {
+                'failed' => 'failed',
+                'pending' => 'pending',
+                default => 'processed',
+            };
             $externalId = is_string($entry['external_id'] ?? null) && $entry['external_id'] !== ''
                 ? $entry['external_id']
                 : null;
@@ -823,9 +837,9 @@ class ImportWatchService
 
             $entries[$path] = [
                 'status' => $status,
-                'mtime' => $mtime,
-                'size' => $size,
-                'sha256' => $sha256,
+                'mtime' => is_numeric($entry['mtime'] ?? null) ? (int) $entry['mtime'] : 0,
+                'size' => is_numeric($entry['size'] ?? null) ? (int) $entry['size'] : 0,
+                'sha256' => is_string($entry['sha256'] ?? null) ? $entry['sha256'] : '',
                 'external_id' => $externalId,
                 'error' => $error,
             ];
@@ -835,20 +849,16 @@ class ImportWatchService
     }
 
     /**
-     * Persist the bounded per-file fingerprint index for a watch directory.
+     * Persist the per-file fingerprint index (only files still present in the watch directory are kept).
      *
      * @param  array<string, FileIndexEntry>  $entries
      */
     private function persistFileIndex(string $directory, array $entries): void
     {
-        if (count($entries) > self::MAX_INDEXED_FILES) {
-            $entries = array_slice($entries, -self::MAX_INDEXED_FILES, null, true);
-        }
-
-        $this->settings->set(self::FILE_INDEX_SETTING_KEY, [
+        Storage::disk('local')->put(self::FILE_INDEX_PATH, json_encode([
             'directory' => $directory,
-            'entries' => $entries,
-        ]);
+            'entries' => (object) $entries,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE));
     }
 
     private function relativePath(string $baseDir, string $filePath): string

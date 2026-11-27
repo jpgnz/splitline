@@ -147,7 +147,7 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 | `NOMINATIM_RETRY_FAILED_DAYS`       | `7`                                   | Days before a route or activity whose lookup found no usable place name is retried.                                                                                     |
 | `IMPORT_WATCH_DIR`                  | _(empty)_                             | Optional drop folder watched every 5 minutes for `.fit` and `.zip` files (e.g., `/data/imports` synced via Syncthing, HealthFit, RunGap, or NFS).                       |
 | `IMPORT_WATCH_MODE`                 | `keep`                                | Drop-folder file handling: `keep` (read-only safe, deduplicates via inner-FIT SHA-256) or `archive` (moves processed files to `processed/` and failures to `failed/`).  |
-| `IMPORT_WATCH_MIN_FILE_AGE_SECONDS` | `5`                                   | Minimum file modification age in seconds before ingesting, preventing partial reads while files are mid-transfer.                                                       |
+| `IMPORT_WATCH_MIN_FILE_AGE_SECONDS` | `5`                                   | Minimum file modification age in seconds before ingesting. Files are also only imported once their size and mtime are unchanged since the previous scan; symlinks are ignored. |
 
 ## Development
 

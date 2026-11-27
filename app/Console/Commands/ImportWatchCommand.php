@@ -15,7 +15,7 @@ class ImportWatchCommand extends Command
     protected $signature = 'import:watch
         {--dir= : Override IMPORT_WATCH_DIR}
         {--mode= : Override IMPORT_WATCH_MODE (keep|archive)}
-        {--no-age-check : Ignore minimum file age stability check}';
+        {--no-age-check : Skip file stability checks (minimum age and unchanged since the previous scan)}';
 
     /**
      * The console command description.
@@ -47,12 +47,13 @@ class ImportWatchCommand extends Command
             $modeOverride = $normalizedMode;
         }
 
-        $minAgeOverride = (bool) $this->option('no-age-check') ? 0 : null;
+        $skipStabilityChecks = (bool) $this->option('no-age-check');
 
         $result = $watcher->scan(
             directoryOverride: $dirOverride,
             modeOverride: $modeOverride,
-            minFileAgeSeconds: $minAgeOverride,
+            minFileAgeSeconds: $skipStabilityChecks ? 0 : null,
+            requireStableAcrossScans: ! $skipStabilityChecks,
         );
 
         if (! $result['configured']) {
@@ -65,6 +66,12 @@ class ImportWatchCommand extends Command
             $this->components->error($result['last_error'] ?? "Import watch directory is not accessible: {$result['directory']}");
 
             return self::FAILURE;
+        }
+
+        if ($result['busy']) {
+            $this->components->warn('Another import watch scan is already running. Skipping this run.');
+
+            return self::SUCCESS;
         }
 
         foreach ($result['entries'] as $entry) {

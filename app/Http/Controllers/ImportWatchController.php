@@ -23,7 +23,11 @@ class ImportWatchController extends Controller
             return back()->with('status', "Import watch folder is not readable: {$directory}");
         }
 
-        $result = $watcher->scan(minFileAgeSeconds: 0);
+        $result = $watcher->scan();
+
+        if ($result['busy']) {
+            return back()->with('status', 'An import folder scan is already running. Try again in a moment.');
+        }
 
         $message = sprintf(
             'Scanned import folder: %d imported, %d skipped, %d failed.',
@@ -31,6 +35,14 @@ class ImportWatchController extends Controller
             $result['skipped'],
             $result['failed'],
         );
+
+        if ($result['deferred_recent'] > 0) {
+            $message .= sprintf(
+                ' %d %s still settling and will be imported on the next scan.',
+                $result['deferred_recent'],
+                $result['deferred_recent'] === 1 ? 'file is' : 'files are',
+            );
+        }
 
         return back()->with('status', $message);
     }
