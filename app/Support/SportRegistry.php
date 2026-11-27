@@ -72,6 +72,13 @@ class SportRegistry
 
     private const array DEFAULT_ORDER = ['running', 'cycling', 'hiking', 'walking', 'swimming', 'cardio'];
 
+    /**
+     * Generic sport keys ignored during dominant-discipline resolution whenever specific disciplines exist.
+     *
+     * @var list<string>
+     */
+    private const array GENERIC_SPORT_KEYS = ['cycling', 'other'];
+
     /** @var ResolvedSportsConfig|null */
     private ?array $resolvedConfig = null;
 
@@ -584,26 +591,36 @@ class SportRegistry
      */
     public function resolveActivitySportKey(Activity $activity): string
     {
-        $discipline = $activity->effectiveDiscipline();
+        return $this->resolveSportKey(
+            $activity->sport_category,
+            $activity->effectiveDiscipline(),
+            (bool) $activity->is_indoor,
+        );
+    }
 
-        if ($activity->sport_category === 'running') {
-            if ($activity->is_indoor) {
+    /**
+     * Resolve the canonical sport key from raw activity sport attributes.
+     */
+    public function resolveSportKey(string $sportCategory, ?string $effectiveDiscipline, bool $isIndoor = false): string
+    {
+        if ($sportCategory === 'running') {
+            if ($isIndoor) {
                 return 'treadmill_running';
             }
 
-            return match ($discipline) {
+            return match ($effectiveDiscipline) {
                 'trail' => 'trail_running',
                 'track' => 'track_running',
                 default => 'road_running',
             };
         }
 
-        if ($activity->sport_category === 'biking') {
-            if ($activity->is_indoor && $this->resolvedConfig()['rollups']['indoor_cycling'] === 'own') {
+        if ($sportCategory === 'biking') {
+            if ($isIndoor && $this->resolvedConfig()['rollups']['indoor_cycling'] === 'own') {
                 return 'indoor_cycling';
             }
 
-            return match ($discipline) {
+            return match ($effectiveDiscipline) {
                 'road' => 'road_cycling',
                 'gravel' => 'gravel_cycling',
                 'mtb' => 'mtb_cycling',
@@ -613,10 +630,144 @@ class SportRegistry
             };
         }
 
-        return match ($activity->sport_category) {
-            'hiking', 'walking', 'swimming', 'cardio' => $activity->sport_category,
+        return match ($sportCategory) {
+            'hiking', 'walking', 'swimming', 'cardio' => $sportCategory,
             default => 'other',
         };
+    }
+
+    /**
+     * Determine whether a resolved canonical sport key matches a filter scope key, respecting rollups and parents.
+     */
+    public function sportKeyMatchesScope(string $sportKey, string $scopeKey): bool
+    {
+        $key = $this->normalizeKey($sportKey);
+        $scope = $this->normalizeKey($scopeKey);
+
+        if ($scope === 'all' || $key === $scope) {
+            return true;
+        }
+
+        $rollups = $this->resolvedConfig()['rollups'];
+
+        return match ($scope) {
+            'running' => in_array($key, ['running', 'road_running', 'trail_running', 'track_running', 'treadmill_running', 'other_running'], true),
+            'road_running' => $key === 'running'
+                || ($rollups['track_running'] === 'road_running' && $key === 'track_running')
+                || ($rollups['trail_running'] === 'running' && $key === 'trail_running'),
+            'cycling' => in_array($key, ['cycling', 'road_cycling', 'gravel_cycling', 'mtb_cycling', 'indoor_cycling', 'commute_cycling', 'other_cycling'], true)
+                || ($key === 'ebike_cycling' && $rollups['ebike_cycling'] !== 'exclude'),
+            'road_cycling' => ($rollups['gravel_cycling'] === 'road_cycling' && $key === 'gravel_cycling')
+                || ($rollups['indoor_cycling'] === 'road_cycling' && $key === 'indoor_cycling'),
+            'mtb_cycling' => ($rollups['gravel_cycling'] === 'mtb_cycling' && $key === 'gravel_cycling')
+                || ($rollups['ebike_cycling'] === 'mtb_cycling' && $key === 'ebike_cycling'),
+            default => false,
+        };
+    }
+
+    /**
+     * Pick the canonical sport key for a multi-activity entity (Segment, Matched Route, etc.)
+     * from its activities' resolved sport-key counts.
+     *
+     * Prefers specific disciplines over generic fallbacks (`cycling`, `other`) whenever specific
+     * disciplines exist; breaks ties with `$fallbackSportKey`, then most recent activity, then key.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $sportCounts
+     */
+    public function resolveDominantSportKey(
+        array $sportCounts,
+        ?string $fallbackSportKey,
+        string $sportCategory,
+    ): string {
+        if ($sportCounts === []) {
+            return $fallbackSportKey ?? $this->normalizeKey($sportCategory);
+        }
+
+        $specificCounts = [];
+
+        foreach ($sportCounts as $key => $stats) {
+            if (! in_array($key, self::GENERIC_SPORT_KEYS, true)) {
+                $specificCounts[$key] = $stats;
+            }
+        }
+
+        $pool = $specificCounts !== [] ? $specificCounts : $sportCounts;
+        $maxCount = 0;
+
+        foreach ($pool as $stats) {
+            if ($stats['count'] > $maxCount) {
+                $maxCount = $stats['count'];
+            }
+        }
+
+        /** @var list<string> $topKeys */
+        $topKeys = [];
+
+        foreach ($pool as $key => $stats) {
+            if ($stats['count'] === $maxCount) {
+                $topKeys[] = $key;
+            }
+        }
+
+        if (count($topKeys) === 1) {
+            return $topKeys[0];
+        }
+
+        if ($fallbackSportKey !== null && in_array($fallbackSportKey, $topKeys, true)) {
+            return $fallbackSportKey;
+        }
+
+        usort($topKeys, static function (string $a, string $b) use ($pool): int {
+            $latestCmp = $pool[$b]['latest_at'] <=> $pool[$a]['latest_at'];
+
+            if ($latestCmp !== 0) {
+                return $latestCmp;
+            }
+
+            return $a <=> $b;
+        });
+
+        return $topKeys[0];
+    }
+
+    /**
+     * Build ordered sport/discipline filter pills with counts for a multi-activity detail page.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $sportCounts
+     * @return list<array{key: string, label: string, short_label: string, accent_hex: string, count: int}>
+     */
+    public function buildSportFilterOptions(array $sportCounts): array
+    {
+        if ($sportCounts === []) {
+            return [];
+        }
+
+        $keys = array_keys($sportCounts);
+
+        usort($keys, static function (string $a, string $b) use ($sportCounts): int {
+            $countCmp = $sportCounts[$b]['count'] <=> $sportCounts[$a]['count'];
+
+            if ($countCmp !== 0) {
+                return $countCmp;
+            }
+
+            return $a <=> $b;
+        });
+
+        $result = [];
+
+        foreach ($keys as $sportKey) {
+            $entry = $this->get($sportKey);
+            $result[] = [
+                'key' => $entry['key'] ?? $sportKey,
+                'label' => $entry['label'] ?? ucfirst(str_replace('_', ' ', $sportKey)),
+                'short_label' => $entry['short_label'] ?? ucfirst(str_replace('_', ' ', $sportKey)),
+                'accent_hex' => $entry['accent_hex'] ?? '#f59e0b',
+                'count' => $sportCounts[$sportKey]['count'],
+            ];
+        }
+
+        return $result;
     }
 
     /**

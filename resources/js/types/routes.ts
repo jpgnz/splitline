@@ -5,6 +5,10 @@ export interface RouteAvailableSport {
     accent_hex: string;
 }
 
+export interface RouteSportFilterOption extends RouteAvailableSport {
+    count: number;
+}
+
 export interface RouteAttemptWeather {
     condition: string;
     icon: string;
@@ -22,6 +26,7 @@ export interface RouteAttemptWeather {
 export interface RouteAttemptItem {
     activity_id: number;
     name: string;
+    sport_key: string;
     date: string;
     started_at_local: string;
     distance_meters: number;
@@ -164,6 +169,8 @@ export interface MatchedRouteShowProps {
     route: MatchedRouteDetail;
     polyline: [number, number][];
     summary: MatchedRouteDetailSummary;
+    available_sports: RouteSportFilterOption[];
+    selected_sport: string | null;
     progression: RouteAttemptItem[];
     attempts: RouteAttemptItem[];
     weather_impact: RouteWeatherImpact | null;

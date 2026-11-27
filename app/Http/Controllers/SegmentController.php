@@ -34,10 +34,12 @@ class SegmentController extends Controller
     {
         $rawYear = $request->query('year');
         $year = is_string($rawYear) && ctype_digit($rawYear) ? (int) $rawYear : null;
+        $rawSport = $request->query('sport');
+        $sport = is_string($rawSport) && trim($rawSport) !== '' ? trim($rawSport) : null;
 
         return Inertia::render(
             'Segments/Show',
-            $service->show($segment, $year),
+            $service->show($segment, $year, $sport),
         );
     }
 
