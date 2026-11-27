@@ -17,6 +17,7 @@ use App\Support\HealthSourceRegistry;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
 use Carbon\CarbonInterface;
+use Illuminate\Database\Eloquent\Collection as EloquentCollection;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
@@ -326,8 +327,9 @@ class AnnualRecapService
             ? $resolvedToday->format('Y-m-d')
             : sprintf('%04d-12-31', $selectedYear);
 
+        // Local wall-clock bounds: inclusive start, exclusive end (start of the following day).
         $yearStart = $yearStartDate.' 00:00:00';
-        $yearEnd = $yearEndDate.' 23:59:59';
+        $yearEnd = $this->nextDayStart($yearEndDate);
 
         $previousYear = $selectedYear - 1;
         $prevStart = sprintf('%04d-01-01 00:00:00', $previousYear);
@@ -336,10 +338,10 @@ class AnnualRecapService
             $daysInPrevMonth = CarbonImmutable::create($previousYear, $resolvedToday->month, 1)->daysInMonth;
             $prevCutoffDay = min($resolvedToday->day, $daysInPrevMonth);
             $prevEndDate = sprintf('%04d-%02d-%02d', $previousYear, $resolvedToday->month, $prevCutoffDay);
-            $prevEnd = $prevEndDate.' 23:59:59';
+            $prevEnd = $this->nextDayStart($prevEndDate);
             $ytdCutoffDate = $resolvedToday->format('Y-m-d');
         } else {
-            $prevEnd = sprintf('%04d-12-31 23:59:59', $previousYear);
+            $prevEnd = sprintf('%04d-01-01 00:00:00', $selectedYear);
             $ytdCutoffDate = null;
         }
 
@@ -359,7 +361,8 @@ class AnnualRecapService
                 'tss',
                 'training_load',
             ])
-            ->whereBetween('started_at_local', [$yearStart, $yearEnd])
+            ->where('started_at_local', '>=', $yearStart)
+            ->where('started_at_local', '<', $yearEnd)
             ->orderBy('started_at_local')
             ->orderBy('id')
             ->get();
@@ -513,7 +516,7 @@ class AnnualRecapService
         sort($activeDates);
 
         $peaks = [
-            'biggest_week' => $this->pickBiggestWeek($weekBuckets),
+            'biggest_week' => $this->pickBiggestWeek($weekBuckets, $selectedYear),
             'biggest_month' => $this->pickBiggestMonth($monthlyList),
             'longest_activity' => $longestActivity,
             'longest_duration_activity' => $longestDurationActivity,
@@ -542,16 +545,42 @@ class AnnualRecapService
             'weather' => $this->buildWeatherExtremes($yearStart, $yearEnd),
             'health' => $this->buildHealthHighlights($yearStartDate, $yearEndDate),
             'monthly' => $monthlyList,
-            'annual_summary' => $annualSummary,
+            'annual_summary' => $this->scopeAnnualSummaryToYear($annualSummary, $selectedYear),
         ];
     }
 
     /**
+     * Keep only the selected year's daily entries; the recap heatmap never renders other years.
+     *
+     * @param  AnnualActivitySummaryPayload  $annualSummary
+     * @return AnnualActivitySummaryPayload
+     */
+    private function scopeAnnualSummaryToYear(array $annualSummary, int $selectedYear): array
+    {
+        $yearPrefix = sprintf('%04d-', $selectedYear);
+
+        $annualSummary['daily'] = array_values(array_filter(
+            $annualSummary['daily'],
+            static fn (array $entry): bool => str_starts_with($entry['date'], $yearPrefix),
+        ));
+
+        return $annualSummary;
+    }
+
+    private function nextDayStart(string $date): string
+    {
+        return CarbonImmutable::parse($date, 'UTC')->addDay()->format('Y-m-d').' 00:00:00';
+    }
+
+    /**
+     * Use the requested year when it lies within [1970, current year]; otherwise fall back to the
+     * most recent year with activities (available years are ordered newest first).
+     *
      * @param  list<int>  $availableYears
      */
     private function resolveYear(?int $requestedYear, array $availableYears, int $currentYear): int
     {
-        if ($requestedYear !== null && $requestedYear >= 1970 && $requestedYear <= 2100) {
+        if ($requestedYear !== null && $requestedYear >= 1970 && $requestedYear <= $currentYear) {
             return $requestedYear;
         }
 
@@ -565,7 +594,7 @@ class AnnualRecapService
     /**
      * @return array{activities: int, distance_meters: float, duration_seconds: float, elevation_gain: float}
      */
-    private function aggregatePeriodTotals(string $start, string $end): array
+    private function aggregatePeriodTotals(string $start, string $endExclusive): array
     {
         $row = Activity::query()
             ->toBase()
@@ -573,7 +602,8 @@ class AnnualRecapService
             ->selectRaw('COALESCE(SUM(distance_meters), 0) as distance_meters')
             ->selectRaw('COALESCE(SUM(duration_seconds), 0) as duration_seconds')
             ->selectRaw('COALESCE(SUM(COALESCE(elevation_gain, 0)), 0) as elevation_gain')
-            ->whereBetween('started_at_local', [$start, $end])
+            ->where('started_at_local', '>=', $start)
+            ->where('started_at_local', '<', $endExclusive)
             ->first();
 
         return [
@@ -746,7 +776,7 @@ class AnnualRecapService
      * @param  array<string, array{week_start: string, week_end: string, distance_meters: float, duration_seconds: float, elevation_gain: float, count: int}>  $weekBuckets
      * @return ?RecapBiggestWeek
      */
-    private function pickBiggestWeek(array $weekBuckets): ?array
+    private function pickBiggestWeek(array $weekBuckets, int $selectedYear): ?array
     {
         if ($weekBuckets === []) {
             return null;
@@ -777,12 +807,16 @@ class AnnualRecapService
         });
 
         $best = $weeks[0];
-        $startCarbon = CarbonImmutable::createFromFormat('Y-m-d', $best['week_start']) ?: CarbonImmutable::parse($best['week_start']);
-        $endCarbon = CarbonImmutable::createFromFormat('Y-m-d', $best['week_end']) ?: CarbonImmutable::parse($best['week_end']);
+
+        // ISO weeks can straddle New Year; clamp to the selected year since only its activities are counted.
+        $weekStart = max($best['week_start'], sprintf('%04d-01-01', $selectedYear));
+        $weekEnd = min($best['week_end'], sprintf('%04d-12-31', $selectedYear));
+        $startCarbon = CarbonImmutable::parse($weekStart, 'UTC');
+        $endCarbon = CarbonImmutable::parse($weekEnd, 'UTC');
 
         return [
-            'week_start' => $best['week_start'],
-            'week_end' => $best['week_end'],
+            'week_start' => $weekStart,
+            'week_end' => $weekEnd,
             'label' => $startCarbon->format('j M').' – '.$endCarbon->format('j M'),
             'distance_meters' => round($best['distance_meters'], 1),
             'duration_seconds' => round($best['duration_seconds'], 1),
@@ -1059,6 +1093,9 @@ class AnnualRecapService
     }
 
     /**
+     * Pick the fastest effort per (sport, distance) within the year and flag it as an all-time PR when it
+     * beat every effort achieved before it ("PR at the time"), so later improvements never rewrite history.
+     *
      * @return array{0: list<RecapBestEffortItem>, 1: int}
      */
     private function buildBestEfforts(string $yearStart, string $yearEnd): array
@@ -1066,32 +1103,39 @@ class AnnualRecapService
         $yearEfforts = BestEffort::query()
             ->with(['activity:id,name,sport_category,sport_discipline,discipline_override,started_at_local'])
             ->where('is_excluded', false)
-            ->whereBetween('achieved_at', [$yearStart, $yearEnd])
+            ->where('achieved_at', '>=', $yearStart)
+            ->where('achieved_at', '<', $yearEnd)
+            ->orderBy('achieved_at')
+            ->orderBy('id')
             ->get();
 
         if ($yearEfforts->isEmpty()) {
             return [[], 0];
         }
 
-        // Compute all-time fastest effective_seconds per (sport, distance_key) across all non-excluded efforts.
-        $allTimeRows = BestEffort::query()
+        // Fastest effective_seconds per (sport, distance_key) achieved before the selected year.
+        $priorRows = BestEffort::query()
             ->toBase()
             ->selectRaw('sport, distance_key, MIN(COALESCE(override_seconds, elapsed_seconds)) as min_seconds')
             ->where('is_excluded', false)
+            ->where('achieved_at', '<', $yearStart)
+            ->whereRaw('COALESCE(override_seconds, elapsed_seconds) > 0')
             ->groupBy('sport', 'distance_key')
             ->get();
 
-        /** @var array<string, float> $allTimeMinByPair */
-        $allTimeMinByPair = [];
+        /** @var array<string, float> $priorMinByPair */
+        $priorMinByPair = [];
 
-        foreach ($allTimeRows as $row) {
+        foreach ($priorRows as $row) {
             if (! is_string($row->sport) || ! is_string($row->distance_key) || ! is_numeric($row->min_seconds)) {
                 continue;
             }
 
-            $allTimeMinByPair[$row->sport.'|'.$row->distance_key] = (float) $row->min_seconds;
+            $priorMinByPair[$row->sport.'|'.$row->distance_key] = (float) $row->min_seconds;
         }
 
+        // Efforts are chronological and ties keep the earliest, so every earlier in-year effort of the
+        // same pair is strictly slower than the year's fastest one.
         /** @var array<string, BestEffort> $fastestInYearByPair */
         $fastestInYearByPair = [];
 
@@ -1116,8 +1160,8 @@ class AnnualRecapService
 
         foreach ($fastestInYearByPair as $pairKey => $effort) {
             $seconds = $effort->effectiveSeconds();
-            $allTimeMin = $allTimeMinByPair[$pairKey] ?? null;
-            $isAllTimePr = $allTimeMin !== null && $seconds <= $allTimeMin + 0.05;
+            $priorMin = $priorMinByPair[$pairKey] ?? null;
+            $isAllTimePr = $priorMin === null || $seconds < $priorMin;
 
             if ($isAllTimePr) {
                 $allTimePrsCount++;
@@ -1175,7 +1219,8 @@ class AnnualRecapService
             ->where('activity_route_fingerprints.is_unlinked', false)
             ->whereNotNull('activity_route_fingerprints.route_cluster_id')
             ->where('route_clusters.activity_count', '>=', 2)
-            ->whereBetween('activities.started_at_local', [$yearStart, $yearEnd])
+            ->where('activities.started_at_local', '>=', $yearStart)
+            ->where('activities.started_at_local', '<', $yearEnd)
             ->groupBy('activity_route_fingerprints.route_cluster_id')
             ->orderByDesc('visits_in_year')
             ->get();
@@ -1252,30 +1297,80 @@ class AnnualRecapService
     }
 
     /**
+     * Count segments PR'd during the year using "PR at the time" semantics: an effort is a PR when it beat
+     * every earlier effort on that segment. The stored `is_pr` flag only marks the current all-time best,
+     * so it would erase PRs from past years once they were beaten.
+     *
      * @return array{0: int, 1: int, 2: list<RecapSegmentPrItem>}
      */
     private function buildSegmentMilestones(string $yearStart, string $yearEnd): array
     {
-        $totalEfforts = SegmentEffort::query()
-            ->whereBetween('started_at_local', [$yearStart, $yearEnd])
-            ->count();
+        $yearEffortsQuery = SegmentEffort::query()
+            ->where('started_at_local', '>=', $yearStart)
+            ->where('started_at_local', '<', $yearEnd);
 
-        $prQuery = SegmentEffort::query()
-            ->where('is_pr', true)
-            ->whereBetween('started_at_local', [$yearStart, $yearEnd]);
+        $yearEfforts = (clone $yearEffortsQuery)
+            ->select(['id', 'segment_id', 'activity_id', 'started_at_local', 'elapsed_seconds', 'distance_meters', 'elevation_gain'])
+            ->orderBy('started_at_local')
+            ->orderBy('id')
+            ->get();
 
-        $prCount = (clone $prQuery)->count();
+        $totalEfforts = $yearEfforts->count();
+
+        if ($totalEfforts === 0) {
+            return [0, 0, []];
+        }
+
+        /** @var array<int, float> $bestSecondsBySegment */
+        $bestSecondsBySegment = SegmentEffort::query()
+            ->toBase()
+            ->selectRaw('segment_id, MIN(elapsed_seconds) as best_seconds')
+            ->where('started_at_local', '<', $yearStart)
+            ->where('elapsed_seconds', '>', 0)
+            ->whereIn('segment_id', (clone $yearEffortsQuery)->select('segment_id'))
+            ->groupBy('segment_id')
+            ->pluck('best_seconds', 'segment_id')
+            ->map(static fn (mixed $seconds): float => (float) $seconds)
+            ->all();
+
+        /** @var array<int, SegmentEffort> $latestPrBySegment */
+        $latestPrBySegment = [];
+
+        foreach ($yearEfforts as $effort) {
+            $seconds = (float) $effort->elapsed_seconds;
+
+            if ($seconds <= 0.0) {
+                continue;
+            }
+
+            $priorBest = $bestSecondsBySegment[$effort->segment_id] ?? null;
+
+            if ($priorBest === null || $seconds < $priorBest) {
+                $latestPrBySegment[$effort->segment_id] = $effort;
+                $bestSecondsBySegment[$effort->segment_id] = $seconds;
+            }
+        }
+
+        $prCount = count($latestPrBySegment);
 
         if ($prCount === 0) {
             return [0, $totalEfforts, []];
         }
 
-        $topPrEfforts = (clone $prQuery)
-            ->with(['segment:id,name,name_override,climb_category', 'activity:id,name'])
-            ->orderByDesc('elevation_gain')
-            ->orderByDesc('distance_meters')
-            ->limit(5)
-            ->get();
+        $prEfforts = array_values($latestPrBySegment);
+
+        usort($prEfforts, static function (SegmentEffort $a, SegmentEffort $b): int {
+            $gainCmp = ($b->elevation_gain ?? -INF) <=> ($a->elevation_gain ?? -INF);
+
+            if ($gainCmp !== 0) {
+                return $gainCmp;
+            }
+
+            return $b->distance_meters <=> $a->distance_meters;
+        });
+
+        $topPrEfforts = (new EloquentCollection(array_slice($prEfforts, 0, 5)))
+            ->load(['segment:id,name,name_override,climb_category', 'activity:id,name']);
 
         $items = [];
 
@@ -1324,7 +1419,8 @@ class AnnualRecapService
                 'activities.sport_category',
                 'activities.started_at_local',
             ])
-            ->whereBetween('activities.started_at_local', [$yearStart, $yearEnd])
+            ->where('activities.started_at_local', '>=', $yearStart)
+            ->where('activities.started_at_local', '<', $yearEnd)
             ->orderBy('activities.started_at_local')
             ->get();
 
