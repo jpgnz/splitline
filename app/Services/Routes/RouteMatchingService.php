@@ -8,6 +8,7 @@ use App\Models\ActivityStream;
 use App\Models\RouteCluster;
 use App\Services\Heatmap\HeatmapService;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 use Illuminate\Support\Facades\DB;
 
@@ -19,6 +20,23 @@ use Illuminate\Support\Facades\DB;
  *     matched: int,
  *     clusters_created: int,
  *     matched_routes: int
+ * }
+ * @phpstan-type FingerprintData array{
+ *     start_lat: float,
+ *     start_lng: float,
+ *     end_lat: float,
+ *     end_lng: float,
+ *     bbox_min_lat: float,
+ *     bbox_max_lat: float,
+ *     bbox_min_lng: float,
+ *     bbox_max_lng: float,
+ *     distance_meters: float,
+ *     start_to_end_meters: float,
+ *     is_loop: bool,
+ *     waypoints: list<array{0: float, 1: float}>,
+ *     encoded_preview_polyline: string,
+ *     is_unlinked: bool,
+ *     computed_at: CarbonImmutable
  * }
  */
 class RouteMatchingService
@@ -42,6 +60,30 @@ class RouteMatchingService
     public const float MAX_RELATIVE_DISTANCE_DIFF = 0.12;
 
     private const float EARTH_RADIUS_METERS = 6371000.0;
+
+    /**
+     * Stream columns required for fingerprinting (avoids hydrating large per-second `series` payloads).
+     *
+     * @var list<string>
+     */
+    private const array STREAM_COLUMNS = ['id', 'activity_id', 'polyline'];
+
+    /**
+     * Activity columns required for matching and cluster aggregation.
+     *
+     * @var list<string>
+     */
+    private const array ACTIVITY_COLUMNS = [
+        'id',
+        'name',
+        'sport_category',
+        'is_indoor',
+        'location_name',
+        'distance_meters',
+        'elevation_gain',
+        'started_at_local',
+        'route_match_skipped_at',
+    ];
 
     /**
      * Generic auto-generated provider titles to deprioritize when deriving a cluster's auto-name.
@@ -79,7 +121,17 @@ class RouteMatchingService
     ];
 
     /**
+     * Cluster IDs whose aggregates are awaiting a batched refresh, or null when refreshes run immediately.
+     *
+     * @var array<int, true>|null
+     */
+    private ?array $deferredClusterIds = null;
+
+    /**
      * Compute or update an activity's route fingerprint and match it into an existing or new RouteCluster.
+     *
+     * Activities whose polyline cannot be fingerprinted are flagged with `route_match_skipped_at`
+     * so background scans stop revisiting them until their stream changes.
      */
     public function matchActivity(
         Activity $activity,
@@ -98,120 +150,22 @@ class RouteMatchingService
             return $existing;
         }
 
-        $resolvedStream = $stream ?? $activity->stream()->first();
+        $resolvedStream = $stream ?? $activity->stream()->select(self::STREAM_COLUMNS)->first();
 
         if ($resolvedStream === null) {
             return null;
         }
 
-        $points = $this->normalizePolyline($resolvedStream->polyline);
+        $fingerprintData = $this->buildFingerprintData($activity, $resolvedStream->polyline);
 
-        if (count($points) < self::MIN_POLYLINE_POINTS) {
+        if ($fingerprintData === null) {
+            $this->markIneligible($activity, $existing);
+
             return null;
         }
 
-        $cumulativeDistances = $this->computeCumulativeDistances($points);
-        $totalPolyDistance = $cumulativeDistances[count($cumulativeDistances) - 1];
-
-        if ($totalPolyDistance <= 0.0) {
-            return null;
-        }
-
-        $waypoints = $this->resampleWaypoints($points, $cumulativeDistances, self::WAYPOINT_COUNT);
-        $previewPoints = $this->simplifyForPreview($points, self::PREVIEW_MAX_POINTS);
-        $encodedPreview = HeatmapService::encodePolyline($previewPoints);
-
-        $start = $points[0];
-        $end = $points[count($points) - 1];
-        $startToEndMeters = round(self::haversineMeters($start[0], $start[1], $end[0], $end[1]), 1);
-        $isLoop = $startToEndMeters <= self::LOOP_THRESHOLD_METERS;
-        [$bboxMinLat, $bboxMaxLat, $bboxMinLng, $bboxMaxLng] = $this->computeBoundingBox($points);
-
-        $fingerprintData = [
-            'start_lat' => $start[0],
-            'start_lng' => $start[1],
-            'end_lat' => $end[0],
-            'end_lng' => $end[1],
-            'bbox_min_lat' => $bboxMinLat,
-            'bbox_max_lat' => $bboxMaxLat,
-            'bbox_min_lng' => $bboxMinLng,
-            'bbox_max_lng' => $bboxMaxLng,
-            'distance_meters' => round($activity->distance_meters, 1),
-            'start_to_end_meters' => $startToEndMeters,
-            'is_loop' => $isLoop,
-            'waypoints' => $waypoints,
-            'encoded_preview_polyline' => $encodedPreview,
-            'is_unlinked' => false,
-            'computed_at' => CarbonImmutable::now('UTC'),
-        ];
-
-        if ($existing !== null && $existing->route_cluster_id !== null && ! $forceRecompute) {
-            $existing->update($fingerprintData);
-            $cluster = RouteCluster::query()->find($existing->route_cluster_id);
-
-            if ($cluster !== null) {
-                $this->refreshCluster($cluster);
-
-                return $existing->fresh() ?? $existing;
-            }
-        }
-
-        $bestCluster = $this->findBestMatchingCluster(
-            sportCategory: $activity->sport_category,
-            distanceMeters: $activity->distance_meters,
-            startLat: $start[0],
-            startLng: $start[1],
-            endLat: $end[0],
-            endLng: $end[1],
-            bboxMinLat: $bboxMinLat,
-            bboxMaxLat: $bboxMaxLat,
-            bboxMinLng: $bboxMinLng,
-            bboxMaxLng: $bboxMaxLng,
-            waypoints: $waypoints,
-        );
-
-        if ($bestCluster !== null) {
-            $fingerprint = ActivityRouteFingerprint::query()->updateOrCreate(
-                ['activity_id' => $activity->id],
-                [
-                    ...$fingerprintData,
-                    'route_cluster_id' => $bestCluster->id,
-                ],
-            );
-
-            $this->refreshCluster($bestCluster);
-
-            return $fingerprint;
-        }
-
-        $cluster = RouteCluster::query()->create([
-            'name' => $this->deriveClusterName([$activity], $isLoop, $activity->distance_meters),
-            'name_override' => null,
-            'sport_category' => $activity->sport_category,
-            'representative_activity_id' => $activity->id,
-            'is_loop' => $isLoop,
-            'distance_meters' => round($activity->distance_meters, 1),
-            'elevation_gain' => $activity->elevation_gain !== null ? round($activity->elevation_gain, 1) : null,
-            'start_lat' => $start[0],
-            'start_lng' => $start[1],
-            'end_lat' => $end[0],
-            'end_lng' => $end[1],
-            'bbox_min_lat' => $bboxMinLat,
-            'bbox_max_lat' => $bboxMaxLat,
-            'bbox_min_lng' => $bboxMinLng,
-            'bbox_max_lng' => $bboxMaxLng,
-            'waypoints' => $waypoints,
-            'encoded_polyline' => $encodedPreview,
-            'activity_count' => 1,
-            'last_activity_at' => $activity->started_at_local,
-        ]);
-
-        return ActivityRouteFingerprint::query()->updateOrCreate(
-            ['activity_id' => $activity->id],
-            [
-                ...$fingerprintData,
-                'route_cluster_id' => $cluster->id,
-            ],
+        return DB::transaction(
+            fn (): ActivityRouteFingerprint => $this->assignFingerprint($activity, $existing, $fingerprintData, $forceRecompute),
         );
     }
 
@@ -222,7 +176,7 @@ class RouteMatchingService
     public function refreshCluster(RouteCluster $cluster): ?RouteCluster
     {
         $fingerprints = ActivityRouteFingerprint::query()
-            ->with('activity')
+            ->with('activity:'.implode(',', self::ACTIVITY_COLUMNS))
             ->where('route_cluster_id', $cluster->id)
             ->where('is_unlinked', false)
             ->get()
@@ -262,8 +216,8 @@ class RouteMatchingService
             }
         }
 
-        $medianDistance = $this->median($distances);
-        $medianElevation = $elevations !== [] ? $this->median($elevations) : null;
+        $medianDistance = self::median($distances);
+        $medianElevation = $elevations !== [] ? self::median($elevations) : null;
 
         /** @var ActivityRouteFingerprint $representative */
         $representative = $fingerprints->first();
@@ -328,94 +282,45 @@ class RouteMatchingService
             return false;
         }
 
-        $fingerprint->update([
-            'route_cluster_id' => null,
-            'is_unlinked' => true,
-        ]);
+        DB::transaction(function () use ($fingerprint, $cluster): void {
+            $fingerprint->update([
+                'route_cluster_id' => null,
+                'is_unlinked' => true,
+            ]);
 
-        $this->refreshCluster($cluster);
+            $this->refreshCluster($cluster);
+        });
 
         return true;
     }
 
     /**
-     * Count eligible outdoor streamed activities that have not yet been fingerprinted.
+     * Count eligible outdoor streamed activities still awaiting route matching.
      */
     public function unfingerprintedCount(): int
     {
-        return Activity::query()
-            ->where('is_indoor', false)
-            ->where('distance_meters', '>=', self::MIN_DISTANCE_METERS)
-            ->whereExists(function (QueryBuilder $streamSub): void {
-                $streamSub
-                    ->selectRaw('1')
-                    ->from('activity_streams')
-                    ->whereColumn('activity_streams.activity_id', 'activities.id')
-                    ->whereNotNull('activity_streams.polyline')
-                    ->where('activity_streams.polyline', '!=', '[]')
-                    ->whereRaw('LENGTH(activity_streams.polyline) >= 50');
-            })
-            ->whereNotExists(function (QueryBuilder $fpSub): void {
-                $fpSub
-                    ->selectRaw('1')
-                    ->from('activity_route_fingerprints')
-                    ->whereColumn('activity_route_fingerprints.activity_id', 'activities.id');
-            })
-            ->count();
+        return $this->pendingActivitiesQuery()->count();
     }
 
     /**
-     * Scan and fingerprint all eligible outdoor streamed activities that do not yet have a fingerprint.
+     * Scan and fingerprint all eligible outdoor streamed activities still awaiting route matching,
+     * including activities orphaned by an interrupted rebuild.
      *
      * @return MatchRunSummary
      */
     public function scanUnfingerprinted(int $chunkSize = 100): array
     {
-        $chunkSize = max(1, $chunkSize);
         $clustersBefore = RouteCluster::query()->count();
-        $scanned = 0;
-        $matched = 0;
 
-        $ids = Activity::query()
-            ->where('is_indoor', false)
-            ->where('distance_meters', '>=', self::MIN_DISTANCE_METERS)
-            ->whereExists(function (QueryBuilder $streamSub): void {
-                $streamSub
-                    ->selectRaw('1')
-                    ->from('activity_streams')
-                    ->whereColumn('activity_streams.activity_id', 'activities.id')
-                    ->whereNotNull('activity_streams.polyline')
-                    ->where('activity_streams.polyline', '!=', '[]')
-                    ->whereRaw('LENGTH(activity_streams.polyline) >= 50');
-            })
-            ->whereNotExists(function (QueryBuilder $fpSub): void {
-                $fpSub
-                    ->selectRaw('1')
-                    ->from('activity_route_fingerprints')
-                    ->whereColumn('activity_route_fingerprints.activity_id', 'activities.id');
-            })
+        $ids = $this->pendingActivitiesQuery()
             ->orderBy('started_at_local')
             ->orderBy('id')
             ->pluck('id')
             ->all();
 
-        foreach (array_chunk($ids, $chunkSize) as $idChunk) {
-            $activities = Activity::query()
-                ->with('stream')
-                ->whereIn('id', $idChunk)
-                ->orderBy('started_at_local')
-                ->orderBy('id')
-                ->get();
+        [$scanned, $matched] = $this->matchActivityIds($ids, max(1, $chunkSize), forceRecompute: false);
 
-            foreach ($activities as $activity) {
-                $scanned++;
-                $fingerprint = $this->matchActivity($activity, $activity->stream);
-
-                if ($fingerprint !== null) {
-                    $matched++;
-                }
-            }
-        }
+        $this->restorePreservedOverrides();
 
         $clustersAfter = RouteCluster::query()->count();
 
@@ -431,116 +336,97 @@ class RouteMatchingService
      * Recompute all route fingerprints and rebuild clusters from scratch while preserving
      * user-defined custom route names (`name_override`) and manually unlinked activities (`is_unlinked`).
      *
+     * Custom names are stashed on member fingerprints (`preserved_name_override`) before clusters are
+     * dropped, so a rebuild that fails part-way can be resumed by a later scan or rebuild without losing them.
+     *
      * @return MatchRunSummary
      */
     public function rebuildAll(int $chunkSize = 100): array
     {
-        $chunkSize = max(1, $chunkSize);
-
-        /** @var array<int, string> $preservedOverridesByActivityId */
-        $preservedOverridesByActivityId = [];
-
-        $overriddenClusters = RouteCluster::query()
-            ->whereNotNull('name_override')
-            ->where('name_override', '!=', '')
-            ->with('fingerprints:id,activity_id,route_cluster_id,is_unlinked')
-            ->get();
-
-        foreach ($overriddenClusters as $cluster) {
-            $override = is_string($cluster->name_override) ? trim($cluster->name_override) : '';
-
-            if ($override === '') {
-                continue;
-            }
-
-            if ($cluster->representative_activity_id !== null) {
-                $preservedOverridesByActivityId[$cluster->representative_activity_id] = $override;
-            }
-
-            foreach ($cluster->fingerprints as $fp) {
-                if (! $fp->is_unlinked) {
-                    $preservedOverridesByActivityId[$fp->activity_id] = $override;
-                }
-            }
-        }
-
-        /** @var array<int, true> $unlinkedActivityIds */
-        $unlinkedActivityIds = array_fill_keys(
-            array_map(
-                'intval',
-                ActivityRouteFingerprint::query()
-                    ->where('is_unlinked', true)
-                    ->pluck('activity_id')
-                    ->all(),
-            ),
-            true,
-        );
-
         DB::transaction(function (): void {
-            ActivityRouteFingerprint::query()
-                ->where('is_unlinked', false)
-                ->delete();
+            $overriddenClusters = RouteCluster::query()
+                ->whereNotNull('name_override')
+                ->where('name_override', '!=', '')
+                ->get(['id', 'name_override']);
+
+            foreach ($overriddenClusters as $cluster) {
+                $override = trim((string) $cluster->name_override);
+
+                if ($override === '') {
+                    continue;
+                }
+
+                ActivityRouteFingerprint::query()
+                    ->where('route_cluster_id', $cluster->id)
+                    ->where('is_unlinked', false)
+                    ->update(['preserved_name_override' => $override]);
+            }
 
             ActivityRouteFingerprint::query()
-                ->where('is_unlinked', true)
+                ->whereNotNull('route_cluster_id')
                 ->update(['route_cluster_id' => null]);
 
             RouteCluster::query()->delete();
         });
 
-        $ids = Activity::query()
-            ->where('is_indoor', false)
-            ->where('distance_meters', '>=', self::MIN_DISTANCE_METERS)
-            ->whereExists(function (QueryBuilder $streamSub): void {
-                $streamSub
-                    ->selectRaw('1')
-                    ->from('activity_streams')
-                    ->whereColumn('activity_streams.activity_id', 'activities.id')
-                    ->whereNotNull('activity_streams.polyline');
-            })
+        $ids = $this->eligibleActivitiesQuery()
             ->orderBy('started_at_local')
             ->orderBy('id')
             ->pluck('id')
             ->all();
 
-        $scanned = 0;
-        $matched = 0;
+        /** @var array<int, true> $unlinkedActivityIds */
+        $unlinkedActivityIds = array_fill_keys(
+            ActivityRouteFingerprint::query()->where('is_unlinked', true)->pluck('activity_id')->all(),
+            true,
+        );
 
-        foreach (array_chunk($ids, $chunkSize) as $idChunk) {
-            $activities = Activity::query()
-                ->with('stream')
-                ->whereIn('id', $idChunk)
-                ->orderBy('started_at_local')
-                ->orderBy('id')
-                ->get();
+        $idsToMatch = array_values(array_filter(
+            $ids,
+            static fn (int $id): bool => ! isset($unlinkedActivityIds[$id]),
+        ));
 
-            foreach ($activities as $activity) {
-                $scanned++;
+        [, $matched] = $this->matchActivityIds($idsToMatch, max(1, $chunkSize), forceRecompute: true);
 
-                if (isset($unlinkedActivityIds[$activity->id])) {
-                    continue;
-                }
+        $this->restorePreservedOverrides();
 
-                $fingerprint = $this->matchActivity($activity, $activity->stream, forceRecompute: true);
-
-                if ($fingerprint !== null) {
-                    $matched++;
-                }
-            }
-        }
-
-        if ($preservedOverridesByActivityId !== []) {
-            $this->restorePreservedOverrides($preservedOverridesByActivityId);
-        }
-
-        $totalClusters = RouteCluster::query()->count();
+        ActivityRouteFingerprint::query()
+            ->whereNull('route_cluster_id')
+            ->where('is_unlinked', false)
+            ->delete();
 
         return [
-            'scanned' => $scanned,
+            'scanned' => count($ids),
             'matched' => $matched,
-            'clusters_created' => $totalClusters,
+            'clusters_created' => RouteCluster::query()->count(),
             'matched_routes' => RouteCluster::query()->matched()->count(),
         ];
+    }
+
+    /**
+     * Downsample a polyline to at most `$maxPoints` points while preserving exact endpoints.
+     *
+     * @param  list<array{0: float, 1: float}>  $points
+     * @return list<array{0: float, 1: float}>
+     */
+    public static function downsamplePolyline(array $points, int $maxPoints): array
+    {
+        $count = count($points);
+
+        if ($count <= $maxPoints || $maxPoints < 2) {
+            return $points;
+        }
+
+        $result = [];
+        $step = ($count - 1) / ($maxPoints - 1);
+
+        for ($i = 0; $i < $maxPoints; $i++) {
+            $idx = (int) round($i * $step);
+            $idx = min($count - 1, max(0, $idx));
+            $result[] = $points[$idx];
+        }
+
+        return $result;
     }
 
     /**
@@ -565,21 +451,310 @@ class RouteMatchingService
     }
 
     /**
-     * @param  list<array{0: float, 1: float}>  $waypoints
+     * @param  list<float>  $values
+     */
+    public static function median(array $values): float
+    {
+        sort($values);
+        $count = count($values);
+        $mid = intdiv($count, 2);
+
+        if ($count % 2 === 1) {
+            return $values[$mid];
+        }
+
+        return ($values[$mid - 1] + $values[$mid]) / 2.0;
+    }
+
+    /**
+     * Outdoor activities long enough to fingerprint that have a non-empty GNSS polyline stream.
+     *
+     * @return Builder<Activity>
+     */
+    private function eligibleActivitiesQuery(): Builder
+    {
+        return Activity::query()
+            ->where('is_indoor', false)
+            ->where('distance_meters', '>=', self::MIN_DISTANCE_METERS)
+            ->whereExists(function (QueryBuilder $streamSub): void {
+                $streamSub
+                    ->selectRaw('1')
+                    ->from('activity_streams')
+                    ->whereColumn('activity_streams.activity_id', 'activities.id')
+                    ->whereNotNull('activity_streams.polyline')
+                    ->where('activity_streams.polyline', '!=', '[]');
+            });
+    }
+
+    /**
+     * Eligible activities that are neither flagged as un-fingerprintable nor already linked/unlinked.
+     *
+     * @return Builder<Activity>
+     */
+    private function pendingActivitiesQuery(): Builder
+    {
+        return $this->eligibleActivitiesQuery()
+            ->whereNull('route_match_skipped_at')
+            ->whereNotExists(function (QueryBuilder $fpSub): void {
+                $fpSub
+                    ->selectRaw('1')
+                    ->from('activity_route_fingerprints')
+                    ->whereColumn('activity_route_fingerprints.activity_id', 'activities.id')
+                    ->where(function (QueryBuilder $state): void {
+                        $state
+                            ->whereNotNull('activity_route_fingerprints.route_cluster_id')
+                            ->orWhere('activity_route_fingerprints.is_unlinked', true);
+                    });
+            });
+    }
+
+    /**
+     * Match activities in chunks, batching cluster aggregate refreshes once per chunk.
+     *
+     * @param  list<int>  $ids
+     * @return array{0: int, 1: int}
+     */
+    private function matchActivityIds(array $ids, int $chunkSize, bool $forceRecompute): array
+    {
+        $scanned = 0;
+        $matched = 0;
+        $this->deferredClusterIds = [];
+
+        try {
+            foreach (array_chunk($ids, $chunkSize) as $idChunk) {
+                $activities = Activity::query()
+                    ->select(self::ACTIVITY_COLUMNS)
+                    ->with('stream:'.implode(',', self::STREAM_COLUMNS))
+                    ->whereIn('id', $idChunk)
+                    ->orderBy('started_at_local')
+                    ->orderBy('id')
+                    ->get();
+
+                foreach ($activities as $activity) {
+                    $scanned++;
+
+                    if ($this->matchActivity($activity, $activity->stream, $forceRecompute) !== null) {
+                        $matched++;
+                    }
+                }
+
+                $this->flushDeferredClusterRefreshes();
+            }
+        } finally {
+            $pendingClusterIds = array_keys($this->deferredClusterIds ?? []);
+            $this->deferredClusterIds = null;
+            $this->refreshClustersById($pendingClusterIds);
+        }
+
+        return [$scanned, $matched];
+    }
+
+    /**
+     * @param  FingerprintData  $fingerprintData
+     */
+    private function assignFingerprint(
+        Activity $activity,
+        ?ActivityRouteFingerprint $existing,
+        array $fingerprintData,
+        bool $forceRecompute,
+    ): ActivityRouteFingerprint {
+        $previousClusterId = $existing?->route_cluster_id;
+
+        if ($existing !== null && $previousClusterId !== null) {
+            $hasOtherMembers = ActivityRouteFingerprint::query()
+                ->where('route_cluster_id', $previousClusterId)
+                ->where('is_unlinked', false)
+                ->where('activity_id', '!=', $activity->id)
+                ->exists();
+
+            if (! $hasOtherMembers && ! $forceRecompute) {
+                // Sole member: update in place so the cluster keeps its identity and custom name.
+                $existing->update($fingerprintData);
+                $this->refreshClustersById([$previousClusterId]);
+                $this->clearSkippedMarker($activity);
+
+                return $existing->fresh() ?? $existing;
+            }
+
+            // Detach and refresh the previous cluster first so the re-evaluation is not compared
+            // against this activity's own stale geometry as the cluster representative.
+            $existing->update([...$fingerprintData, 'route_cluster_id' => null]);
+            $this->refreshClustersById([$previousClusterId]);
+        }
+
+        $bestCluster = $this->findBestMatchingCluster($activity->sport_category, $activity->distance_meters, $fingerprintData);
+
+        if ($bestCluster === null) {
+            $bestCluster = RouteCluster::query()->create([
+                'name' => $this->deriveClusterName([$activity], $fingerprintData['is_loop'], $activity->distance_meters),
+                'name_override' => null,
+                'sport_category' => $activity->sport_category,
+                'representative_activity_id' => $activity->id,
+                'is_loop' => $fingerprintData['is_loop'],
+                'distance_meters' => round($activity->distance_meters, 1),
+                'elevation_gain' => $activity->elevation_gain !== null ? round($activity->elevation_gain, 1) : null,
+                'start_lat' => $fingerprintData['start_lat'],
+                'start_lng' => $fingerprintData['start_lng'],
+                'end_lat' => $fingerprintData['end_lat'],
+                'end_lng' => $fingerprintData['end_lng'],
+                'bbox_min_lat' => $fingerprintData['bbox_min_lat'],
+                'bbox_max_lat' => $fingerprintData['bbox_max_lat'],
+                'bbox_min_lng' => $fingerprintData['bbox_min_lng'],
+                'bbox_max_lng' => $fingerprintData['bbox_max_lng'],
+                'waypoints' => $fingerprintData['waypoints'],
+                'encoded_polyline' => $fingerprintData['encoded_preview_polyline'],
+                'activity_count' => 1,
+                'last_activity_at' => $activity->started_at_local,
+            ]);
+        }
+
+        $fingerprint = ActivityRouteFingerprint::query()->updateOrCreate(
+            ['activity_id' => $activity->id],
+            [
+                ...$fingerprintData,
+                'route_cluster_id' => $bestCluster->id,
+            ],
+        );
+
+        if (! $bestCluster->wasRecentlyCreated) {
+            $this->queueClusterRefresh($bestCluster->id);
+        }
+
+        $this->clearSkippedMarker($activity);
+
+        return $fingerprint;
+    }
+
+    /**
+     * @return FingerprintData|null
+     */
+    private function buildFingerprintData(Activity $activity, mixed $rawPolyline): ?array
+    {
+        $points = $this->normalizePolyline($rawPolyline);
+
+        if (count($points) < self::MIN_POLYLINE_POINTS) {
+            return null;
+        }
+
+        $cumulativeDistances = $this->computeCumulativeDistances($points);
+        $totalPolyDistance = $cumulativeDistances[count($cumulativeDistances) - 1];
+
+        if ($totalPolyDistance <= 0.0) {
+            return null;
+        }
+
+        $start = $points[0];
+        $end = $points[count($points) - 1];
+        $startToEndMeters = round(self::haversineMeters($start[0], $start[1], $end[0], $end[1]), 1);
+        [$bboxMinLat, $bboxMaxLat, $bboxMinLng, $bboxMaxLng] = $this->computeBoundingBox($points);
+
+        return [
+            'start_lat' => $start[0],
+            'start_lng' => $start[1],
+            'end_lat' => $end[0],
+            'end_lng' => $end[1],
+            'bbox_min_lat' => $bboxMinLat,
+            'bbox_max_lat' => $bboxMaxLat,
+            'bbox_min_lng' => $bboxMinLng,
+            'bbox_max_lng' => $bboxMaxLng,
+            'distance_meters' => round($activity->distance_meters, 1),
+            'start_to_end_meters' => $startToEndMeters,
+            'is_loop' => $startToEndMeters <= self::LOOP_THRESHOLD_METERS,
+            'waypoints' => $this->resampleWaypoints($points, $cumulativeDistances, self::WAYPOINT_COUNT),
+            'encoded_preview_polyline' => HeatmapService::encodePolyline(
+                self::downsamplePolyline($points, self::PREVIEW_MAX_POINTS),
+            ),
+            'is_unlinked' => false,
+            'computed_at' => CarbonImmutable::now('UTC'),
+        ];
+    }
+
+    /**
+     * Flag an activity whose polyline cannot be fingerprinted and drop any stale linked fingerprint.
+     */
+    private function markIneligible(Activity $activity, ?ActivityRouteFingerprint $existing): void
+    {
+        DB::transaction(function () use ($activity, $existing): void {
+            if ($existing !== null && ! $existing->is_unlinked) {
+                $previousClusterId = $existing->route_cluster_id;
+                $existing->delete();
+
+                if ($previousClusterId !== null) {
+                    $this->refreshClustersById([$previousClusterId]);
+                }
+            }
+
+            if ($activity->route_match_skipped_at === null) {
+                $activity->update(['route_match_skipped_at' => CarbonImmutable::now('UTC')]);
+            }
+        });
+    }
+
+    private function clearSkippedMarker(Activity $activity): void
+    {
+        if ($activity->route_match_skipped_at !== null) {
+            $activity->update(['route_match_skipped_at' => null]);
+        }
+    }
+
+    private function queueClusterRefresh(int $clusterId): void
+    {
+        if ($this->deferredClusterIds !== null) {
+            $this->deferredClusterIds[$clusterId] = true;
+
+            return;
+        }
+
+        $this->refreshClustersById([$clusterId]);
+    }
+
+    private function flushDeferredClusterRefreshes(): void
+    {
+        if ($this->deferredClusterIds === null || $this->deferredClusterIds === []) {
+            return;
+        }
+
+        $clusterIds = array_keys($this->deferredClusterIds);
+        $this->deferredClusterIds = [];
+        $this->refreshClustersById($clusterIds);
+    }
+
+    /**
+     * @param  list<int>  $clusterIds
+     */
+    private function refreshClustersById(array $clusterIds): void
+    {
+        if ($clusterIds === []) {
+            return;
+        }
+
+        $clusters = RouteCluster::query()->whereIn('id', $clusterIds)->get();
+
+        foreach ($clusters as $cluster) {
+            $this->refreshCluster($cluster);
+        }
+    }
+
+    /**
+     * @param  FingerprintData  $fingerprint
      */
     private function findBestMatchingCluster(
         string $sportCategory,
         float $distanceMeters,
-        float $startLat,
-        float $startLng,
-        float $endLat,
-        float $endLng,
-        float $bboxMinLat,
-        float $bboxMaxLat,
-        float $bboxMinLng,
-        float $bboxMaxLng,
-        array $waypoints,
+        array $fingerprint,
     ): ?RouteCluster {
+        [
+            'start_lat' => $startLat,
+            'start_lng' => $startLng,
+            'end_lat' => $endLat,
+            'end_lng' => $endLng,
+            'bbox_min_lat' => $bboxMinLat,
+            'bbox_max_lat' => $bboxMaxLat,
+            'bbox_min_lng' => $bboxMinLng,
+            'bbox_max_lng' => $bboxMaxLng,
+            'waypoints' => $waypoints,
+        ] = $fingerprint;
+
         $minDistance = $distanceMeters * (1.0 - self::CANDIDATE_DISTANCE_TOLERANCE);
         $maxDistance = $distanceMeters * (1.0 + self::CANDIDATE_DISTANCE_TOLERANCE);
 
@@ -659,41 +834,56 @@ class RouteMatchingService
     }
 
     /**
-     * @param  array<int, string>  $preservedOverridesByActivityId
+     * Re-apply custom names stashed on fingerprints by `rebuildAll()` to the clusters those fingerprints
+     * now belong to, then clear the stash for re-clustered fingerprints. Fingerprints not yet re-clustered
+     * keep their stash so an interrupted rebuild can still restore them later.
      */
-    private function restorePreservedOverrides(array $preservedOverridesByActivityId): void
+    private function restorePreservedOverrides(): void
     {
-        $clusters = RouteCluster::query()
-            ->with('fingerprints:id,activity_id,route_cluster_id,is_unlinked')
-            ->get();
+        DB::transaction(function (): void {
+            $preserved = ActivityRouteFingerprint::query()
+                ->whereNotNull('preserved_name_override')
+                ->whereNotNull('route_cluster_id')
+                ->where('is_unlinked', false)
+                ->get(['id', 'route_cluster_id', 'preserved_name_override']);
 
-        foreach ($clusters as $cluster) {
-            /** @var array<string, int> $votes */
-            $votes = [];
+            if ($preserved->isEmpty()) {
+                return;
+            }
 
-            foreach ($cluster->fingerprints as $fp) {
-                if ($fp->is_unlinked) {
+            /** @var array<int, array<string, int>> $votesByClusterId */
+            $votesByClusterId = [];
+
+            foreach ($preserved as $fp) {
+                $override = trim((string) $fp->preserved_name_override);
+
+                if ($override === '') {
                     continue;
                 }
 
-                $override = $preservedOverridesByActivityId[$fp->activity_id] ?? null;
+                $clusterId = (int) $fp->route_cluster_id;
+                $votesByClusterId[$clusterId][$override] = ($votesByClusterId[$clusterId][$override] ?? 0) + 1;
+            }
 
-                if ($override !== null) {
-                    $votes[$override] = ($votes[$override] ?? 0) + 1;
+            $clusters = RouteCluster::query()
+                ->whereIn('id', array_keys($votesByClusterId))
+                ->get();
+
+            foreach ($clusters as $cluster) {
+                if (is_string($cluster->name_override) && trim($cluster->name_override) !== '') {
+                    continue;
                 }
+
+                $votes = $votesByClusterId[$cluster->id];
+                arsort($votes);
+
+                $cluster->update(['name_override' => (string) array_key_first($votes)]);
             }
 
-            if ($votes === []) {
-                continue;
-            }
-
-            arsort($votes);
-            $winningOverride = (string) array_key_first($votes);
-
-            if ($winningOverride !== '') {
-                $cluster->update(['name_override' => $winningOverride]);
-            }
-        }
+            ActivityRouteFingerprint::query()
+                ->whereKey($preserved->modelKeys())
+                ->update(['preserved_name_override' => null]);
+        });
     }
 
     /**
@@ -795,32 +985,6 @@ class RouteMatchingService
     }
 
     /**
-     * Downsample a polyline to at most `$maxPoints` points while preserving exact endpoints.
-     *
-     * @param  list<array{0: float, 1: float}>  $points
-     * @return list<array{0: float, 1: float}>
-     */
-    private function simplifyForPreview(array $points, int $maxPoints): array
-    {
-        $count = count($points);
-
-        if ($count <= $maxPoints) {
-            return $points;
-        }
-
-        $result = [];
-        $step = ($count - 1) / ($maxPoints - 1);
-
-        for ($i = 0; $i < $maxPoints; $i++) {
-            $idx = (int) round($i * $step);
-            $idx = min($count - 1, max(0, $idx));
-            $result[] = $points[$idx];
-        }
-
-        return $result;
-    }
-
-    /**
      * @param  list<array{0: float, 1: float}>  $points
      * @return array{0: float, 1: float, 2: float, 3: float}
      */
@@ -850,22 +1014,6 @@ class RouteMatchingService
         }
 
         return [$minLat, $maxLat, $minLng, $maxLng];
-    }
-
-    /**
-     * @param  list<float>  $values
-     */
-    private function median(array $values): float
-    {
-        sort($values);
-        $count = count($values);
-        $mid = intdiv($count, 2);
-
-        if ($count % 2 === 1) {
-            return $values[$mid];
-        }
-
-        return ($values[$mid - 1] + $values[$mid]) / 2.0;
     }
 
     /**

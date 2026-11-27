@@ -26,6 +26,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * @property list<array{0: float, 1: float}> $waypoints
  * @property string|null $encoded_preview_polyline
  * @property bool $is_unlinked
+ * @property string|null $preserved_name_override
  * @property CarbonImmutable $computed_at
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -57,6 +58,7 @@ class ActivityRouteFingerprint extends Model
         'waypoints',
         'encoded_preview_polyline',
         'is_unlinked',
+        'preserved_name_override',
         'computed_at',
     ];
 

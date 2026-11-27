@@ -37,6 +37,11 @@ class RouteController extends Controller
         $rawName = $validated['name_override'] ?? null;
         $trimmed = is_string($rawName) ? trim($rawName) : '';
 
+        // Saving the unchanged auto-detected name must not freeze it as a custom override.
+        if ($trimmed === $routeCluster->name) {
+            $trimmed = '';
+        }
+
         $routeCluster->update([
             'name_override' => $trimmed !== '' ? $trimmed : null,
         ]);

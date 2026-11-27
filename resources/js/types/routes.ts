@@ -26,6 +26,8 @@ export interface RouteAttemptItem {
     started_at_local: string;
     distance_meters: number;
     duration_seconds: number;
+    /** Elapsed time scaled to the route's median attempt distance (used for ranking and deltas). */
+    normalized_duration_seconds: number;
     moving_duration_seconds: number | null;
     elevation_gain: number | null;
     avg_speed: number | null;

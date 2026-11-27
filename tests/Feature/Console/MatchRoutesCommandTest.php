@@ -6,6 +6,7 @@ use App\Models\ActivityStream;
 use App\Models\RouteCluster;
 use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
+use Illuminate\Queue\Middleware\WithoutOverlapping;
 use Illuminate\Support\Facades\Queue;
 
 /**
@@ -137,4 +138,14 @@ it('dispatches MatchUnfingerprintedRoutesJob only when unfingerprinted activitie
     (new MatchUnfingerprintedRoutesJob(rebuild: false, chunkSize: 50))->handle(app(RouteMatchingService::class));
 
     expect(RouteCluster::query()->matched()->count())->toBe(1);
+});
+
+it('prevents queued scans and rebuilds from overlapping each other', function () {
+    $scanLock = (new MatchUnfingerprintedRoutesJob(rebuild: false))->middleware()[0];
+    $rebuildLock = (new MatchUnfingerprintedRoutesJob(rebuild: true))->middleware()[0];
+
+    expect($scanLock)->toBeInstanceOf(WithoutOverlapping::class)
+        ->and($rebuildLock)->toBeInstanceOf(WithoutOverlapping::class)
+        ->and($scanLock->getLockKey(new MatchUnfingerprintedRoutesJob(rebuild: false)))
+        ->toBe($rebuildLock->getLockKey(new MatchUnfingerprintedRoutesJob(rebuild: true)));
 });

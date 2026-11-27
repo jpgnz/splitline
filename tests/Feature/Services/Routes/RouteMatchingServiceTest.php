@@ -8,6 +8,7 @@ use App\Models\RouteCluster;
 use App\Services\Ingestion\TelemetryPersistenceService;
 use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Queue;
 use Splitline\Core\Data\ActivityStreamData;
 
@@ -328,4 +329,137 @@ it('automatically matches outdoor activities when TelemetryPersistenceService up
         ->and($cluster?->activity_count)->toBe(2)
         ->and($first->routeFingerprint()->first()?->route_cluster_id)->toBe($cluster?->id)
         ->and($second->routeFingerprint()->first()?->route_cluster_id)->toBe($cluster?->id);
+});
+
+it('flags un-fingerprintable polylines so background scans stop revisiting them until the stream changes', function () {
+    $matcher = app(RouteMatchingService::class);
+
+    $sparse = Activity::factory()->create(['distance_meters' => 5000.0]);
+    $sparseStream = ActivityStream::factory()->create([
+        'activity_id' => $sparse->id,
+        'polyline' => buildLoopPolyline(points: 6),
+    ]);
+
+    $stationary = Activity::factory()->create(['distance_meters' => 5000.0]);
+    ActivityStream::factory()->create([
+        'activity_id' => $stationary->id,
+        'polyline' => array_fill(0, 30, [-36.85, 174.76]),
+    ]);
+
+    expect($matcher->unfingerprintedCount())->toBe(2);
+
+    $firstScan = $matcher->scanUnfingerprinted();
+
+    expect($firstScan['scanned'])->toBe(2)
+        ->and($firstScan['matched'])->toBe(0)
+        ->and($sparse->fresh()?->route_match_skipped_at)->not->toBeNull()
+        ->and($stationary->fresh()?->route_match_skipped_at)->not->toBeNull()
+        ->and($matcher->unfingerprintedCount())->toBe(0)
+        ->and($matcher->scanUnfingerprinted()['scanned'])->toBe(0);
+
+    // A re-synced stream with a usable polyline is fingerprinted and the skip flag is cleared
+    $sparseStream->update(['polyline' => buildLoopPolyline()]);
+    $fingerprint = $matcher->matchActivity($sparse->fresh(), $sparseStream->fresh());
+
+    expect($fingerprint?->route_cluster_id)->not->toBeNull()
+        ->and($sparse->fresh()?->route_match_skipped_at)->toBeNull();
+});
+
+it('keeps custom route names when a rebuild fails part-way and restores them on the next scan', function () {
+    $matcher = app(RouteMatchingService::class);
+
+    foreach (['2026-11-01', '2026-11-03', '2026-11-05'] as $index => $date) {
+        $activity = Activity::factory()->create([
+            'name' => 'Morning Run',
+            'started_at_local' => CarbonImmutable::parse("{$date} 07:00:00"),
+            'distance_meters' => 5000.0 + ($index * 20.0),
+        ]);
+        $stream = ActivityStream::factory()->create([
+            'activity_id' => $activity->id,
+            'polyline' => buildLoopPolyline(latDrift: $index * 0.00005),
+        ]);
+        $matcher->matchActivity($activity, $stream);
+    }
+
+    RouteCluster::query()->firstOrFail()->update(['name_override' => 'Sunrise Loop']);
+
+    $failingMatcher = new class extends RouteMatchingService
+    {
+        public int $calls = 0;
+
+        public function matchActivity(Activity $activity, ?ActivityStream $stream = null, bool $forceRecompute = false): ?ActivityRouteFingerprint
+        {
+            if (++$this->calls === 2) {
+                throw new RuntimeException('Simulated failure mid-rebuild');
+            }
+
+            return parent::matchActivity($activity, $stream, $forceRecompute);
+        }
+    };
+
+    expect(fn () => $failingMatcher->rebuildAll(chunkSize: 1))->toThrow(RuntimeException::class);
+
+    // Two activities were orphaned by the interrupted rebuild and are picked up by the next scan
+    expect($matcher->unfingerprintedCount())->toBe(2);
+
+    $matcher->scanUnfingerprinted();
+
+    $cluster = RouteCluster::query()->sole();
+
+    expect($cluster->activity_count)->toBe(3)
+        ->and($cluster->name_override)->toBe('Sunrise Loop')
+        ->and(ActivityRouteFingerprint::query()->whereNotNull('preserved_name_override')->count())->toBe(0);
+});
+
+it('re-evaluates a linked activity when its stream is re-synced with a different route', function () {
+    $matcher = app(RouteMatchingService::class);
+
+    $first = Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-01 07:00:00'),
+        'distance_meters' => 5000.0,
+    ]);
+    $firstStream = ActivityStream::factory()->create(['activity_id' => $first->id, 'polyline' => buildLoopPolyline()]);
+
+    $second = Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-08 07:00:00'),
+        'distance_meters' => 5000.0,
+    ]);
+    $secondStream = ActivityStream::factory()->create(['activity_id' => $second->id, 'polyline' => buildLoopPolyline(latDrift: 0.0001)]);
+
+    $matcher->matchActivity($first, $firstStream);
+    $originalClusterId = $matcher->matchActivity($second, $secondStream)?->route_cluster_id;
+
+    // Minor GPS correction keeps the activity in its cluster
+    $secondStream->update(['polyline' => buildLoopPolyline(latDrift: 0.00012)]);
+    expect($matcher->matchActivity($second, $secondStream->fresh())?->route_cluster_id)->toBe($originalClusterId);
+
+    // A corrected stream on a different route moves the activity out and refreshes the old cluster
+    $secondStream->update(['polyline' => buildLoopPolyline(centerLng: 174.8300)]);
+    $moved = $matcher->matchActivity($second, $secondStream->fresh());
+
+    expect($moved?->route_cluster_id)->not->toBe($originalClusterId)
+        ->and(RouteCluster::query()->findOrFail($originalClusterId)->activity_count)->toBe(1)
+        ->and(RouteCluster::query()->count())->toBe(2);
+});
+
+it('does not fail stream ingestion when route matching throws', function () {
+    Queue::fake([SyncActivityWeatherJob::class]);
+    Exceptions::fake();
+
+    $this->mock(RouteMatchingService::class)
+        ->shouldReceive('matchActivity')
+        ->andThrow(new RuntimeException('Route matching exploded'));
+
+    $activity = Activity::factory()->create(['distance_meters' => 5000.0]);
+
+    app(TelemetryPersistenceService::class)->upsertStream($activity, new ActivityStreamData(
+        series: [],
+        polyline: buildLoopPolyline(),
+        laps: [],
+        kmSplits: [],
+        records: [],
+    ));
+
+    expect(ActivityStream::query()->where('activity_id', $activity->id)->exists())->toBeTrue();
+    Exceptions::assertReported(RuntimeException::class);
 });
