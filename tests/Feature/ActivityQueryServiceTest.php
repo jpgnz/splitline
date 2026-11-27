@@ -32,6 +32,7 @@ it('builds a clean empty-state list payload when no activities exist', function 
         ->and($payload['calendar']['monthLabel'])->toBe('November 2026')
         ->and($payload['calendar']['prevMonth'])->toBe('2026-10')
         ->and($payload['calendar']['nextMonth'])->toBe('2026-12')
+        ->and($payload['excluded_count'])->toBe(0)
         ->and($payload['filters'])->toBe([
             'search' => '',
             'sport' => 'all',
@@ -40,6 +41,7 @@ it('builds a clean empty-state list payload when no activities exist', function 
             'to' => null,
             'pr' => false,
             'favorite' => false,
+            'excluded' => false,
             'view' => 'table',
             'month' => '2026-11',
             'sort' => 'date',

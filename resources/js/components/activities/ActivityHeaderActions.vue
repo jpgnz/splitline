@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { router } from '@inertiajs/vue3';
-import { CloudSun, Ellipsis, RefreshCw } from '@lucide/vue';
+import { CloudSun, Ellipsis, EyeOff, RefreshCw, RotateCcw } from '@lucide/vue';
 import { onMounted, onUnmounted, ref, watch } from 'vue';
 import {
     syncStreams as syncStreamsAction,
@@ -36,16 +36,20 @@ const props = withDefaults(
         canSyncWeather?: boolean;
         hasWeather?: boolean;
         syncingWeather?: boolean;
+        updatingExclusion?: boolean;
     }>(),
     {
         canSyncWeather: false,
         hasWeather: false,
         syncingWeather: false,
+        updatingExclusion: false,
     },
 );
 
 const emit = defineEmits<{
     syncWeather: [];
+    exclude: [];
+    restore: [];
 }>();
 
 const isSyncingStreams = defineModel<boolean>('syncingStreams', {
@@ -333,6 +337,45 @@ defineExpose({
                                 : hasWeather
                                   ? 'Refresh Weather'
                                   : 'Fetch Weather'
+                        }}
+                    </span>
+                </button>
+            </div>
+
+            <!-- Exclusion Action -->
+            <div
+                class="border-t border-zinc-200/80 pt-2.5 dark:border-zinc-800/80"
+            >
+                <button
+                    v-if="!activity.is_excluded"
+                    type="button"
+                    :disabled="updatingExclusion"
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-xs font-medium text-rose-600 transition-colors hover:bg-rose-50 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-60 dark:text-rose-400 dark:hover:bg-rose-500/10 dark:hover:text-rose-300"
+                    @click="
+                        closeMenu();
+                        emit('exclude');
+                    "
+                >
+                    <EyeOff class="size-3.5" />
+                    <span>Exclude from stats</span>
+                </button>
+
+                <button
+                    v-else
+                    type="button"
+                    :disabled="updatingExclusion"
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-50 hover:text-emerald-800 disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-400 dark:hover:bg-emerald-500/10 dark:hover:text-emerald-300"
+                    @click="
+                        closeMenu();
+                        emit('restore');
+                    "
+                >
+                    <RotateCcw class="size-3.5" />
+                    <span>
+                        {{
+                            updatingExclusion
+                                ? 'Restoring...'
+                                : 'Restore to stats'
                         }}
                     </span>
                 </button>

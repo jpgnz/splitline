@@ -603,7 +603,7 @@ class ImportWatchService
 
     private function activityExists(string $provider, string $externalId): bool
     {
-        return Activity::query()
+        return Activity::withExcluded()
             ->where('provider', $provider)
             ->where('external_id', $externalId)
             ->exists();

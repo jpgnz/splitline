@@ -128,7 +128,7 @@ class TelemetryPersistenceService
      */
     public function upsertActivity(NormalizedActivity $dto, bool $dispatchEnrichments = true): Activity
     {
-        $existing = Activity::query()
+        $existing = Activity::withExcluded()
             ->where('provider', $dto->provider)
             ->where('external_id', $dto->externalId)
             ->first();
@@ -138,9 +138,13 @@ class TelemetryPersistenceService
             : null;
 
         if ($existing === null && $garminActivityId !== null) {
-            $existing = Activity::query()
+            $existing = Activity::withExcluded()
                 ->where('garmin_activity_id', $garminActivityId)
                 ->first();
+        }
+
+        if ($existing !== null && $existing->isExcluded()) {
+            return $existing;
         }
 
         $isNew = $existing === null;
