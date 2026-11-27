@@ -303,6 +303,7 @@ class GearService
     {
         $rows = DB::table('activity_gear')
             ->join('activities', 'activities.id', '=', 'activity_gear.activity_id')
+            ->whereNull('activities.excluded_at')
             ->groupBy('activity_gear.gear_item_id')
             ->selectRaw('activity_gear.gear_item_id as gear_item_id')
             ->selectRaw('COUNT(activities.id) as activity_count')
@@ -336,6 +337,7 @@ class GearService
     {
         $rankedSubquery = DB::table('activity_gear')
             ->join('activities', 'activities.id', '=', 'activity_gear.activity_id')
+            ->whereNull('activities.excluded_at')
             ->select([
                 'activity_gear.gear_item_id',
                 'activities.id',

@@ -6,6 +6,7 @@ import {
     Grid2x2,
     Layers,
     Map as MapIcon,
+    Mountain,
     RefreshCw,
     RotateCcw,
     X,
@@ -50,6 +51,7 @@ import {
     emptyFeatureCollection,
     ensureMapLibreWorker,
     getMapStyleUrl,
+    syncMapterhornTerrain,
     toLngLat,
 } from '@/lib/maplibre';
 import { decodePolyline } from '@/lib/polyline';
@@ -217,6 +219,8 @@ const showExplorerTiles = ref<boolean>(false);
 const explorerSummary = ref<ExplorerSummary | null>(null);
 const isLoadingExplorer = ref<boolean>(false);
 const explorerLoadFailed = ref<boolean>(false);
+const viewMode = ref<'2d' | '3d'>('2d');
+const showTerrain = ref<boolean>(false);
 
 let map: MapLibreMap | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -617,97 +621,93 @@ function setExplorerTilesVisible(visible: boolean): void {
     }
 }
 
-function pointToSegmentDistancePx(
-    px: number,
-    py: number,
-    ax: number,
-    ay: number,
-    bx: number,
-    by: number,
-): number {
-    const dx = bx - ax;
-    const dy = by - ay;
-    const lenSq = dx * dx + dy * dy;
-
-    if (lenSq === 0) {
-        return Math.hypot(px - ax, py - ay);
-    }
-
-    const t = Math.max(
-        0,
-        Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq),
-    );
-    const projX = ax + t * dx;
-    const projY = ay + t * dy;
-
-    return Math.hypot(px - projX, py - projY);
-}
-
-function isTrackWithinClickRadius(
-    track: DecodedHeatmapTrack,
-    clickPoint: MapLibrePoint,
-    mapInstance: MapLibreMap,
-): boolean {
-    const pts = track.polyline;
-
-    if (pts.length < 2) {
-        return false;
-    }
-
-    let prev = mapInstance.project(toLngLat(pts[0]));
-
-    for (let i = 1; i < pts.length; i += 1) {
-        const curr = mapInstance.project(toLngLat(pts[i]));
-        const dist = pointToSegmentDistancePx(
-            clickPoint.x,
-            clickPoint.y,
-            prev.x,
-            prev.y,
-            curr.x,
-            curr.y,
-        );
-
-        if (dist <= CLICK_RADIUS_PX) {
-            return true;
-        }
-
-        prev = curr;
-    }
-
-    return false;
-}
-
-function handleMapClick(event: MapMouseEvent): void {
-    if (!map || indexedTracks.value.length === 0) {
+function selectViewMode(mode: '2d' | '3d'): void {
+    if (viewMode.value === mode) {
         return;
     }
 
-    const clickPoint = event.point;
-    const pad = CLICK_RADIUS_PX + 2;
-    const nw = map.unproject([clickPoint.x - pad, clickPoint.y - pad]);
-    const se = map.unproject([clickPoint.x + pad, clickPoint.y + pad]);
+    viewMode.value = mode;
 
-    const searchMinLat = Math.min(nw.lat, se.lat);
-    const searchMaxLat = Math.max(nw.lat, se.lat);
-    const searchMinLng = Math.min(nw.lng, se.lng);
-    const searchMaxLng = Math.max(nw.lng, se.lng);
+    if (mode === '3d' && !showTerrain.value) {
+        showTerrain.value = true;
+    }
 
-    const matched: DecodedHeatmapTrack[] = [];
+    if (!map) {
+        return;
+    }
 
-    for (const item of indexedTracks.value) {
-        if (
-            item.maxLat < searchMinLat ||
-            item.minLat > searchMaxLat ||
-            item.maxLng < searchMinLng ||
-            item.minLng > searchMaxLng
-        ) {
-            continue;
-        }
+    if (mode === '3d') {
+        map.easeTo({
+            pitch: Math.max(map.getPitch(), 55),
+            duration: 500,
+        });
+    } else {
+        map.easeTo({
+            pitch: 0,
+            bearing: 0,
+            duration: 450,
+        });
+    }
+}
 
-        if (isTrackWithinClickRadius(item.track, clickPoint, map)) {
-            matched.push(item.track);
+function toggleTerrain(): void {
+    showTerrain.value = !showTerrain.value;
+}
+
+function syncTerrainState(): void {
+    if (!map || !styleReady) {
+        return;
+    }
+
+    syncMapterhornTerrain(map, {
+        hillshade: showTerrain.value,
+        terrain3d: viewMode.value === '3d',
+        isDark: isDark.value,
+    });
+}
+
+/**
+ * Activity IDs of base tracks rendered within the click radius. Uses the rendered geometry so hit-testing
+ * stays accurate (and cheap) when the map is pitched or draped over 3D terrain.
+ */
+function renderedTrackIdsNearPoint(
+    mapInstance: MapLibreMap,
+    point: MapLibrePoint,
+): Set<number> {
+    const ids = new Set<number>();
+
+    if (!mapInstance.getLayer(BASE_TRACKS_LAYER_ID)) {
+        return ids;
+    }
+
+    const features = mapInstance.queryRenderedFeatures(
+        [
+            [point.x - CLICK_RADIUS_PX, point.y - CLICK_RADIUS_PX],
+            [point.x + CLICK_RADIUS_PX, point.y + CLICK_RADIUS_PX],
+        ],
+        { layers: [BASE_TRACKS_LAYER_ID] },
+    );
+
+    for (const feature of features) {
+        const activityId = Number(feature.properties?.activity_id);
+
+        if (Number.isFinite(activityId)) {
+            ids.add(activityId);
         }
     }
+
+    return ids;
+}
+
+function handleMapClick(event: MapMouseEvent): void {
+    if (!map || !styleReady || indexedTracks.value.length === 0) {
+        return;
+    }
+
+    const hitIds = renderedTrackIdsNearPoint(map, event.point);
+    const matched: DecodedHeatmapTrack[] = indexedTracks.value
+        .filter((item) => hitIds.has(item.track.activity_id))
+        .map((item) => item.track);
 
     if (matched.length === 0) {
         closeInspector();
@@ -1324,6 +1324,7 @@ function initMap(): void {
         container: mapContainerRef.value,
         style: getMapStyleUrl(isDark.value),
         scrollZoom: true,
+        maxPitch: 75,
         attributionControl: false,
         ...(initialBounds
             ? {
@@ -1339,11 +1340,15 @@ function initMap(): void {
               }),
     });
 
-    map.addControl(new NavigationControl({ showCompass: false }), 'top-left');
+    map.addControl(
+        new NavigationControl({ showCompass: true, visualizePitch: true }),
+        'top-left',
+    );
     map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
 
     map.on('style.load', () => {
         styleReady = true;
+        syncTerrainState();
         renderBaseTracks();
         renderExplorerLayers();
         renderHighlights();
@@ -1428,6 +1433,10 @@ watch(showExplorerTiles, () => {
 
 watch(explorerSummary, () => {
     renderExplorerLayers();
+});
+
+watch([viewMode, showTerrain], () => {
+    syncTerrainState();
 });
 
 watch(
@@ -1804,22 +1813,75 @@ onBeforeUnmount(() => {
                     class="h-[calc(100vh-19rem)] max-h-[820px] min-h-[520px] w-full bg-[#f4f4f2] dark:bg-[#191a1a]"
                 />
 
-                <!-- Top-Right Recenter Control (shifts left when inspector is open on desktop) -->
-                <button
-                    type="button"
-                    title="Fit all routes"
-                    aria-label="Fit all routes"
+                <!-- Top-Right Map Mode, Terrain & Recenter Controls (shifts left when inspector is open on desktop) -->
+                <div
                     :class="[
-                        'absolute top-3 z-[500] inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1.5 font-mono text-[11px] font-medium text-zinc-700 backdrop-blur-xs transition-all hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-200 dark:hover:border-zinc-700 dark:hover:text-white',
+                        'absolute top-3 z-[500] flex flex-wrap items-center justify-end gap-1.5 transition-all',
                         isInspectorOpen
                             ? 'right-3 md:right-[364px]'
                             : 'right-3',
                     ]"
-                    @click="fitAllTracks(true)"
                 >
-                    <Crosshair class="size-3.5" />
-                    <span>Fit All</span>
-                </button>
+                    <div
+                        class="inline-flex items-center rounded-lg border border-zinc-200/90 bg-white/95 p-0.5 font-mono text-[11px] shadow-xs backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95"
+                        role="group"
+                        aria-label="Map view mode"
+                    >
+                        <button
+                            type="button"
+                            title="Flat 2D map"
+                            class="rounded-md px-2 py-1 font-medium transition-colors"
+                            :class="
+                                viewMode === '2d'
+                                    ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                                    : 'cursor-pointer text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                            "
+                            @click="selectViewMode('2d')"
+                        >
+                            2D
+                        </button>
+                        <button
+                            type="button"
+                            title="3D terrain view"
+                            class="rounded-md px-2 py-1 font-medium transition-colors"
+                            :class="
+                                viewMode === '3d'
+                                    ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
+                                    : 'cursor-pointer text-zinc-600 hover:text-zinc-950 dark:text-zinc-400 dark:hover:text-zinc-100'
+                            "
+                            @click="selectViewMode('3d')"
+                        >
+                            3D
+                        </button>
+                    </div>
+
+                    <button
+                        type="button"
+                        :aria-pressed="showTerrain"
+                        title="Toggle Mapterhorn terrain hillshading"
+                        class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-medium shadow-xs backdrop-blur-xs transition-colors"
+                        :class="
+                            showTerrain
+                                ? 'border-emerald-500/50 bg-emerald-50/95 text-emerald-700 dark:border-emerald-500/40 dark:bg-emerald-500/20 dark:text-emerald-300'
+                                : 'border-zinc-200/90 bg-white/95 text-zinc-700 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-200 dark:hover:border-zinc-700 dark:hover:text-white'
+                        "
+                        @click="toggleTerrain"
+                    >
+                        <Mountain class="size-3.5" />
+                        <span>Terrain</span>
+                    </button>
+
+                    <button
+                        type="button"
+                        title="Fit all routes"
+                        aria-label="Fit all routes"
+                        class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white/95 px-2.5 py-1.5 font-mono text-[11px] font-medium text-zinc-700 shadow-xs backdrop-blur-xs transition-colors hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417]/95 dark:text-zinc-200 dark:hover:border-zinc-700 dark:hover:text-white"
+                        @click="fitAllTracks(true)"
+                    >
+                        <Crosshair class="size-3.5" />
+                        <span>Fit All</span>
+                    </button>
+                </div>
 
                 <!-- Floating Corridor Inspector Panel -->
                 <aside

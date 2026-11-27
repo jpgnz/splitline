@@ -617,7 +617,7 @@ class GarminSyncService
 
     private function syncRecentActivities(): int
     {
-        $latestStartedAtUtc = Activity::query()->max('started_at_utc');
+        $latestStartedAtUtc = Activity::withExcluded()->max('started_at_utc');
         $cutoffUtc = is_string($latestStartedAtUtc) && $latestStartedAtUtc !== ''
             ? CarbonImmutable::parse($latestStartedAtUtc, 'UTC')->subDay()
             : null;
@@ -860,7 +860,7 @@ class GarminSyncService
 
     private function resolveEarliestBackfillDate(): CarbonImmutable
     {
-        $earliestLocal = Activity::query()->min('started_at_local');
+        $earliestLocal = Activity::withExcluded()->min('started_at_local');
 
         if (is_string($earliestLocal) && $earliestLocal !== '') {
             return CarbonImmutable::parse($earliestLocal, $this->timezone())->startOfDay();

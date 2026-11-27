@@ -549,6 +549,57 @@ class SegmentMatchingService
     }
 
     /**
+     * Remove all segment efforts and climb detections belonging to an activity and recompute affected segment stats.
+     */
+    public function removeActivity(Activity $activity): void
+    {
+        /** @var list<int> $effortSegmentIds */
+        $effortSegmentIds = array_values(array_unique(array_map(
+            'intval',
+            SegmentEffort::query()
+                ->where('activity_id', $activity->id)
+                ->pluck('segment_id')
+                ->all(),
+        )));
+
+        /** @var list<int> $detectedSegmentIds */
+        $detectedSegmentIds = array_values(array_unique(array_map(
+            'intval',
+            $activity->detectedSegments()->withTrashed()->pluck('segments.id')->all(),
+        )));
+
+        if ($effortSegmentIds === [] && $detectedSegmentIds === []) {
+            return;
+        }
+
+        DB::transaction(function () use ($activity, $effortSegmentIds, $detectedSegmentIds): void {
+            if ($effortSegmentIds !== []) {
+                SegmentEffort::query()
+                    ->where('activity_id', $activity->id)
+                    ->delete();
+
+                $this->refreshRankingsFor($effortSegmentIds);
+            }
+
+            if ($detectedSegmentIds !== []) {
+                $activity->detectedSegments()->detach();
+                $this->refreshDetectionCounts($detectedSegmentIds);
+            }
+
+            $allAffectedIds = array_values(array_unique([...$effortSegmentIds, ...$detectedSegmentIds]));
+
+            $hasAffectedClimb = Segment::query()
+                ->climbs()
+                ->whereIn('id', $allAffectedIds)
+                ->exists();
+
+            if ($hasAffectedClimb) {
+                $this->refreshSubClimbFlagsForSport($activity->sport_category);
+            }
+        });
+    }
+
+    /**
      * Recompute rankings (1..N by elapsed_seconds ASC), PR flag, climb verification, and aggregate stats on a Segment.
      */
     public function refreshSegmentRankings(Segment $segment, bool $dispatchGeocode = true): Segment

@@ -246,6 +246,8 @@ export interface ActivityDetail {
     is_favorite: boolean;
     is_pr: boolean;
     is_manual: boolean;
+    excluded_at: string | null;
+    is_excluded: boolean;
     streams_synced_at: string | null;
 }
 

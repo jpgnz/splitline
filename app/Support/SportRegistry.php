@@ -976,8 +976,14 @@ class SportRegistry
             ? 'sport_discipline'
             : 'biking_discipline';
 
-        $rows = DB::table('activities')
-            ->selectRaw("sport_category, COALESCE(discipline_override, {$disciplineColumn}) as effective_discipline, is_indoor, COUNT(*) as total")
+        $query = DB::table('activities')
+            ->selectRaw("sport_category, COALESCE(discipline_override, {$disciplineColumn}) as effective_discipline, is_indoor, COUNT(*) as total");
+
+        if (Schema::hasColumn('activities', 'excluded_at')) {
+            $query->whereNull('excluded_at');
+        }
+
+        $rows = $query
             ->groupByRaw("sport_category, COALESCE(discipline_override, {$disciplineColumn}), is_indoor")
             ->get();
 
