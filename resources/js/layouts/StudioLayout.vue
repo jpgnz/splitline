@@ -18,6 +18,7 @@ import {
     MountainSnow,
     Navigation,
     RefreshCw,
+    Route,
     Settings,
     Sun,
     Target,
@@ -38,6 +39,7 @@ import { index as activitiesIndex } from '@/routes/activities';
 // import { index as gearIndex } from '@/routes/gear';
 import { index as goalsIndex } from '@/routes/goals';
 import { index as heatmapIndex } from '@/routes/heatmap';
+import { index as routesIndex } from '@/routes/routes';
 import { index as settingsIndex } from '@/routes/settings';
 import { status as syncStatus, store as syncStore } from '@/routes/sync';
 
@@ -124,6 +126,12 @@ const navGroups = computed<StudioNavGroup[]>(() => {
                     label: 'Route Heatmap',
                     href: heatmapIndex.url(),
                     icon: Map,
+                },
+                {
+                    key: 'routes',
+                    label: 'Matched Routes',
+                    href: routesIndex.url(),
+                    icon: Route,
                 },
             ],
         },

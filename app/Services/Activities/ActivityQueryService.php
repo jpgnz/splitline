@@ -6,6 +6,7 @@ use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
 use App\Services\Gear\GearService;
+use App\Services\Routes\MatchedRouteService;
 use App\Support\DateWindowResolver;
 use App\Support\SportRegistry;
 use Carbon\CarbonImmutable;
@@ -20,7 +21,13 @@ class ActivityQueryService
         private readonly PaceDistributionService $paceDistributionService = new PaceDistributionService,
         private readonly ?SportRegistry $sports = null,
         private readonly ?DateWindowResolver $dateWindows = null,
+        private readonly ?MatchedRouteService $matchedRoutes = null,
     ) {}
+
+    private function matchedRouteService(): MatchedRouteService
+    {
+        return $this->matchedRoutes ?? app(MatchedRouteService::class);
+    }
 
     private function sportRegistry(): SportRegistry
     {
@@ -278,7 +285,7 @@ class ActivityQueryService
      */
     public function detail(Activity $activity): array
     {
-        $activity->load(['stream', 'weather', 'bestEfforts']);
+        $activity->load(['stream', 'weather', 'bestEfforts', 'routeFingerprint.cluster.representativeActivity']);
 
         $startedAtLocal = $activity->started_at_local->format('Y-m-d H:i:s');
 
@@ -455,6 +462,7 @@ class ActivityQueryService
             'prevActivity' => $prev !== null ? ['id' => $prev->id, 'name' => $prev->name] : null,
             'nextActivity' => $next !== null ? ['id' => $next->id, 'name' => $next->name] : null,
             'gear' => $this->gearService->forActivity($activity),
+            'matchedRoute' => $this->matchedRouteService()->forActivity($activity),
             'discipline_options' => $this->sportRegistry()->disciplinesForCategory($activity->sport_category),
         ];
     }
