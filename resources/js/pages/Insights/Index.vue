@@ -21,12 +21,14 @@ import DateRangeControl, {
 } from '@/components/DateRangeControl.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { formatNumber, formatShortDate } from '@/lib/format';
+import { escapeHtml } from '@/lib/html';
 import { useSports } from '@/lib/sports';
 import { useUnits } from '@/lib/units';
 import { show as showActivity } from '@/routes/activities';
 import { index as insightsIndex } from '@/routes/insights';
 import type {
     CorrelationStat,
+    CorrelationStrength,
     HrvScatterPoint,
     InsightsPageProps,
     RecoveryMatrixCell,
@@ -96,9 +98,14 @@ const activeSportMeta = computed(() =>
     props.filters.sport === 'all' ? null : getSportMeta(props.filters.sport),
 );
 
+// Speed averages mix running and cycling under "All Sports", so they are only shown per sport.
+const hasComparableSpeed = computed<boolean>(
+    () => activeSportMeta.value !== null,
+);
+
 const usePaceFormat = computed<boolean>(
     () =>
-        activeSportMeta.value === null ||
+        activeSportMeta.value !== null &&
         activeSportMeta.value.metric_mode === 'pace',
 );
 
@@ -239,7 +246,7 @@ function formatTempBand(
 }
 
 function formatSpeedOrPace(speedMps: number | null): string {
-    if (speedMps === null) {
+    if (speedMps === null || !hasComparableSpeed.value) {
         return '—';
     }
 
@@ -256,26 +263,53 @@ function formatSigned(value: number | null, decimals = 1): string {
     return `${prefix}${formatNumber(value, decimals)}`;
 }
 
+const MIN_CORRELATION_SAMPLES = 10;
+
+const CORRELATION_STRENGTH_LABELS: Record<CorrelationStrength, string> = {
+    strong: 'Strong',
+    moderate: 'Moderate',
+    weak: 'Weak',
+    negligible: 'Negligible',
+    inconclusive: 'Not significant',
+};
+
+const efBasisLabel = computed<string>(() =>
+    props.summary.ef_metric === 'power'
+        ? 'power-based (W/bpm)'
+        : 'speed-based (m/min/bpm)',
+);
+
+function formatPValue(pValue: number): string {
+    return pValue < 0.001 ? 'p < 0.001' : `p = ${pValue.toFixed(3)}`;
+}
+
 function formatCorrelationLabel(stat: CorrelationStat): string {
-    if (stat.r === null) {
+    if (stat.r === null || stat.strength === null) {
         return `n = ${stat.n}`;
     }
 
-    const abs = Math.abs(stat.r);
-    const strength = abs >= 0.5 ? 'Strong' : abs >= 0.25 ? 'Moderate' : 'Weak';
     const prefix = stat.r > 0 ? '+' : '';
 
-    return `${strength} (${prefix}${stat.r.toFixed(2)})`;
+    return `${CORRELATION_STRENGTH_LABELS[stat.strength]} (${prefix}${stat.r.toFixed(2)})`;
 }
 
-function correlationTooltip(pairLabel: string, stat: CorrelationStat): string {
+function correlationTooltip(
+    pairLabel: string,
+    stat: CorrelationStat,
+    unit = 'days',
+): string {
     if (stat.r === null) {
-        return `${pairLabel}: Needs at least 5 paired sessions (currently ${stat.n}).`;
+        return `${pairLabel}: Needs at least ${MIN_CORRELATION_SAMPLES} paired ${unit} (currently ${stat.n}).`;
     }
 
     const prefix = stat.r > 0 ? '+' : '';
+    const pText =
+        stat.p_value !== null ? `, ${formatPValue(stat.p_value)}` : '';
+    const verdict = stat.significant
+        ? 'Statistically significant at p < 0.05.'
+        : 'Not statistically significant (p ≥ 0.05) — this could be noise.';
 
-    return `${pairLabel}: Pearson r = ${prefix}${stat.r.toFixed(2)} across ${stat.n} sessions. Near 0 means little linear link; closer to ±1 is stronger.`;
+    return `${pairLabel}: Pearson r = ${prefix}${stat.r.toFixed(2)}${pText} across ${stat.n} ${unit}. ${verdict}`;
 }
 
 function correlationTone(stat: CorrelationStat, higherIsBetter = true): string {
@@ -283,21 +317,24 @@ function correlationTone(stat: CorrelationStat, higherIsBetter = true): string {
         return 'border-zinc-200/90 bg-zinc-50 text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400';
     }
 
-    const abs = Math.abs(stat.r);
-
-    if (abs < 0.25) {
+    if (
+        !stat.significant ||
+        stat.strength === 'negligible' ||
+        stat.strength === 'weak'
+    ) {
         return 'border-zinc-200/90 bg-zinc-100/80 text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800/70 dark:text-zinc-300';
     }
 
     const favorable = higherIsBetter ? stat.r > 0 : stat.r < 0;
+    const isStrong = stat.strength === 'strong';
 
     if (favorable) {
-        return abs >= 0.4
+        return isStrong
             ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
             : 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-300';
     }
 
-    return abs >= 0.4
+    return isStrong
         ? 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
         : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300';
 }
@@ -397,7 +434,7 @@ const sleepChartOption = computed<EChartsOption>(() => {
                     }
 
                     return [
-                        `<strong>${item.activity_name}</strong>`,
+                        `<strong>${escapeHtml(item.activity_name)}</strong>`,
                         `<span style="opacity:0.75">${formatShortDate(item.date)} · Click to open</span>`,
                         `Sleep: ${item.sleep_hours !== null ? `${formatNumber(item.sleep_hours, 1)}h` : '—'}${item.sleep_score !== null ? ` (score ${item.sleep_score})` : ''}`,
                         `Efficiency Factor: ${item.efficiency_factor !== null ? formatNumber(item.efficiency_factor, 2) : '—'}`,
@@ -495,7 +532,7 @@ const sleepChartOption = computed<EChartsOption>(() => {
                 }
 
                 return [
-                    `<strong>${bucket.label}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
+                    `<strong>${escapeHtml(bucket.label)}</strong> (${bucket.count} ${bucket.count === 1 ? 'day' : 'days'})`,
                     `Avg EF: ${bucket.avg_ef !== null ? formatNumber(bucket.avg_ef, 2) : '—'}`,
                     `Avg Decoupling: ${bucket.avg_decoupling !== null ? `${formatSigned(bucket.avg_decoupling, 1)}%` : '—'}`,
                     `Avg HR: ${bucket.avg_hr !== null ? `${formatNumber(bucket.avg_hr, 0)} bpm` : '—'}`,
@@ -613,9 +650,9 @@ const hrvChartOption = computed<EChartsOption>(() => {
                     }
 
                     return [
-                        `<strong>${item.activity_name}</strong>`,
+                        `<strong>${escapeHtml(item.activity_name)}</strong>`,
                         `<span style="opacity:0.75">${formatShortDate(item.date)} · Click to open</span>`,
-                        `Overnight HRV: ${item.hrv !== null ? `${item.hrv} ms` : '—'}${item.status ? ` (${item.status})` : ''}`,
+                        `Overnight HRV: ${item.hrv !== null ? `${item.hrv} ms` : '—'}${item.status ? ` (${escapeHtml(item.status)})` : ''}`,
                         item.rhr !== null ? `Resting HR: ${item.rhr} bpm` : '',
                         `Efficiency Factor: ${item.efficiency_factor !== null ? formatNumber(item.efficiency_factor, 2) : '—'}`,
                         `Decoupling: ${item.decoupling_pct !== null ? `${formatSigned(item.decoupling_pct, 1)}%` : '—'}`,
@@ -707,7 +744,7 @@ const hrvChartOption = computed<EChartsOption>(() => {
                 }
 
                 return [
-                    `<strong>${bucket.label}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
+                    `<strong>${escapeHtml(bucket.label)}</strong> (${bucket.count} ${bucket.count === 1 ? 'day' : 'days'})`,
                     `Avg EF: ${bucket.avg_ef !== null ? formatNumber(bucket.avg_ef, 2) : '—'}`,
                     `Avg Decoupling: ${bucket.avg_decoupling !== null ? `${formatSigned(bucket.avg_decoupling, 1)}%` : '—'}`,
                     `Avg HRV: ${bucket.avg_hrv !== null ? `${formatNumber(bucket.avg_hrv, 0)} ms` : '—'}`,
@@ -846,12 +883,12 @@ const weatherChartOption = computed<EChartsOption>(() => {
                     }
 
                     return [
-                        `<strong>${item.activity_name}</strong>`,
+                        `<strong>${escapeHtml(item.activity_name)}</strong>`,
                         `<span style="opacity:0.75">${formatShortDate(item.date)} · Click to open</span>`,
                         `Temp: ${formatTemp(item.temperature_c, 1)}${item.dew_point_c !== null ? ` · Dew point ${formatTemp(item.dew_point_c, 1)}` : ''}`,
                         `Efficiency Factor: ${item.efficiency_factor !== null ? formatNumber(item.efficiency_factor, 2) : '—'}`,
                         `Decoupling: ${item.decoupling_pct !== null ? `${formatSigned(item.decoupling_pct, 1)}%` : '—'}`,
-                        item.avg_speed !== null
+                        item.avg_speed !== null && hasComparableSpeed.value
                             ? `${usePaceFormat.value ? 'Avg Pace' : 'Avg Speed'}: ${formatSpeedOrPace(item.avg_speed)}`
                             : '',
                     ]
@@ -950,12 +987,16 @@ const weatherChartOption = computed<EChartsOption>(() => {
                 );
 
                 return [
-                    `<strong>${bandLabel}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
+                    `<strong>${escapeHtml(bandLabel)}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
                     `Avg EF: ${bucket.avg_ef !== null ? formatNumber(bucket.avg_ef, 2) : '—'}`,
                     `Avg Decoupling: ${bucket.avg_decoupling !== null ? `${formatSigned(bucket.avg_decoupling, 1)}%` : '—'}`,
-                    `${usePaceFormat.value ? 'Avg Pace' : 'Avg Speed'}: ${formatSpeedOrPace(bucket.avg_speed)}`,
+                    hasComparableSpeed.value
+                        ? `${usePaceFormat.value ? 'Avg Pace' : 'Avg Speed'}: ${formatSpeedOrPace(bucket.avg_speed)}`
+                        : '',
                     `Avg HR: ${bucket.avg_hr !== null ? `${formatNumber(bucket.avg_hr, 0)} bpm` : '—'}`,
-                ].join('<br/>');
+                ]
+                    .filter(Boolean)
+                    .join('<br/>');
             },
         },
         xAxis: {
@@ -1076,7 +1117,7 @@ const recoveryChartOption = computed<EChartsOption>(() => {
                 }
 
                 return [
-                    `<strong>${bucket.label}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
+                    `<strong>${escapeHtml(bucket.label)}</strong> (${bucket.count} ${bucket.count === 1 ? 'day' : 'days'})`,
                     `Next-Night HRV Δ: ${bucket.avg_hrv_delta !== null ? `${formatSigned(bucket.avg_hrv_delta, 1)} ms` : '—'}`,
                     `Next-Night HRV: ${bucket.avg_hrv !== null ? `${formatNumber(bucket.avg_hrv, 0)} ms` : '—'}`,
                     `Next-Night Sleep Score: ${bucket.avg_sleep_score !== null ? formatNumber(bucket.avg_sleep_score, 0) : '—'}`,
@@ -1094,7 +1135,7 @@ const recoveryChartOption = computed<EChartsOption>(() => {
         yAxis: [
             {
                 type: 'value',
-                name: 'HRV Δ vs 7d (ms)',
+                name: 'HRV Δ vs prior 7 nights (ms)',
                 nameGap: 12,
                 nameTextStyle: { ...axisLabelStyle, align: 'left' },
                 axisLabel: axisLabelStyle,
@@ -1159,11 +1200,9 @@ const recoveryChartOption = computed<EChartsOption>(() => {
 });
 
 const recoveryMatrixRows = computed(() => {
-    const timeOrder = [
-        { key: 'morning', label: 'Morning (<12:00)' },
-        { key: 'afternoon', label: 'Afternoon (12:00–17:00)' },
-        { key: 'evening', label: 'Evening (17:00+)' },
-    ];
+    const timeOrder = props.workout_to_recovery.by_time_of_day.map(
+        (bucket) => ({ key: bucket.key, label: bucket.label }),
+    );
     const intensityOrder = ['easy', 'moderate', 'hard'];
     const byKey = new Map<string, RecoveryMatrixCell>();
 
@@ -1225,7 +1264,7 @@ const dayOfWeekChartOption = computed<EChartsOption>(() => {
                 }
 
                 return [
-                    `<strong>${bucket.label}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
+                    `<strong>${escapeHtml(bucket.label)}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
                     `Total Distance: ${formatDistanceCompact(bucket.total_distance_meters, 1)}`,
                     `Avg EF: ${bucket.avg_ef !== null ? formatNumber(bucket.avg_ef, 2) : '—'}`,
                     `Avg Decoupling: ${bucket.avg_decoupling !== null ? `${formatSigned(bucket.avg_decoupling, 1)}%` : '—'}`,
@@ -1329,12 +1368,16 @@ const timeOfDayChartOption = computed<EChartsOption>(() => {
                 }
 
                 return [
-                    `<strong>${bucket.label}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
+                    `<strong>${escapeHtml(bucket.label)}</strong> (${bucket.count} ${bucket.count === 1 ? 'session' : 'sessions'})`,
                     `Total Distance: ${formatDistanceCompact(bucket.total_distance_meters, 1)}`,
                     `Avg EF: ${bucket.avg_ef !== null ? formatNumber(bucket.avg_ef, 2) : '—'}`,
                     `Avg Decoupling: ${bucket.avg_decoupling !== null ? `${formatSigned(bucket.avg_decoupling, 1)}%` : '—'}`,
-                    `${usePaceFormat.value ? 'Avg Pace' : 'Avg Speed'}: ${formatSpeedOrPace(bucket.avg_speed)}`,
-                ].join('<br/>');
+                    hasComparableSpeed.value
+                        ? `${usePaceFormat.value ? 'Avg Pace' : 'Avg Speed'}: ${formatSpeedOrPace(bucket.avg_speed)}`
+                        : '',
+                ]
+                    .filter(Boolean)
+                    .join('<br/>');
             },
         },
         xAxis: {
@@ -1565,7 +1608,7 @@ function windBadgeTone(key: string): string {
                                     ? `${formatNumber(summary.best_sleep_bucket.avg_ef, 2)} EF`
                                     : '—'
                             }}
-                            · {{ summary.best_sleep_bucket.count }} sessions
+                            · {{ summary.best_sleep_bucket.count }} days
                         </p>
                     </template>
                     <template v-else>
@@ -1577,7 +1620,7 @@ function windBadgeTone(key: string): string {
                         <p
                             class="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400"
                         >
-                            Need ≥5 sleep + EF sessions ({{
+                            Need ≥5 sleep-matched days and ≥3 per band ({{
                                 summary.with_sleep
                             }}
                             matched)
@@ -1636,7 +1679,7 @@ function windBadgeTone(key: string): string {
                         <p
                             class="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400"
                         >
-                            Need ≥5 weather + EF sessions ({{
+                            Need ≥5 weather-matched sessions and ≥3 per band ({{
                                 summary.with_weather
                             }}
                             matched)
@@ -1687,7 +1730,7 @@ function windBadgeTone(key: string): string {
                         <p
                             class="mt-1 text-[11px] text-zinc-500 dark:text-zinc-400"
                         >
-                            Need ≥5 sessions with EF ({{
+                            Need ≥5 sessions and ≥3 with EF per time slot ({{
                                 summary.with_derived_metrics
                             }}
                             computed)
@@ -1740,6 +1783,12 @@ function windBadgeTone(key: string): string {
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
                         >
+                            Days {{ summary.training_days }}
+                        </span>
+                        <span
+                            class="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800/80"
+                            title="Training days matched to same-day sleep"
+                        >
                             Sleep {{ summary.with_sleep }}
                         </span>
                         <span
@@ -1753,6 +1802,19 @@ function windBadgeTone(key: string): string {
                             Weather {{ summary.with_weather }}
                         </span>
                     </div>
+                    <p
+                        v-if="summary.ef_excluded_sessions > 0"
+                        class="mt-2 text-[11px] leading-snug text-zinc-500 dark:text-zinc-400"
+                    >
+                        EF uses {{ efBasisLabel }} sessions only;
+                        {{ summary.ef_excluded_sessions }}
+                        {{
+                            summary.ef_excluded_sessions === 1
+                                ? 'session uses'
+                                : 'sessions use'
+                        }}
+                        a different output basis and can’t be compared.
+                    </p>
                 </div>
             </section>
 
@@ -1774,8 +1836,9 @@ function windBadgeTone(key: string): string {
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             Morning sleep duration and quality paired with
-                            same-day aerobic efficiency. Click any scatter dot
-                            to open the session.
+                            same-day aerobic efficiency, using each day’s
+                            longest session. Click any scatter dot to open the
+                            session.
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
@@ -1991,7 +2054,7 @@ function windBadgeTone(key: string): string {
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             Compare workout output across overnight HRV baseline
                             zones, Garmin HRV status bands, and resting heart
-                            rate.
+                            rate, using each day’s longest session.
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span
@@ -2216,6 +2279,7 @@ function windBadgeTone(key: string): string {
                                     correlationTooltip(
                                         'Temperature vs Efficiency Factor',
                                         weather_impact.correlations.temp_vs_ef,
+                                        'sessions',
                                     )
                                 "
                             >
@@ -2240,6 +2304,7 @@ function windBadgeTone(key: string): string {
                                         'Temperature vs Cardiac Drift',
                                         weather_impact.correlations
                                             .temp_vs_decoupling,
+                                        'sessions',
                                     )
                                 "
                             >
@@ -2458,9 +2523,11 @@ function windBadgeTone(key: string): string {
                             </h2>
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
-                            Matches each session against the following night’s
-                            Sleep Score, deep sleep, and HRV delta vs 7-day
-                            baseline.
+                            Matches each training day against the following
+                            night’s Sleep Score, deep sleep, and HRV delta vs
+                            the prior 7 nights. Multi-session days count once,
+                            using the day’s total load and its hardest session’s
+                            start time.
                         </p>
                         <div class="flex flex-wrap items-center gap-1.5 pt-0.5">
                             <span

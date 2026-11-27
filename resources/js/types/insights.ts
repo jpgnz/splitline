@@ -7,10 +7,15 @@ export interface InsightsAvailableSport {
     accent_hex: string;
 }
 
+export type CorrelationStrength =
+    'strong' | 'moderate' | 'weak' | 'negligible' | 'inconclusive';
+
 export interface CorrelationStat {
     r: number | null;
     n: number;
-    strength: 'strong' | 'moderate' | 'weak' | 'negligible' | null;
+    p_value: number | null;
+    significant: boolean;
+    strength: CorrelationStrength | null;
 }
 
 export interface PerformanceBucket {
@@ -143,7 +148,10 @@ export interface HeadlineTempBucket extends HeadlineBucket {
 
 export interface CorrelationSummary {
     total_activities: number;
+    training_days: number;
     with_derived_metrics: number;
+    ef_metric: 'power' | 'speed' | null;
+    ef_excluded_sessions: number;
     with_sleep: number;
     with_hrv: number;
     with_weather: number;
