@@ -116,6 +116,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
  * @property bool $is_manual
  * @property CarbonImmutable|null $streams_synced_at
  * @property CarbonImmutable|null $streams_unavailable_at
+ * @property CarbonImmutable|null $route_match_skipped_at
  * @property array<int|string, mixed>|null $raw_summary
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -235,6 +236,7 @@ class Activity extends Model
         'is_manual',
         'streams_synced_at',
         'streams_unavailable_at',
+        'route_match_skipped_at',
         'raw_summary',
     ];
 
@@ -337,6 +339,7 @@ class Activity extends Model
             'is_manual' => 'boolean',
             'streams_synced_at' => 'immutable_datetime',
             'streams_unavailable_at' => 'immutable_datetime',
+            'route_match_skipped_at' => 'immutable_datetime',
             'raw_summary' => 'array',
         ];
     }

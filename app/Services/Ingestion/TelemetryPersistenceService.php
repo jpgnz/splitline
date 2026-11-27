@@ -31,6 +31,7 @@ use Splitline\Core\Data\SleepData;
 use Splitline\Core\Data\Vo2MaxData;
 use Splitline\Core\Data\WeightGoalData;
 use Splitline\Core\Data\WeightMeasurementData;
+use Throwable;
 
 /**
  * Single-user Eloquent persistence layer for normalized splitline/core telemetry DTOs.
@@ -335,7 +336,12 @@ class TelemetryPersistenceService
 
         $activity->update($activityUpdates);
 
-        $this->routeMatchingService->matchActivity($activity, $activityStream);
+        try {
+            $this->routeMatchingService->matchActivity($activity, $activityStream);
+        } catch (Throwable $exception) {
+            // Route matching is best-effort enrichment; the scheduled routes:match scan retries it.
+            report($exception);
+        }
 
         if (
             ! $activity->is_indoor

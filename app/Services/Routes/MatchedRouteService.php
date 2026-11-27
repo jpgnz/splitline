@@ -33,6 +33,7 @@ use Illuminate\Database\Eloquent\Builder;
  *     started_at_local: string,
  *     distance_meters: float,
  *     duration_seconds: float,
+ *     normalized_duration_seconds: float,
  *     moving_duration_seconds: ?float,
  *     elevation_gain: ?float,
  *     avg_speed: ?float,
@@ -84,6 +85,25 @@ class MatchedRouteService
      */
     private const array VALID_SORTS = ['count', 'recent', 'distance', 'elevation'];
 
+    /**
+     * Maximum canonical polyline points sent to the route detail map.
+     */
+    private const int CANONICAL_POLYLINE_MAX_POINTS = 1000;
+
+    /**
+     * Activity columns needed to summarize attempts on the routes directory.
+     *
+     * @var list<string>
+     */
+    private const array INDEX_ACTIVITY_COLUMNS = [
+        'id',
+        'distance_meters',
+        'duration_seconds',
+        'avg_speed',
+        'started_at_local',
+        'location_name',
+    ];
+
     public function __construct(
         private readonly ?SportRegistry $sports = null,
         private readonly RouteMatchingService $matcher = new RouteMatchingService,
@@ -112,8 +132,9 @@ class MatchedRouteService
                 'representativeActivity',
                 'fingerprints' => function ($fpQuery): void {
                     $fpQuery
+                        ->select(['id', 'activity_id', 'route_cluster_id', 'is_unlinked'])
                         ->where('is_unlinked', false)
-                        ->with('activity');
+                        ->with('activity:'.implode(',', self::INDEX_ACTIVITY_COLUMNS));
                 },
             ]);
 
@@ -262,7 +283,7 @@ class MatchedRouteService
      */
     public function show(RouteCluster $cluster): array
     {
-        $cluster->load(['representativeActivity.stream']);
+        $cluster->load(['representativeActivity.stream:id,activity_id,polyline']);
 
         $activities = $this->loadClusterActivities($cluster);
         $analyzed = $this->analyzeAttempts($activities);
@@ -413,6 +434,9 @@ class MatchedRouteService
     }
 
     /**
+     * Rank attempts by pace and express deltas, medians, and trends as distance-normalised times
+     * (elapsed time scaled to the median attempt distance), so a shortcut attempt cannot claim the PR.
+     *
      * @param  list<Activity>  $activities
      * @return array{
      *     summary: array{
@@ -458,27 +482,16 @@ class MatchedRouteService
             ];
         }
 
-        /** @var list<Activity> $rankedActivities */
-        $rankedActivities = $activities;
-        usort($rankedActivities, function (Activity $a, Activity $b): int {
-            $durA = $a->duration_seconds > 0.0 ? $a->duration_seconds : INF;
-            $durB = $b->duration_seconds > 0.0 ? $b->duration_seconds : INF;
-            $cmp = $durA <=> $durB;
+        $referenceDistance = $this->referenceDistanceMeters($activities);
 
-            if ($cmp !== 0) {
-                return $cmp;
-            }
+        /** @var array<int, float|null> $normalizedById */
+        $normalizedById = [];
 
-            $speedA = $this->effectiveSpeedMps($a) ?? 0.0;
-            $speedB = $this->effectiveSpeedMps($b) ?? 0.0;
-            $speedCmp = $speedB <=> $speedA;
+        foreach ($activities as $act) {
+            $normalizedById[$act->id] = $this->normalizedDurationSeconds($act, $referenceDistance);
+        }
 
-            if ($speedCmp !== 0) {
-                return $speedCmp;
-            }
-
-            return $a->id <=> $b->id;
-        });
+        $rankedActivities = $this->rankByPace($activities, $normalizedById);
 
         /** @var array<int, int> $ranksByActivityId */
         $ranksByActivityId = [];
@@ -489,10 +502,11 @@ class MatchedRouteService
 
         $prActivity = $rankedActivities[0];
         $prDuration = round($prActivity->duration_seconds, 1);
+        $prNormalized = round($normalizedById[$prActivity->id] ?? $prActivity->duration_seconds, 1);
         $prSpeed = $this->effectiveSpeedMps($prActivity);
 
-        /** @var list<float> $durations */
-        $durations = [];
+        /** @var list<float> $normalizedDurations */
+        $normalizedDurations = [];
         /** @var list<float> $speeds */
         $speeds = [];
         /** @var list<float> $hrs */
@@ -501,8 +515,8 @@ class MatchedRouteService
         $powers = [];
 
         foreach ($activities as $act) {
-            if ($act->duration_seconds > 0.0) {
-                $durations[] = $act->duration_seconds;
+            if ($normalizedById[$act->id] !== null) {
+                $normalizedDurations[] = $normalizedById[$act->id];
             }
 
             $speed = $this->effectiveSpeedMps($act);
@@ -520,8 +534,8 @@ class MatchedRouteService
             }
         }
 
-        $medianDuration = $durations !== [] ? round($this->median($durations), 1) : null;
-        $medianSpeed = $speeds !== [] ? round($this->median($speeds), 3) : null;
+        $medianDuration = $normalizedDurations !== [] ? round(RouteMatchingService::median($normalizedDurations), 1) : null;
+        $medianSpeed = $speeds !== [] ? round(RouteMatchingService::median($speeds), 3) : null;
         $avgHr = $hrs !== [] ? round(array_sum($hrs) / count($hrs), 1) : null;
         $avgPower = $powers !== [] ? round(array_sum($powers) / count($powers), 1) : null;
 
@@ -529,7 +543,7 @@ class MatchedRouteService
         $progression = [];
 
         foreach ($activities as $act) {
-            $duration = round($act->duration_seconds, 1);
+            $normalized = round($normalizedById[$act->id] ?? $act->duration_seconds, 1);
             $rank = $ranksByActivityId[$act->id] ?? count($activities);
             $weatherSummary = $act->weather instanceof ActivityWeather
                 ? $this->mapWeatherSummary($act->weather)
@@ -541,7 +555,8 @@ class MatchedRouteService
                 'date' => $act->started_at_local->format('Y-m-d'),
                 'started_at_local' => $act->started_at_local->format('Y-m-d H:i:s'),
                 'distance_meters' => round($act->distance_meters, 1),
-                'duration_seconds' => $duration,
+                'duration_seconds' => round($act->duration_seconds, 1),
+                'normalized_duration_seconds' => $normalized,
                 'moving_duration_seconds' => $act->moving_duration_seconds !== null ? round($act->moving_duration_seconds, 1) : null,
                 'elevation_gain' => $act->elevation_gain !== null ? round($act->elevation_gain, 1) : null,
                 'avg_speed' => $this->effectiveSpeedMps($act),
@@ -549,8 +564,8 @@ class MatchedRouteService
                 'max_hr' => $act->max_hr,
                 'avg_power' => $act->avg_power !== null ? round($act->avg_power, 1) : null,
                 'normalized_power' => $act->normalized_power !== null ? round($act->normalized_power, 1) : null,
-                'delta_seconds' => round($duration - $prDuration, 1),
-                'delta_median_seconds' => $medianDuration !== null ? round($duration - $medianDuration, 1) : 0.0,
+                'delta_seconds' => round($normalized - $prNormalized, 1),
+                'delta_median_seconds' => $medianDuration !== null ? round($normalized - $medianDuration, 1) : 0.0,
                 'rank' => $rank,
                 'is_pr' => $act->id === $prActivity->id,
                 'is_current' => $currentActivityId !== null && $act->id === $currentActivityId,
@@ -560,7 +575,7 @@ class MatchedRouteService
 
         $latest = $progression[count($progression) - 1];
         $trendDeltaSeconds = $medianDuration !== null
-            ? round($latest['duration_seconds'] - $medianDuration, 1)
+            ? round($latest['normalized_duration_seconds'] - $medianDuration, 1)
             : null;
 
         $attemptsNewestFirst = array_reverse($progression);
@@ -632,22 +647,22 @@ class MatchedRouteService
             return $a->id <=> $b->id;
         });
 
+        $referenceDistance = $this->referenceDistanceMeters($activities);
         $totalDistance = 0.0;
-        /** @var list<float> $durations */
-        $durations = [];
+        /** @var array<int, float|null> $normalizedById */
+        $normalizedById = [];
+        /** @var list<float> $normalizedDurations */
+        $normalizedDurations = [];
         /** @var list<float> $speeds */
         $speeds = [];
-        $prActivity = null;
 
         foreach ($activities as $act) {
             $totalDistance += $act->distance_meters;
+            $normalized = $this->normalizedDurationSeconds($act, $referenceDistance);
+            $normalizedById[$act->id] = $normalized;
 
-            if ($act->duration_seconds > 0.0) {
-                $durations[] = $act->duration_seconds;
-
-                if ($prActivity === null || $act->duration_seconds < $prActivity->duration_seconds) {
-                    $prActivity = $act;
-                }
+            if ($normalized !== null) {
+                $normalizedDurations[] = $normalized;
             }
 
             $speed = $this->effectiveSpeedMps($act);
@@ -657,10 +672,12 @@ class MatchedRouteService
             }
         }
 
+        $ranked = $this->rankByPace($activities, $normalizedById);
+        $prActivity = $normalizedById[$ranked[0]->id] !== null ? $ranked[0] : null;
         $latest = $activities[count($activities) - 1];
-        $medianDuration = $durations !== [] ? round($this->median($durations), 1) : null;
-        $medianSpeed = $speeds !== [] ? round($this->median($speeds), 3) : null;
-        $latestDuration = round($latest->duration_seconds, 1);
+        $medianDuration = $normalizedDurations !== [] ? round(RouteMatchingService::median($normalizedDurations), 1) : null;
+        $medianSpeed = $speeds !== [] ? round(RouteMatchingService::median($speeds), 3) : null;
+        $latestNormalized = round($normalizedById[$latest->id] ?? $latest->duration_seconds, 1);
 
         return [
             'total_distance_meters' => round($totalDistance, 1),
@@ -670,11 +687,11 @@ class MatchedRouteService
             'pr_date' => $prActivity?->started_at_local->format('Y-m-d'),
             'median_duration_seconds' => $medianDuration,
             'median_speed_mps' => $medianSpeed,
-            'latest_duration_seconds' => $latestDuration,
+            'latest_duration_seconds' => round($latest->duration_seconds, 1),
             'latest_speed_mps' => $this->effectiveSpeedMps($latest),
             'latest_activity_id' => $latest->id,
             'latest_date' => $latest->started_at_local->format('Y-m-d'),
-            'trend_delta_seconds' => $medianDuration !== null ? round($latestDuration - $medianDuration, 1) : null,
+            'trend_delta_seconds' => $medianDuration !== null ? round($latestNormalized - $medianDuration, 1) : null,
         ];
     }
 
@@ -774,7 +791,7 @@ class MatchedRouteService
                 ));
 
                 if ($cool === [] || $warm === []) {
-                    $threshold = round($this->median($temps), 1);
+                    $threshold = round(RouteMatchingService::median($temps), 1);
                     $cool = array_values(array_filter(
                         $withTemp,
                         static fn (array $attempt): bool => $attempt['weather']['temperature_c'] < $threshold,
@@ -820,7 +837,7 @@ class MatchedRouteService
         }
 
         $count = count($items);
-        $avgDuration = array_sum(array_column($items, 'duration_seconds')) / $count;
+        $avgDuration = array_sum(array_column($items, 'normalized_duration_seconds')) / $count;
 
         $speeds = array_values(array_filter(
             array_map(static fn (array $item): ?float => $item['avg_speed'], $items),
@@ -846,7 +863,7 @@ class MatchedRouteService
     private function aggregateTempBucket(string $label, array $items): array
     {
         $count = count($items);
-        $avgDuration = array_sum(array_column($items, 'duration_seconds')) / $count;
+        $avgDuration = array_sum(array_column($items, 'normalized_duration_seconds')) / $count;
         $temps = array_map(
             static fn (array $item): float => (float) ($item['weather']['temperature_c'] ?? 0.0),
             $items,
@@ -957,7 +974,7 @@ class MatchedRouteService
             }
 
             if (count($points) >= 2) {
-                return $points;
+                return RouteMatchingService::downsamplePolyline($points, self::CANONICAL_POLYLINE_MAX_POINTS);
             }
         }
 
@@ -1087,18 +1104,55 @@ class MatchedRouteService
     }
 
     /**
-     * @param  list<float>  $values
+     * Median attempt distance used as the common reference for distance-normalised durations.
+     *
+     * @param  list<Activity>  $activities
      */
-    private function median(array $values): float
+    private function referenceDistanceMeters(array $activities): float
     {
-        sort($values);
-        $count = count($values);
-        $mid = intdiv($count, 2);
+        $distances = [];
 
-        if ($count % 2 === 1) {
-            return $values[$mid];
+        foreach ($activities as $activity) {
+            if ($activity->distance_meters > 0.0) {
+                $distances[] = $activity->distance_meters;
+            }
         }
 
-        return ($values[$mid - 1] + $values[$mid]) / 2.0;
+        return $distances !== [] ? RouteMatchingService::median($distances) : 0.0;
+    }
+
+    /**
+     * Elapsed time scaled to the reference distance, so attempts of slightly different lengths
+     * (e.g. a shortcut) are compared by pace rather than raw time.
+     */
+    private function normalizedDurationSeconds(Activity $activity, float $referenceDistanceMeters): ?float
+    {
+        if ($activity->duration_seconds <= 0.0) {
+            return null;
+        }
+
+        if ($activity->distance_meters <= 0.0 || $referenceDistanceMeters <= 0.0) {
+            return $activity->duration_seconds;
+        }
+
+        return $activity->duration_seconds * ($referenceDistanceMeters / $activity->distance_meters);
+    }
+
+    /**
+     * Order attempts fastest pace first (attempts without a usable duration last).
+     *
+     * @param  list<Activity>  $activities
+     * @param  array<int, float|null>  $normalizedById
+     * @return list<Activity>
+     */
+    private function rankByPace(array $activities, array $normalizedById): array
+    {
+        usort($activities, static function (Activity $a, Activity $b) use ($normalizedById): int {
+            $cmp = ($normalizedById[$a->id] ?? INF) <=> ($normalizedById[$b->id] ?? INF);
+
+            return $cmp !== 0 ? $cmp : $a->id <=> $b->id;
+        });
+
+        return $activities;
     }
 }

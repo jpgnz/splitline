@@ -1,5 +1,6 @@
 <?php
 
+use App\Jobs\MatchUnfingerprintedRoutesJob;
 use App\Models\Activity;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\ActivityStream;
@@ -7,6 +8,7 @@ use App\Models\ActivityWeather;
 use App\Models\RouteCluster;
 use App\Services\Routes\RouteMatchingService;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function () {
@@ -314,7 +316,7 @@ it('includes matchedRoute payload on ActivityController::show only when cluster 
     $s2 = ActivityStream::factory()->create(['activity_id' => $slower->id, 'polyline' => routeTestLoop(drift: 0.0001)]);
     $matcher->matchActivity($slower, $s2);
 
-    // Now 2 attempts -> matchedRoute populated with rank #2 of 2 and +120s delta vs PR
+    // Deltas are distance-normalised: 1380s/5020m vs 1260s/5000m, both scaled to the 5010m median distance
     $this->get("/activities/{$slower->id}")
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
@@ -323,8 +325,99 @@ it('includes matchedRoute payload on ActivityController::show only when cluster 
             ->where('matchedRoute.current.rank', 2)
             ->where('matchedRoute.current.total_attempts', 2)
             ->where('matchedRoute.current.is_pr', false)
-            ->where('matchedRoute.current.delta_pr_seconds', 120)
+            ->where('matchedRoute.current.delta_pr_seconds', 114.8)
             ->has('matchedRoute.progression', 2)
             ->has('matchedRoute.attempts', 2),
         );
+});
+
+it('ranks attempts by distance-normalised pace so a shortcut cannot claim the PR', function () {
+    $matcher = app(RouteMatchingService::class);
+
+    $fullLoop = Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-01 07:00:00'),
+        'distance_meters' => 5000.0,
+        'duration_seconds' => 1500.0,
+    ]);
+    $s1 = ActivityStream::factory()->create(['activity_id' => $fullLoop->id, 'polyline' => routeTestLoop()]);
+
+    // ~10% shorter, 30s quicker overall but a slower pace
+    $shortcut = Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-05 07:00:00'),
+        'distance_meters' => 4500.0,
+        'duration_seconds' => 1470.0,
+    ]);
+    $s2 = ActivityStream::factory()->create(['activity_id' => $shortcut->id, 'polyline' => routeTestLoop(drift: 0.0001)]);
+
+    $fp = $matcher->matchActivity($fullLoop, $s1);
+    $matcher->matchActivity($shortcut, $s2);
+
+    $this->get("/routes/{$fp?->route_cluster_id}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('summary.pr_activity_id', $fullLoop->id)
+            ->where('summary.pr_duration_seconds', 1500)
+            ->where('progression.0.is_pr', true)
+            ->where('progression.1.activity_id', $shortcut->id)
+            ->where('progression.1.rank', 2)
+            ->where('progression.1.is_pr', false),
+        );
+
+    $this->get('/routes')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('routes.0.pr_activity_id', $fullLoop->id),
+        );
+});
+
+it('caps the canonical route polyline sent to the detail page', function () {
+    $matcher = app(RouteMatchingService::class);
+    $densePolyline = [];
+
+    for ($i = 0; $i < 1500; $i++) {
+        $angle = ($i / 1499) * 2.0 * M_PI;
+        $densePolyline[] = [round(-36.85 + (0.0072 * sin($angle)), 5), round(174.76 + (0.0072 * cos($angle)), 5)];
+    }
+
+    $activity = Activity::factory()->create(['distance_meters' => 5000.0]);
+    $stream = ActivityStream::factory()->create(['activity_id' => $activity->id, 'polyline' => $densePolyline]);
+    $fp = $matcher->matchActivity($activity, $stream);
+
+    $this->get("/routes/{$fp?->route_cluster_id}")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->has('polyline', 1000)
+            ->where('polyline.0', $densePolyline[0])
+            ->where('polyline.999', $densePolyline[1499]),
+        );
+});
+
+it('does not freeze the auto-detected name when it is saved unchanged', function () {
+    $cluster = RouteCluster::factory()->create([
+        'name' => 'Auto Loop',
+        'name_override' => null,
+    ]);
+
+    $this->from("/routes/{$cluster->id}")
+        ->patch("/routes/{$cluster->id}", ['name_override' => ' Auto Loop '])
+        ->assertRedirect("/routes/{$cluster->id}");
+
+    expect($cluster->fresh()?->name_override)->toBeNull();
+});
+
+it('queues route matching instead of scanning inline when too many activities are pending', function () {
+    Queue::fake();
+
+    Activity::factory()
+        ->count(251)
+        ->has(ActivityStream::factory()->state(['polyline' => routeTestLoop()]), 'stream')
+        ->create(['distance_meters' => 5000.0]);
+
+    $this->from('/routes')
+        ->post('/routes/scan')
+        ->assertRedirect('/routes')
+        ->assertSessionHas('status', 'Queued background route matching for 251 activities. Refresh shortly to see matched routes.');
+
+    Queue::assertPushed(MatchUnfingerprintedRoutesJob::class, fn (MatchUnfingerprintedRoutesJob $job): bool => $job->rebuild === false);
+    expect(ActivityRouteFingerprint::query()->count())->toBe(0);
 });
