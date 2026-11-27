@@ -191,6 +191,7 @@ import {
 import {
     buildPaceTelemetrySeries,
     buildStartupGatedTelemetrySeries,
+    percentileOf,
     rollingAverage,
 } from '@/lib/telemetry';
 import { M_TO_FT, useUnits } from '@/lib/units';
@@ -209,11 +210,15 @@ const props = withDefaults(
         jumps: JumpEvent[];
         usesPace: boolean;
         isRunning: boolean;
+        isSwimming?: boolean;
+        cadenceUnit?: string | null;
         hasAmbientWeather: boolean;
         weather?: ActivityWeatherPayload | null;
         highlightRange?: HighlightRange | null;
     }>(),
     {
+        isSwimming: false,
+        cadenceUnit: null,
         weather: null,
         highlightRange: null,
     },
@@ -232,12 +237,15 @@ const {
     speedUnit,
     tempUnit,
     strideUnit,
+    oscillationUnit,
     distanceFromMeters,
     elevationFromMeters,
     speedFromMps,
     paceSecondsFromMps,
     tempFromC,
+    oscillationFromCm,
     formatDistance,
+    formatPace100m,
     formatPaceSeconds,
     formatSpeed,
 } = useUnits();
@@ -249,6 +257,10 @@ const verticalMetricMode = defineModel<'ratio' | 'oscillation'>(
 const powerUnitMode = defineModel<'watts' | 'pct'>('powerUnitMode', {
     default: 'watts',
 });
+
+const resolvedCadenceUnit = computed<string>(
+    () => props.cadenceUnit || (props.isRunning ? 'spm' : 'rpm'),
+);
 
 const inspectMode = ref(false);
 const selectionStartIndex = ref<number | null>(null);
@@ -410,6 +422,39 @@ function toggleInspectMode(): void {
     }
 }
 
+function closeInspectPanel(): void {
+    inspectMode.value = false;
+    clearSelection();
+}
+
+/**
+ * Approximate the series index under the pointer from its horizontal position, for touch drags
+ * where ECharts does not report axis-pointer hover indices.
+ */
+function resolveIndexFromPointerEvent(event: PointerEvent): number | null {
+    const el = event.currentTarget as HTMLElement | null;
+
+    if (!el || props.series.length < 2) {
+        return null;
+    }
+
+    const rect = el.getBoundingClientRect();
+
+    if (rect.width <= 0) {
+        return null;
+    }
+
+    const leftPad = rect.width > 96 ? 48 : 12;
+    const rightPad = 16;
+    const usableWidth = Math.max(1, rect.width - leftPad - rightPad);
+    const ratio = Math.max(
+        0,
+        Math.min(1, (event.clientX - rect.left - leftPad) / usableWidth),
+    );
+
+    return Math.round(ratio * (props.series.length - 1));
+}
+
 function handleSelectionCardUpdate(payload: {
     startIndex: number;
     endIndex: number;
@@ -485,6 +530,14 @@ function applyPendingDrag(): void {
     );
 }
 
+function queueDragIndex(index: number): void {
+    pendingDragIndex = index;
+
+    if (dragFrameId === null) {
+        dragFrameId = requestAnimationFrame(applyPendingDrag);
+    }
+}
+
 function cancelPendingDrag(): void {
     if (dragFrameId !== null) {
         cancelAnimationFrame(dragFrameId);
@@ -492,6 +545,18 @@ function cancelPendingDrag(): void {
     }
 
     pendingDragIndex = null;
+}
+
+/** Returns false when the index is unchanged so callers can skip redundant work. */
+function setHoveredIndex(index: number | null): boolean {
+    if (index === hoveredStreamIndex) {
+        return false;
+    }
+
+    hoveredStreamIndex = index;
+    emit('hoverIndex', index);
+
+    return true;
 }
 
 /**
@@ -503,21 +568,12 @@ function handleChartHover(panelKey: string, index: number | null): void {
         return;
     }
 
-    if (index === hoveredStreamIndex) {
+    if (!setHoveredIndex(index)) {
         return;
     }
 
-    hoveredStreamIndex = index;
-    emit('hoverIndex', index);
-
-    if (!isPointerDown || !inspectMode.value || index === null) {
-        return;
-    }
-
-    pendingDragIndex = index;
-
-    if (dragFrameId === null) {
-        dragFrameId = requestAnimationFrame(applyPendingDrag);
+    if (isPointerDown && inspectMode.value && index !== null) {
+        queueDragIndex(index);
     }
 }
 
@@ -532,24 +588,51 @@ function handleChartPointerLeave(panelKey: string): void {
 
     pointerPanelKey = null;
 
-    if (hoveredStreamIndex !== null && !isPointerDown) {
-        hoveredStreamIndex = null;
-        emit('hoverIndex', null);
+    if (!isPointerDown) {
+        setHoveredIndex(null);
     }
 }
 
 function handleChartPointerDown(event: PointerEvent): void {
     if (
         !inspectMode.value ||
-        event.button !== 0 ||
-        hoveredStreamIndex === null
+        (event.pointerType !== 'touch' && event.button !== 0)
     ) {
         return;
     }
 
+    const startIdx =
+        event.pointerType === 'touch'
+            ? resolveIndexFromPointerEvent(event)
+            : (hoveredStreamIndex ?? resolveIndexFromPointerEvent(event));
+
+    if (startIdx === null) {
+        return;
+    }
+
     isPointerDown = true;
-    dragAnchorIndex = hoveredStreamIndex;
+    dragAnchorIndex = startIdx;
     didDragSelect = false;
+}
+
+/**
+ * Touch drags (and mouse moves before ECharts reports an index) emit no axis-pointer hover, so
+ * derive the index from the pointer position and feed the same batched drag path.
+ */
+function handleChartPointerMove(event: PointerEvent): void {
+    if (!isPointerDown || !inspectMode.value || dragAnchorIndex === null) {
+        return;
+    }
+
+    if (event.pointerType !== 'touch' && hoveredStreamIndex !== null) {
+        return;
+    }
+
+    const index = resolveIndexFromPointerEvent(event);
+
+    if (index !== null && setHoveredIndex(index)) {
+        queueDragIndex(index);
+    }
 }
 
 function handleWindowPointerUp(): void {
@@ -571,6 +654,22 @@ function handleWindowPointerUp(): void {
     didDragSelect = false;
 }
 
+function handleWindowKeyDown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') {
+        return;
+    }
+
+    if (pendingClickStart.value !== null) {
+        pendingClickStart.value = null;
+
+        return;
+    }
+
+    if (inspectMode.value) {
+        inspectMode.value = false;
+    }
+}
+
 function handleChartPointClick(payload: ChartPointClickPayload): void {
     if (!inspectMode.value) {
         return;
@@ -589,13 +688,16 @@ function handleChartContainerClick(): void {
         handleInspectClick(hoveredStreamIndex);
     }
 }
-
 onMounted(() => {
     window.addEventListener('pointerup', handleWindowPointerUp);
+    window.addEventListener('pointercancel', handleWindowPointerUp);
+    window.addEventListener('keydown', handleWindowKeyDown);
 });
 
 onBeforeUnmount(() => {
     window.removeEventListener('pointerup', handleWindowPointerUp);
+    window.removeEventListener('pointercancel', handleWindowPointerUp);
+    window.removeEventListener('keydown', handleWindowKeyDown);
     cancelPendingDrag();
 });
 
@@ -709,7 +811,7 @@ function buildRunWalkOption(showXAxisLabels: boolean): EChartsOption {
         }
 
         const type = matched?.type ?? 'run';
-        const level = type === 'idle' ? 3 : type === 'walk' ? 2 : 1;
+        const level = type === 'run' ? 3 : type === 'walk' ? 2 : 1;
 
         pointMeta.push({
             type,
@@ -721,10 +823,11 @@ function buildRunWalkOption(showXAxisLabels: boolean): EChartsOption {
     return {
         animation: false,
         grid: {
-            left: 56,
+            left: 12,
             right: 16,
             top: 10,
             bottom: showXAxisLabels ? 26 : 10,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -774,6 +877,7 @@ function buildRunWalkOption(showXAxisLabels: boolean): EChartsOption {
             axisLabel: showXAxisLabels
                 ? {
                       ...axisLabelStyle,
+                      hideOverlap: true,
                       interval: Math.max(
                           0,
                           Math.floor(streamXAxisLabels.value.length / 6) - 1,
@@ -789,7 +893,7 @@ function buildRunWalkOption(showXAxisLabels: boolean): EChartsOption {
             axisLabel: {
                 ...axisLabelStyle,
                 formatter: (val: number) => {
-                    if (val === 1) {
+                    if (val === 3) {
                         return 'Run';
                     }
 
@@ -797,7 +901,7 @@ function buildRunWalkOption(showXAxisLabels: boolean): EChartsOption {
                         return 'Walk';
                     }
 
-                    if (val === 3) {
+                    if (val === 1) {
                         return 'Idle';
                     }
 
@@ -943,10 +1047,11 @@ function buildTelemetryChartOption(config: {
     return {
         animation: false,
         grid: {
-            left: 56,
+            left: 12,
             right: 16,
             top: 14,
             bottom: config.showXAxisLabels ? 26 : 12,
+            containLabel: true,
         },
         ...(config.visualMapPieces
             ? {
@@ -1024,6 +1129,7 @@ function buildTelemetryChartOption(config: {
             axisLabel: config.showXAxisLabels
                 ? {
                       ...axisLabelStyle,
+                      hideOverlap: true,
                       interval: Math.max(
                           0,
                           Math.floor(streamXAxisLabels.value.length / 6) - 1,
@@ -1061,11 +1167,23 @@ function buildStaminaOption(showXAxisLabels: boolean): EChartsOption {
 
     return {
         animation: false,
+        legend: {
+            top: 2,
+            right: 8,
+            itemWidth: 12,
+            itemHeight: 8,
+            textStyle: {
+                color: theme.mutedColor.value,
+                fontFamily: monoFont,
+                fontSize: 10,
+            },
+        },
         grid: {
-            left: 56,
+            left: 12,
             right: 16,
-            top: 14,
+            top: 32,
             bottom: showXAxisLabels ? 26 : 12,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -1109,6 +1227,7 @@ function buildStaminaOption(showXAxisLabels: boolean): EChartsOption {
             axisLabel: showXAxisLabels
                 ? {
                       ...axisLabelStyle,
+                      hideOverlap: true,
                       interval: Math.max(
                           0,
                           Math.floor(streamXAxisLabels.value.length / 6) - 1,
@@ -1183,10 +1302,11 @@ function buildPerformanceConditionOption(
     return {
         animation: false,
         grid: {
-            left: 56,
+            left: 12,
             right: 16,
             top: 14,
             bottom: showXAxisLabels ? 26 : 12,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -1225,6 +1345,7 @@ function buildPerformanceConditionOption(
             axisLabel: showXAxisLabels
                 ? {
                       ...axisLabelStyle,
+                      hideOverlap: true,
                       interval: Math.max(
                           0,
                           Math.floor(streamXAxisLabels.value.length / 6) - 1,
@@ -1254,7 +1375,7 @@ function buildPerformanceConditionOption(
                     return {
                         value: v,
                         itemStyle: {
-                            color: v !== null && v < 0 ? '#3b82f6' : '#0ea5e9',
+                            color: v !== null && v < 0 ? '#f43f5e' : '#10b981',
                         },
                     };
                 }),
@@ -1279,11 +1400,23 @@ function buildDualPercentOption(config: {
 
     return {
         animation: false,
+        legend: {
+            top: 2,
+            right: 8,
+            itemWidth: 12,
+            itemHeight: 8,
+            textStyle: {
+                color: theme.mutedColor.value,
+                fontFamily: monoFont,
+                fontSize: 10,
+            },
+        },
         grid: {
-            left: 56,
+            left: 12,
             right: 16,
-            top: 14,
+            top: 32,
             bottom: config.showXAxisLabels ? 26 : 12,
+            containLabel: true,
         },
         tooltip: {
             trigger: 'axis',
@@ -1295,6 +1428,29 @@ function buildDualPercentOption(config: {
                     type: 'dashed',
                 },
             },
+            formatter: (params: unknown) => {
+                const list = Array.isArray(params) ? params : [params];
+                const header =
+                    (list[0] as { axisValueLabel?: string } | undefined)
+                        ?.axisValueLabel ?? '';
+                const lines = list
+                    .map((item) => {
+                        const p = item as {
+                            seriesName?: string;
+                            value?: number | null;
+                        };
+                        const val =
+                            typeof p.value === 'number' &&
+                            Number.isFinite(p.value)
+                                ? `${p.value.toFixed(1)}%`
+                                : '—';
+
+                        return `<strong>${p.seriesName}:</strong> ${val}`;
+                    })
+                    .join('<br/>');
+
+                return `<div><div style="opacity:0.65;margin-bottom:2px">${header}</div>${lines}</div>`;
+            },
         },
         xAxis: {
             type: 'category',
@@ -1305,6 +1461,7 @@ function buildDualPercentOption(config: {
             axisLabel: config.showXAxisLabels
                 ? {
                       ...axisLabelStyle,
+                      hideOverlap: true,
                       interval: Math.max(
                           0,
                           Math.floor(streamXAxisLabels.value.length / 6) - 1,
@@ -1405,13 +1562,98 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                         : 'rgba(16, 185, 129, 0.14)',
                     unit: elevUnitLabel,
                     valueFormatter: (v) => `${Math.round(v)} ${elevUnitLabel}`,
+                    axisValueFormatter: (v) => `${Math.round(v)}`,
                     showXAxisLabels: isLast,
                 }),
         });
     }
 
     if (panelKeys.has('speed')) {
-        if (props.usesPace) {
+        if (props.isSwimming) {
+            const rawSwimPace = props.series.map((p) => {
+                if (p.speed === null || p.speed <= 0.2) {
+                    return null;
+                }
+
+                const secPer100m = 100 / p.speed;
+
+                return secPer100m >= 40 && secPer100m <= 360
+                    ? Math.round(secPer100m)
+                    : null;
+            });
+            const validSwim = rawSwimPace
+                .filter((v): v is number => v !== null)
+                .sort((a, b) => a - b);
+            const p02 =
+                validSwim.length > 5
+                    ? percentileOf(validSwim, 0.02)
+                    : (validSwim[0] ?? 80);
+            const p98 =
+                validSwim.length > 5
+                    ? percentileOf(validSwim, 0.98)
+                    : (validSwim[validSwim.length - 1] ?? 180);
+            const yMin = Math.max(40, Math.floor((p02 - 10) / 5) * 5);
+            const yMax = Math.max(
+                yMin + 15,
+                Math.min(360, Math.ceil((p98 + 10) / 5) * 5),
+            );
+            const smoothedSwim = rollingAverage(
+                rawSwimPace.map((v) =>
+                    v !== null ? Math.max(yMin, Math.min(yMax, v)) : null,
+                ),
+                3,
+            );
+            const avgSwimSec =
+                props.activity.avg_speed && props.activity.avg_speed > 0
+                    ? Math.round(100 / props.activity.avg_speed)
+                    : null;
+
+            activePanels.push({
+                key: 'pace',
+                title: 'Pace',
+                unit: 'min/100m',
+                dotClass: 'bg-sky-500',
+                height: 155,
+                build: (isLast) =>
+                    buildTelemetryChartOption({
+                        seriesName: 'Pace',
+                        data: smoothedSwim,
+                        color: '#0ea5e9',
+                        areaColor: theme.isDark.value
+                            ? 'rgba(14, 165, 233, 0.14)'
+                            : 'rgba(14, 165, 233, 0.12)',
+                        areaOrigin: 'end',
+                        unit: '/100m',
+                        inverse: true,
+                        min: yMin,
+                        max: yMax,
+                        avgLine:
+                            avgSwimSec &&
+                            avgSwimSec >= yMin &&
+                            avgSwimSec <= yMax
+                                ? {
+                                      value: avgSwimSec,
+                                      label: `Avg ${formatPace100m(props.activity.avg_speed)}`,
+                                  }
+                                : null,
+                        valueFormatter: (v) => {
+                            const total = Math.round(v);
+                            const mins = Math.floor(total / 60);
+                            const secs = total % 60;
+
+                            return `${mins}:${String(secs).padStart(2, '0')} /100m`;
+                        },
+                        axisValueFormatter: (v) => {
+                            const total = Math.round(v);
+                            const mins = Math.floor(total / 60);
+                            const secs = total % 60;
+
+                            return `${mins}:${String(secs).padStart(2, '0')}`;
+                        },
+                        showXAxisLabels: isLast,
+                    }),
+            });
+        } else if (props.usesPace) {
             const paceSeries = buildPaceTelemetrySeries({
                 times: streamTimes,
                 speeds: props.series.map((p) => p.speed),
@@ -1427,6 +1669,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
             const avgPaceSec =
                 avgPaceRaw !== null ? Math.round(avgPaceRaw) : null;
             const paceUnitLabel = isImperial.value ? 'min/mi' : 'min/km';
+            const paceUnitSuffix = isImperial.value ? '/mi' : '/km';
 
             activePanels.push({
                 key: 'pace',
@@ -1445,7 +1688,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                             ? 'rgba(245, 158, 11, 0.14)'
                             : 'rgba(245, 158, 11, 0.12)',
                         areaOrigin: 'end',
-                        unit: isImperial.value ? '/mi' : '/km',
+                        unit: paceUnitSuffix,
                         inverse: true,
                         min: yMin,
                         max: yMax,
@@ -1459,6 +1702,13 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                                   }
                                 : null,
                         valueFormatter: (v) => {
+                            const total = Math.round(v);
+                            const mins = Math.floor(total / 60);
+                            const secs = total % 60;
+
+                            return `${mins}:${String(secs).padStart(2, '0')} ${paceUnitSuffix}`;
+                        },
+                        axisValueFormatter: (v) => {
                             const total = Math.round(v);
                             const mins = Math.floor(total / 60);
                             const secs = total % 60;
@@ -1534,7 +1784,8 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                                   label: `Avg ${props.activity.avg_hr} bpm`,
                               }
                             : null,
-                    valueFormatter: (v) => `${Math.round(v)}`,
+                    valueFormatter: (v) => `${Math.round(v)} bpm`,
+                    axisValueFormatter: (v) => `${Math.round(v)}`,
                     showXAxisLabels: isLast,
                 }),
         });
@@ -1637,6 +1888,8 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                         : null,
                     valueFormatter: (v) =>
                         `${Math.round(v)}${usePct ? '%' : ' W'}`,
+                    axisValueFormatter: (v) =>
+                        `${Math.round(v)}${usePct ? '%' : ''}`,
                     showXAxisLabels: isLast,
                 }),
         });
@@ -1690,13 +1943,13 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
 
         activePanels.push({
             key: 'left_balance',
-            title: 'L / R Power Balance (Smoothed)',
-            unit: '% Left',
+            title: 'Power Balance (L / R)',
+            unit: '% Left · Smoothed',
             dotClass: 'bg-cyan-500',
             height: 140,
             build: (isLast) =>
                 buildTelemetryChartOption({
-                    seriesName: 'L / R Balance',
+                    seriesName: 'Power Balance (L / R)',
                     data: smoothedLeft,
                     color: '#06b6d4',
                     areaColor: theme.isDark.value
@@ -1812,7 +2065,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
     }
 
     if (panelKeys.has('cadence')) {
-        const cadUnit = props.isRunning ? 'spm' : 'rpm';
+        const cadUnit = resolvedCadenceUnit.value;
         const avgCad = props.activity.avg_cadence;
 
         activePanels.push({
@@ -1845,7 +2098,8 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                                   label: `Avg ${Math.round(avgCad)} ${cadUnit}`,
                               }
                             : null,
-                    valueFormatter: (v) => `${Math.round(v)}`,
+                    valueFormatter: (v) => `${Math.round(v)} ${cadUnit}`,
+                    axisValueFormatter: (v) => `${Math.round(v)}`,
                     showXAxisLabels: isLast,
                 }),
         });
@@ -1924,6 +2178,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                           }
                         : null,
                     valueFormatter: (v) => `${v.toFixed(2)} ${strideUnitLabel}`,
+                    axisValueFormatter: (v) => v.toFixed(2),
                     showXAxisLabels: isLast,
                 }),
         });
@@ -1932,20 +2187,30 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
     if (panelKeys.has('vertical')) {
         const showOsc =
             verticalMetricMode.value === 'oscillation' && available.verticalOsc;
+        const oscUnitLabel = oscillationUnit.value;
         const rawVerticalData = showOsc
-            ? props.series.map((p) => p.vertical_oscillation ?? null)
+            ? props.series.map((p) => {
+                  const cm = p.vertical_oscillation;
+
+                  if (cm === null || cm === undefined || !Number.isFinite(cm)) {
+                      return null;
+                  }
+
+                  return Number(oscillationFromCm(cm).toFixed(2));
+              })
             : props.series.map((p) => p.vertical_ratio ?? null);
         const verticalSeries = buildStartupGatedTelemetrySeries({
             times: streamTimes,
             values: rawVerticalData,
-            step: 0.5,
-            minMargin: 0.5,
+            step: showOsc && isImperial.value ? 0.2 : 0.5,
+            minMargin: showOsc && isImperial.value ? 0.2 : 0.5,
             excludeZero: true,
             minFloor: 0,
         });
         const avgVal = showOsc
-            ? (props.activity.avg_vertical_oscillation ??
-              averageOf(rawVerticalData))
+            ? props.activity.avg_vertical_oscillation !== null
+                ? oscillationFromCm(props.activity.avg_vertical_oscillation)
+                : averageOf(rawVerticalData)
             : (props.activity.avg_vertical_ratio ?? averageOf(rawVerticalData));
         const avgVerticalValue =
             avgVal !== null ? Number(avgVal.toFixed(1)) : null;
@@ -1959,7 +2224,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         activePanels.push({
             key: 'vertical_dynamics',
             title: showOsc ? 'Vertical Oscillation' : 'Vertical Ratio',
-            unit: showOsc ? 'cm' : '%',
+            unit: showOsc ? oscUnitLabel : '%',
             dotClass: 'bg-violet-500',
             height: 135,
             hasVerticalToggle: available.verticalRatio && available.verticalOsc,
@@ -1972,16 +2237,28 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                     dottedData: verticalSeries.dottedData,
                     tooltipValues: verticalSeries.tooltipValues,
                     color: '#8b5cf6',
-                    unit: showOsc ? 'cm' : '%',
+                    unit: showOsc ? oscUnitLabel : '%',
                     min: verticalSeries.yMin,
                     max: verticalSeries.yMax,
                     visualMapPieces: showOsc
                         ? [
-                              { lte: 6.7, color: '#8b5cf6' },
-                              { gt: 6.7, lte: 8.3, color: '#3b82f6' },
-                              { gt: 8.3, lte: 10.0, color: '#22c55e' },
-                              { gt: 10.0, lte: 11.7, color: '#f97316' },
-                              { gt: 11.7, color: '#ef4444' },
+                              { lte: oscillationFromCm(6.7), color: '#8b5cf6' },
+                              {
+                                  gt: oscillationFromCm(6.7),
+                                  lte: oscillationFromCm(8.3),
+                                  color: '#3b82f6',
+                              },
+                              {
+                                  gt: oscillationFromCm(8.3),
+                                  lte: oscillationFromCm(10.0),
+                                  color: '#22c55e',
+                              },
+                              {
+                                  gt: oscillationFromCm(10.0),
+                                  lte: oscillationFromCm(11.7),
+                                  color: '#f97316',
+                              },
+                              { gt: oscillationFromCm(11.7), color: '#ef4444' },
                           ]
                         : [
                               { lte: 6.1, color: '#8b5cf6' },
@@ -1993,11 +2270,12 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                     avgLine: showVerticalAvgLine
                         ? {
                               value: avgVerticalValue,
-                              label: `Avg ${avgVerticalValue.toFixed(1)} ${showOsc ? 'cm' : '%'}`,
+                              label: `Avg ${avgVerticalValue.toFixed(1)} ${showOsc ? oscUnitLabel : '%'}`,
                           }
                         : null,
                     valueFormatter: (v) =>
-                        `${v.toFixed(1)} ${showOsc ? 'cm' : '%'}`,
+                        `${v.toFixed(1)} ${showOsc ? oscUnitLabel : '%'}`,
+                    axisValueFormatter: (v) => v.toFixed(1),
                     showXAxisLabels: isLast,
                 }),
         });
@@ -2051,6 +2329,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                           }
                         : null,
                     valueFormatter: (v) => `${Math.round(v)} ms`,
+                    axisValueFormatter: (v) => `${Math.round(v)}`,
                     showXAxisLabels: isLast,
                 }),
         });
@@ -2083,7 +2362,8 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                                   label: `Avg ${Math.round(avgResp)} brpm`,
                               }
                             : null,
-                    valueFormatter: (v) => `${Math.round(v)}`,
+                    valueFormatter: (v) => `${Math.round(v)} brpm`,
+                    axisValueFormatter: (v) => `${Math.round(v)}`,
                     showXAxisLabels: isLast,
                 }),
         });
@@ -2128,6 +2408,7 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                               }
                             : null,
                     valueFormatter: (v) => `${v.toFixed(1)} ${tempUnitLabel}`,
+                    axisValueFormatter: (v) => v.toFixed(1),
                     showXAxisLabels: isLast,
                 }),
         });
@@ -2246,6 +2527,46 @@ function buildSelectionOverlay(
     };
 }
 
+const CORE_STREAM_KEYS = new Set([
+    'elevation',
+    'pace',
+    'speed',
+    'hr',
+    'power',
+    'grit',
+    'flow',
+    'cadence',
+]);
+
+const showExtraStreams = ref<boolean>(false);
+
+watch(
+    () => props.activity.id,
+    () => {
+        showExtraStreams.value = false;
+    },
+);
+
+const coreTelemetryPanels = computed<TelemetryPanel[]>(() =>
+    telemetryPanels.value.filter((panel) => CORE_STREAM_KEYS.has(panel.key)),
+);
+
+const extraTelemetryPanels = computed<TelemetryPanel[]>(() =>
+    telemetryPanels.value.filter((panel) => !CORE_STREAM_KEYS.has(panel.key)),
+);
+
+const visibleTelemetryPanels = computed<TelemetryPanel[]>(() => {
+    if (
+        showExtraStreams.value ||
+        coreTelemetryPanels.value.length === 0 ||
+        extraTelemetryPanels.value.length === 0
+    ) {
+        return telemetryPanels.value;
+    }
+
+    return coreTelemetryPanels.value;
+});
+
 const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
     const range =
         hasActiveSelection.value &&
@@ -2259,7 +2580,7 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
     const anchor = pendingClickStart.value;
     const overlays: Record<string, EChartsOption | null> = {};
 
-    for (const panel of telemetryPanels.value) {
+    for (const panel of visibleTelemetryPanels.value) {
         overlays[panel.key] = buildSelectionOverlay(
             panel.option,
             range,
@@ -2283,36 +2604,66 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
         >
             <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
                 <div class="flex items-center gap-2.5">
+                    <span class="size-1.5 rounded-full bg-emerald-500" />
                     <span
-                        class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         Streams
                     </span>
                     <span
                         class="font-mono text-[11px] text-zinc-400 tabular-nums dark:text-zinc-500"
                     >
-                        {{ formatNumber(series.length, 0) }} samples
+                        {{ formatNumber(series.length, 0) }}
+                        {{ series.length === 1 ? 'sample' : 'samples' }}
                     </span>
                 </div>
 
-                <button
-                    v-if="series.length >= 2"
-                    type="button"
-                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[11px] tracking-wider uppercase transition"
-                    :class="
-                        inspectMode || hasActiveSelection
-                            ? 'border-indigo-500/70 bg-indigo-500/10 text-indigo-700 dark:border-indigo-400/60 dark:bg-indigo-500/15 dark:text-indigo-300'
-                            : 'border-zinc-200/90 bg-[#f7f7f5]/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
-                    "
-                    @click="toggleInspectMode"
-                >
-                    <Crosshair class="size-3.5" />
-                    <span>Inspect Slice</span>
-                    <span
-                        v-if="hasActiveSelection"
-                        class="size-1.5 rounded-full bg-indigo-500 dark:bg-indigo-400"
-                    />
-                </button>
+                <div class="flex flex-wrap items-center gap-2">
+                    <button
+                        v-if="
+                            coreTelemetryPanels.length > 0 &&
+                            extraTelemetryPanels.length > 0
+                        "
+                        type="button"
+                        :aria-expanded="showExtraStreams"
+                        class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-zinc-200/90 bg-[#f7f7f5]/80 px-2.5 py-1 font-mono text-[11px] text-zinc-600 transition hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
+                        @click="showExtraStreams = !showExtraStreams"
+                    >
+                        {{
+                            showExtraStreams
+                                ? 'Hide Extra Streams'
+                                : `+ ${extraTelemetryPanels.length} More ${extraTelemetryPanels.length === 1 ? 'Stream' : 'Streams'}`
+                        }}
+                    </button>
+
+                    <button
+                        v-if="series.length >= 2"
+                        type="button"
+                        :aria-pressed="inspectMode"
+                        class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[11px] tracking-wider uppercase transition"
+                        :class="
+                            inspectMode
+                                ? 'border-indigo-500/70 bg-indigo-500/10 text-indigo-700 dark:border-indigo-400/60 dark:bg-indigo-500/15 dark:text-indigo-300'
+                                : hasActiveSelection
+                                  ? 'border-indigo-500/40 bg-indigo-500/5 text-indigo-600 hover:border-indigo-500/70 dark:border-indigo-400/40 dark:text-indigo-300'
+                                  : 'border-zinc-200/90 bg-[#f7f7f5]/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
+                        "
+                        @click="toggleInspectMode"
+                    >
+                        <Crosshair class="size-3.5" />
+                        <span>
+                            {{
+                                inspectMode
+                                    ? 'Done Inspecting'
+                                    : 'Inspect Slice'
+                            }}
+                        </span>
+                        <span
+                            v-if="hasActiveSelection && !inspectMode"
+                            class="size-1.5 rounded-full bg-indigo-500 dark:bg-indigo-400"
+                        />
+                    </button>
+                </div>
             </div>
 
             <ActivityStreamSelectionCard
@@ -2326,16 +2677,19 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
                 :active-interval-id="activeIntervalId"
                 :uses-pace="usesPace"
                 :is-running="isRunning"
+                :is-swimming="isSwimming"
+                :cadence-unit="resolvedCadenceUnit"
                 :threshold-power="thresholdPowerRef"
                 :weather="weather"
                 @update-range="handleSelectionCardUpdate"
                 @clear="clearSelection"
+                @close="closeInspectPanel"
                 @toggle-inspect-mode="toggleInspectMode"
             />
 
             <div class="space-y-4">
                 <div
-                    v-for="panel in telemetryPanels"
+                    v-for="panel in visibleTelemetryPanels"
                     :key="panel.key"
                     class="rounded-lg border border-zinc-100 bg-[#f7f7f5]/40 px-3 pt-2.5 pb-1 dark:border-zinc-800/70 dark:bg-zinc-900/30"
                 >
@@ -2357,11 +2711,11 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
                             >
                                 <button
                                     type="button"
-                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono"
+                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono transition-colors"
                                     :class="
                                         verticalMetricMode === 'ratio'
                                             ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                                            : 'text-zinc-500'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                     "
                                     @click="verticalMetricMode = 'ratio'"
                                 >
@@ -2369,15 +2723,15 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
                                 </button>
                                 <button
                                     type="button"
-                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono"
+                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono transition-colors"
                                     :class="
                                         verticalMetricMode === 'oscillation'
                                             ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                                            : 'text-zinc-500'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                     "
                                     @click="verticalMetricMode = 'oscillation'"
                                 >
-                                    Osc cm
+                                    Osc {{ oscillationUnit }}
                                 </button>
                             </div>
 
@@ -2387,11 +2741,11 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
                             >
                                 <button
                                     type="button"
-                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono"
+                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono transition-colors"
                                     :class="
                                         powerUnitMode === 'watts'
                                             ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                                            : 'text-zinc-500'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                     "
                                     @click="powerUnitMode = 'watts'"
                                 >
@@ -2399,20 +2753,20 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
                                 </button>
                                 <button
                                     type="button"
-                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono"
+                                    class="cursor-pointer rounded px-1.5 py-0.5 font-mono transition-colors"
                                     :class="
                                         powerUnitMode === 'pct'
                                             ? 'bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950'
-                                            : 'text-zinc-500'
+                                            : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                     "
                                     @click="powerUnitMode = 'pct'"
                                 >
-                                    % Thresh
+                                    % Threshold
                                 </button>
                             </div>
 
                             <span
-                                class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                                class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 {{ panel.unit }}
                             </span>
@@ -2421,11 +2775,14 @@ const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
 
                     <div
                         :class="
-                            inspectMode ? 'cursor-crosshair select-none' : ''
+                            inspectMode
+                                ? 'cursor-crosshair touch-none select-none'
+                                : ''
                         "
                         @pointerenter="handleChartPointerEnter(panel.key)"
                         @pointerleave="handleChartPointerLeave(panel.key)"
                         @pointerdown="handleChartPointerDown"
+                        @pointermove="handleChartPointerMove"
                         @click="handleChartContainerClick"
                     >
                         <BaseChart

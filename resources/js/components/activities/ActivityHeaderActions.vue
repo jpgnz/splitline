@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { router } from '@inertiajs/vue3';
-import { RefreshCw, Star } from '@lucide/vue';
-import { ref, watch } from 'vue';
+import { CloudSun, Ellipsis, RefreshCw } from '@lucide/vue';
+import { onMounted, onUnmounted, ref, watch } from 'vue';
 import {
     syncStreams as syncStreamsAction,
-    toggleFavorite as toggleFavoriteAction,
     updateDiscipline as updateDisciplineAction,
 } from '@/actions/App/Http/Controllers/ActivityController';
 import { assignToActivity } from '@/actions/App/Http/Controllers/GearController';
@@ -29,17 +28,33 @@ export interface DisciplineOption {
     label: string;
 }
 
-const props = defineProps<{
-    activity: ActivityDetail;
-    gear?: ActivityGearPayload;
-    disciplineOptions?: DisciplineOption[];
+const props = withDefaults(
+    defineProps<{
+        activity: ActivityDetail;
+        gear?: ActivityGearPayload;
+        disciplineOptions?: DisciplineOption[];
+        canSyncWeather?: boolean;
+        hasWeather?: boolean;
+        syncingWeather?: boolean;
+    }>(),
+    {
+        canSyncWeather: false,
+        hasWeather: false,
+        syncingWeather: false,
+    },
+);
+
+const emit = defineEmits<{
+    syncWeather: [];
 }>();
 
 const isSyncingStreams = defineModel<boolean>('syncingStreams', {
     default: false,
 });
 
-const isTogglingFavorite = ref<boolean>(false);
+const isOpen = ref<boolean>(false);
+const containerRef = ref<HTMLElement | null>(null);
+const triggerButtonRef = ref<HTMLButtonElement | null>(null);
 const isUpdatingDiscipline = ref<boolean>(false);
 const isUpdatingGear = ref<boolean>(false);
 
@@ -86,25 +101,53 @@ watch(
     },
 );
 
-function toggleFavorite(): void {
-    if (isTogglingFavorite.value) {
+watch(
+    () => props.activity.id,
+    () => {
+        isOpen.value = false;
+    },
+);
+
+function toggleMenu(): void {
+    isOpen.value = !isOpen.value;
+}
+
+function closeMenu(): void {
+    isOpen.value = false;
+}
+
+function handlePointerDown(event: PointerEvent): void {
+    if (!isOpen.value) {
         return;
     }
 
-    router.post(
-        toggleFavoriteAction.url(props.activity.id),
-        {},
-        {
-            preserveScroll: true,
-            onStart: () => {
-                isTogglingFavorite.value = true;
-            },
-            onFinish: () => {
-                isTogglingFavorite.value = false;
-            },
-        },
-    );
+    const target = event.target;
+
+    if (
+        containerRef.value &&
+        target instanceof Node &&
+        !containerRef.value.contains(target)
+    ) {
+        closeMenu();
+    }
 }
+
+function handleKeyDown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && isOpen.value) {
+        closeMenu();
+        triggerButtonRef.value?.focus();
+    }
+}
+
+onMounted(() => {
+    document.addEventListener('pointerdown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+});
+
+onUnmounted(() => {
+    document.removeEventListener('pointerdown', handlePointerDown);
+    document.removeEventListener('keydown', handleKeyDown);
+});
 
 function updateDiscipline(): void {
     if (isUpdatingDiscipline.value) {
@@ -175,103 +218,125 @@ defineExpose({
 </script>
 
 <template>
-    <div class="flex flex-wrap items-center gap-2">
-        <!-- Favorite Star Toggle -->
+    <div ref="containerRef" class="relative inline-block">
         <button
+            ref="triggerButtonRef"
             type="button"
-            :disabled="isTogglingFavorite"
-            :aria-label="
-                activity.is_favorite
-                    ? 'Remove from favorites'
-                    : 'Mark as favorite'
-            "
-            class="inline-flex min-w-[108px] cursor-pointer items-center justify-center gap-1.5 rounded-lg border px-3 py-2 font-mono text-xs font-medium transition-colors disabled:opacity-60"
-            :class="
-                activity.is_favorite
-                    ? 'border-amber-500/50 bg-amber-50 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-300'
-                    : 'border-zinc-200/90 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
-            "
-            @click="toggleFavorite"
+            :aria-expanded="isOpen"
+            aria-haspopup="dialog"
+            class="inline-flex h-8 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100"
+            @click="toggleMenu"
         >
-            <Star
-                class="size-3.5"
-                :class="
-                    activity.is_favorite
-                        ? 'fill-amber-500 text-amber-500'
-                        : 'text-zinc-400'
-                "
-            />
-            <span>{{ activity.is_favorite ? 'Favorited' : 'Favorite' }}</span>
+            <Ellipsis class="size-3.5" />
+            <span>Manage</span>
         </button>
 
-        <!-- Discipline Override Reclassification Select -->
-        <label
-            v-if="(disciplineOptions?.length ?? 0) > 0"
-            class="inline-flex items-center gap-2 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs text-zinc-500 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400"
+        <div
+            v-if="isOpen"
+            role="dialog"
+            aria-label="Manage activity"
+            class="absolute right-0 z-40 mt-1.5 w-64 space-y-3 rounded-xl border border-zinc-200/90 bg-white p-3.5 shadow-lg dark:border-zinc-800/90 dark:bg-[#141417]"
         >
-            <span class="text-[10px] tracking-wider uppercase">
-                Discipline
-            </span>
-            <select
-                v-model="selectedDiscipline"
-                :disabled="isUpdatingDiscipline"
-                aria-label="Activity discipline"
-                class="cursor-pointer rounded bg-transparent pr-1 font-mono text-xs font-medium text-zinc-900 focus:outline-none dark:bg-[#141417] dark:text-zinc-100"
-                @change="updateDiscipline"
-            >
-                <option
-                    v-for="option in disciplineOptions"
-                    :key="option.value"
-                    :value="option.value"
+            <!-- Discipline Override -->
+            <label v-if="(disciplineOptions?.length ?? 0) > 0" class="block">
+                <span
+                    class="block font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    {{ option.label }}
-                </option>
-            </select>
-        </label>
-
-        <!-- Assigned Gear Selector -->
-        <label
-            v-if="gear && gear.available.length > 0"
-            class="inline-flex items-center gap-2 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-xs text-zinc-500 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-400"
-        >
-            <span class="text-[10px] tracking-wider uppercase">Gear</span>
-            <select
-                v-model="selectedGearId"
-                :disabled="isUpdatingGear"
-                aria-label="Assigned gear"
-                class="cursor-pointer rounded bg-transparent pr-1 font-mono text-xs font-medium text-zinc-900 focus:outline-none dark:bg-[#141417] dark:text-zinc-100"
-                @change="updateGear"
-            >
-                <option value="">None</option>
-                <option
-                    v-for="item in gear.available"
-                    :key="item.id"
-                    :value="String(item.id)"
+                    Discipline
+                </span>
+                <select
+                    v-model="selectedDiscipline"
+                    :disabled="isUpdatingDiscipline"
+                    aria-label="Activity discipline"
+                    class="mt-1 w-full cursor-pointer rounded-lg border border-zinc-200/90 bg-[#f7f7f5] px-2.5 py-1.5 font-mono text-xs font-medium text-zinc-900 focus:border-zinc-400 focus:outline-none disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 dark:focus:border-zinc-600"
+                    @change="updateDiscipline"
                 >
-                    {{ item.name }}{{ item.is_retired ? ' (Retired)' : '' }}
-                </option>
-            </select>
-        </label>
+                    <option
+                        v-for="option in disciplineOptions"
+                        :key="option.value"
+                        :value="option.value"
+                    >
+                        {{ option.label }}
+                    </option>
+                </select>
+            </label>
 
-        <!-- Sync FIT Streams Button -->
-        <button
-            type="button"
-            :disabled="isSyncingStreams"
-            class="inline-flex min-w-[178px] cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs font-medium text-zinc-800 transition-colors hover:border-zinc-300 hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-100 dark:hover:border-zinc-700 dark:hover:bg-zinc-800/80"
-            @click="syncStreams"
-        >
-            <RefreshCw
-                :class="['size-3.5', isSyncingStreams && 'animate-spin']"
-            />
-            <span>
-                {{
-                    isSyncingStreams
-                        ? 'Syncing FIT...'
-                        : activity.streams_synced_at
-                          ? 'Re-sync FIT Streams'
-                          : 'Sync FIT Streams'
-                }}
-            </span>
-        </button>
+            <!-- Assigned Gear -->
+            <label v-if="gear && gear.available.length > 0" class="block">
+                <span
+                    class="block font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                >
+                    Assigned Gear
+                </span>
+                <select
+                    v-model="selectedGearId"
+                    :disabled="isUpdatingGear"
+                    aria-label="Assigned gear"
+                    class="mt-1 w-full cursor-pointer rounded-lg border border-zinc-200/90 bg-[#f7f7f5] px-2.5 py-1.5 font-mono text-xs font-medium text-zinc-900 focus:border-zinc-400 focus:outline-none disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-100 dark:focus:border-zinc-600"
+                    @change="updateGear"
+                >
+                    <option value="">None</option>
+                    <option
+                        v-for="item in gear.available"
+                        :key="item.id"
+                        :value="String(item.id)"
+                    >
+                        {{ item.name }}{{ item.is_retired ? ' (Retired)' : '' }}
+                    </option>
+                </select>
+            </label>
+
+            <!-- Data Sync Actions -->
+            <div
+                class="space-y-1 border-t border-zinc-200/80 pt-2.5 dark:border-zinc-800/80"
+            >
+                <button
+                    type="button"
+                    :disabled="isSyncingStreams"
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100"
+                    @click="syncStreams"
+                >
+                    <RefreshCw
+                        :class="[
+                            'size-3.5',
+                            isSyncingStreams && 'animate-spin',
+                        ]"
+                    />
+                    <span>
+                        {{
+                            isSyncingStreams
+                                ? 'Syncing FIT...'
+                                : activity.streams_synced_at
+                                  ? 'Re-sync FIT Streams'
+                                  : 'Sync FIT Streams'
+                        }}
+                    </span>
+                </button>
+
+                <button
+                    v-if="canSyncWeather"
+                    type="button"
+                    :disabled="syncingWeather"
+                    class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100"
+                    @click="emit('syncWeather')"
+                >
+                    <CloudSun
+                        :class="[
+                            'size-3.5 text-sky-500',
+                            syncingWeather && 'animate-pulse',
+                        ]"
+                    />
+                    <span>
+                        {{
+                            syncingWeather
+                                ? 'Refreshing Weather...'
+                                : hasWeather
+                                  ? 'Refresh Weather'
+                                  : 'Fetch Weather'
+                        }}
+                    </span>
+                </button>
+            </div>
+        </div>
     </div>
 </template>

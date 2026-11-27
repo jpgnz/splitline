@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {
-    Activity,
     Gauge,
     HeartPulse,
     Minus,
@@ -9,11 +8,14 @@ import {
 } from '@lucide/vue';
 import { computed } from 'vue';
 import { formatNumber } from '@/lib/format';
+import { useUnits } from '@/lib/units';
 import type { ActivityDerivedMetricsPayload } from '@/types/activity';
 
 const props = defineProps<{
     derivedMetrics: ActivityDerivedMetricsPayload | null;
 }>();
+
+const { efficiencyFactorFromMetric, efficiencyFactorUnit } = useUnits();
 
 const hasDecoupling = computed<boolean>(
     () =>
@@ -44,36 +46,82 @@ const hasHrSplit = computed<boolean>(
 );
 
 const isVisible = computed<boolean>(
-    () => hasDecoupling.value || hasEf.value || hasPacing.value,
+    () =>
+        hasDecoupling.value ||
+        hasEf.value ||
+        hasPacing.value ||
+        hasHrSplit.value,
 );
 
-const metricMeta = computed<{ code: string; efUnit: string; subtitle: string }>(
-    () => {
-        const metric = props.derivedMetrics?.decoupling_metric;
+const visibleTileCount = computed<number>(
+    () =>
+        Number(hasDecoupling.value) +
+        Number(hasEf.value) +
+        Number(hasPacing.value) +
+        Number(hasHrSplit.value),
+);
 
-        if (metric === 'power') {
-            return {
-                code: 'Pw:Hr',
-                efUnit: 'W/bpm',
-                subtitle: 'Power vs Heart Rate',
-            };
-        }
+const gridColsClass = computed<string>(() => {
+    if (visibleTileCount.value <= 1) {
+        return 'grid-cols-1';
+    }
 
-        if (metric === 'gap') {
-            return {
-                code: 'Pa:Hr',
-                efUnit: 'm/min/bpm',
-                subtitle: 'Grade-Adjusted Pace vs HR',
-            };
-        }
+    if (visibleTileCount.value === 2) {
+        return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-2';
+    }
 
+    if (visibleTileCount.value === 3) {
+        return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+    }
+
+    return 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4';
+});
+
+const metricMeta = computed<{
+    code: string;
+    efUnit: string;
+    subtitle: string;
+    tooltip: string;
+}>(() => {
+    const metric = props.derivedMetrics?.decoupling_metric;
+
+    if (metric === 'power') {
         return {
-            code: 'Spd:Hr',
-            efUnit: 'm/min/bpm',
-            subtitle: 'Speed vs Heart Rate',
+            code: 'Pw:Hr',
+            efUnit: 'W/bpm',
+            subtitle: 'Power vs Heart Rate',
+            tooltip:
+                'Power-to-Heart-Rate aerobic decoupling: compares watts per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
         };
-    },
-);
+    }
+
+    const paceEfUnit = efficiencyFactorUnit(metric);
+
+    if (metric === 'gap') {
+        return {
+            code: 'Pa:Hr',
+            efUnit: paceEfUnit,
+            subtitle: 'Grade-Adjusted Pace vs HR',
+            tooltip:
+                'Grade-Adjusted Pace-to-Heart-Rate aerobic decoupling: compares output per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+        };
+    }
+
+    return {
+        code: 'Spd:Hr',
+        efUnit: paceEfUnit,
+        subtitle: 'Speed vs Heart Rate',
+        tooltip:
+            'Speed-to-Heart-Rate aerobic decoupling: compares speed per heartbeat in the 1st vs 2nd half (<5% = well coupled)',
+    };
+});
+
+function convertEfValue(value: number | null | undefined): number | null {
+    return efficiencyFactorFromMetric(
+        value,
+        props.derivedMetrics?.decoupling_metric,
+    );
+}
 
 const decouplingBadge = computed<{
     label: string;
@@ -148,7 +196,7 @@ const formattedDecoupling = computed<string>(() => {
 
 const pacingBadge = computed<{
     label: string;
-    pillClass: string;
+    toneClass: string;
     icon: 'up' | 'even' | 'down';
 } | null>(() => {
     const strategy = props.derivedMetrics?.pacing_strategy;
@@ -160,8 +208,7 @@ const pacingBadge = computed<{
     if (strategy === 'negative_split') {
         return {
             label: 'Negative Split',
-            pillClass:
-                'border-emerald-500/35 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300',
+            toneClass: 'text-emerald-700 dark:text-emerald-400',
             icon: 'up',
         };
     }
@@ -169,18 +216,36 @@ const pacingBadge = computed<{
     if (strategy === 'positive_split') {
         return {
             label: 'Positive Split',
-            pillClass:
-                'border-amber-500/35 bg-amber-50 text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300',
+            toneClass: 'text-amber-700 dark:text-amber-400',
             icon: 'down',
         };
     }
 
     return {
         label: 'Even Split',
-        pillClass:
-            'border-sky-500/35 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300',
+        toneClass: 'text-sky-700 dark:text-sky-400',
         icon: 'even',
     };
+});
+
+const splitDirectionText = computed<string | null>(() => {
+    const ratio = props.derivedMetrics?.split_ratio;
+
+    if (ratio === null || ratio === undefined || !Number.isFinite(ratio)) {
+        return null;
+    }
+
+    const diffPct = (ratio - 1) * 100;
+
+    if (Math.abs(diffPct) < 0.1) {
+        return 'Even halves';
+    }
+
+    if (diffPct > 0) {
+        return `+${formatNumber(diffPct, 1)}% faster 2nd half`;
+    }
+
+    return `−${formatNumber(Math.abs(diffPct), 1)}% slower 2nd half`;
 });
 
 const hrSegments = computed<{ low: number; moderate: number; high: number }>(
@@ -210,76 +275,27 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
         v-if="isVisible && derivedMetrics"
         class="rounded-xl border border-zinc-200/90 bg-white p-4 sm:p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
     >
-        <!-- Header -->
-        <div
-            class="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200/70 pb-3 dark:border-zinc-800/70"
-        >
-            <div class="flex items-center gap-2.5">
-                <div
-                    class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600 dark:bg-emerald-400/10 dark:text-emerald-400"
+        <!-- Header (aligned with sibling telemetry cards) -->
+        <div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div class="flex items-center gap-2">
+                <span class="size-1.5 rounded-full bg-emerald-500" />
+                <h2
+                    class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    <Activity class="size-4" />
-                </div>
-                <div class="min-w-0">
-                    <div class="flex flex-wrap items-baseline gap-x-2">
-                        <h2
-                            class="text-sm font-semibold tracking-tight text-zinc-950 dark:text-zinc-50"
-                        >
-                            Aerobic Efficiency &amp; Pacing
-                        </h2>
-                        <span
-                            v-if="hasDecoupling"
-                            class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
-                        >
-                            {{ metricMeta.code }} · {{ metricMeta.subtitle }}
-                        </span>
-                    </div>
-                    <p
-                        class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                    >
-                        Cardiac drift, efficiency factor, split consistency, and
-                        intensity distribution
-                    </p>
-                </div>
+                    Aerobic Efficiency &amp; Pacing
+                </h2>
             </div>
 
-            <div class="flex flex-wrap items-center gap-2">
-                <span
-                    v-if="decouplingBadge"
-                    class="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px] font-medium"
-                    :class="decouplingBadge.badgeClass"
-                >
-                    <span
-                        class="size-1.5 rounded-full"
-                        :class="decouplingBadge.dotClass"
-                    />
-                    <span>{{ decouplingBadge.label }}</span>
-                    <span class="opacity-70">{{
-                        decouplingBadge.thresholdHint
-                    }}</span>
-                </span>
-
-                <span
-                    v-if="pacingBadge"
-                    class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px] font-medium"
-                    :class="pacingBadge.pillClass"
-                >
-                    <TrendingUp
-                        v-if="pacingBadge.icon === 'up'"
-                        class="size-3"
-                    />
-                    <TrendingDown
-                        v-else-if="pacingBadge.icon === 'down'"
-                        class="size-3"
-                    />
-                    <Minus v-else class="size-3" />
-                    <span>{{ pacingBadge.label }}</span>
-                </span>
-            </div>
+            <span
+                v-if="hasDecoupling"
+                class="font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+            >
+                {{ metricMeta.subtitle }}
+            </span>
         </div>
 
         <!-- Core Metrics Grid -->
-        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="grid gap-3" :class="gridColsClass">
             <!-- 1. Aerobic Decoupling -->
             <div
                 v-if="hasDecoupling"
@@ -292,19 +308,33 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                         Aerobic Decoupling
                     </span>
                     <span
-                        class="rounded bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                        :title="metricMeta.tooltip"
+                        class="cursor-help rounded bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 underline decoration-zinc-400/70 decoration-dotted underline-offset-2 dark:bg-zinc-800 dark:text-zinc-300"
                     >
                         {{ metricMeta.code }}
                     </span>
                 </div>
-                <div
-                    class="mt-1.5 font-mono text-xl font-semibold tracking-tight tabular-nums"
-                    :class="
-                        decouplingBadge?.valueClass ??
-                        'text-zinc-900 dark:text-zinc-100'
-                    "
-                >
-                    {{ formattedDecoupling }}
+                <div class="mt-1.5 flex flex-wrap items-baseline gap-2">
+                    <span
+                        class="font-mono text-xl font-semibold tracking-tight tabular-nums"
+                        :class="
+                            decouplingBadge?.valueClass ??
+                            'text-zinc-900 dark:text-zinc-100'
+                        "
+                    >
+                        {{ formattedDecoupling }}
+                    </span>
+                    <span
+                        v-if="decouplingBadge"
+                        class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono text-[10px] font-medium"
+                        :class="decouplingBadge.badgeClass"
+                    >
+                        <span
+                            class="size-1.5 rounded-full"
+                            :class="decouplingBadge.dotClass"
+                        />
+                        <span>{{ decouplingBadge.label }}</span>
+                    </span>
                 </div>
                 <div
                     v-if="
@@ -313,8 +343,21 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                     "
                     class="mt-1 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                 >
-                    1st {{ formatNumber(derivedMetrics.first_half_ef, 2) }} →
-                    2nd {{ formatNumber(derivedMetrics.second_half_ef, 2) }} EF
+                    1st
+                    {{
+                        formatNumber(
+                            convertEfValue(derivedMetrics.first_half_ef),
+                            2,
+                        )
+                    }}
+                    → 2nd
+                    {{
+                        formatNumber(
+                            convertEfValue(derivedMetrics.second_half_ef),
+                            2,
+                        )
+                    }}
+                    EF
                 </div>
             </div>
 
@@ -335,7 +378,14 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                     <span
                         class="font-mono text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                     >
-                        {{ formatNumber(derivedMetrics.efficiency_factor, 2) }}
+                        {{
+                            formatNumber(
+                                convertEfValue(
+                                    derivedMetrics.efficiency_factor,
+                                ),
+                                2,
+                            )
+                        }}
                     </span>
                     <span
                         class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
@@ -355,31 +405,68 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                 v-if="hasPacing"
                 class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 p-3 dark:border-zinc-800/70 dark:bg-zinc-900/40"
             >
-                <div
-                    class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    Split Pacing
-                </div>
-                <div
-                    class="mt-1.5 font-mono text-xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
-                >
-                    {{
-                        derivedMetrics.split_ratio !== null
-                            ? `${formatNumber(derivedMetrics.split_ratio, 3)}×`
-                            : '—'
-                    }}
-                </div>
-                <div
-                    class="mt-1 flex flex-wrap items-center gap-x-2 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
-                >
-                    <span>{{ pacingBadge?.label }}</span>
-                    <span v-if="derivedMetrics.pace_cv_pct !== null">
-                        · {{ formatNumber(derivedMetrics.pace_cv_pct, 1) }}% CV
+                <div class="flex items-center justify-between gap-2">
+                    <span
+                        class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        Split Pacing
                     </span>
+                    <span
+                        v-if="pacingBadge"
+                        class="inline-flex items-center gap-1 font-mono text-[10px] font-medium"
+                        :class="pacingBadge.toneClass"
+                    >
+                        <TrendingUp
+                            v-if="pacingBadge.icon === 'up'"
+                            class="size-3"
+                        />
+                        <TrendingDown
+                            v-else-if="pacingBadge.icon === 'down'"
+                            class="size-3"
+                        />
+                        <Minus v-else class="size-3" />
+                        <span>{{ pacingBadge.label }}</span>
+                    </span>
+                </div>
+                <div
+                    class="mt-1.5 flex flex-wrap items-baseline gap-x-2 tabular-nums"
+                >
+                    <span
+                        title="Ratio of 2nd-half speed to 1st-half speed (>1.000× = negative split, faster 2nd half)"
+                        class="cursor-help font-mono text-xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                    >
+                        {{
+                            derivedMetrics.split_ratio !== null
+                                ? `${formatNumber(derivedMetrics.split_ratio, 3)}×`
+                                : '—'
+                        }}
+                    </span>
+                    <span
+                        v-if="splitDirectionText"
+                        class="font-mono text-[11px] font-medium"
+                        :class="
+                            pacingBadge?.toneClass ??
+                            'text-zinc-500 dark:text-zinc-400'
+                        "
+                    >
+                        {{ splitDirectionText }}
+                    </span>
+                </div>
+                <div
+                    v-if="derivedMetrics.pace_cv_pct !== null"
+                    class="mt-1 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
+                >
+                    <span
+                        title="Coefficient of Variation of split paces — lower means steadier, more even pacing"
+                        class="cursor-help underline decoration-zinc-400/70 decoration-dotted underline-offset-2"
+                    >
+                        {{ formatNumber(derivedMetrics.pace_cv_pct, 1) }}% CV
+                    </span>
+                    <span> · Split pace variability</span>
                 </div>
             </div>
 
-            <!-- 4. Polarized HR Split -->
+            <!-- 4. HR Intensity Split -->
             <div
                 v-if="hasHrSplit"
                 class="rounded-lg border border-zinc-200/70 bg-[#f7f7f5]/70 p-3 dark:border-zinc-800/70 dark:bg-zinc-900/40"
@@ -388,7 +475,7 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
                     <span
                         class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Polarized HR Split
+                        HR Intensity Split
                     </span>
                     <HeartPulse
                         class="size-3.5 text-rose-500/80 dark:text-rose-400/80"

@@ -16,6 +16,7 @@ import {
     getMapStyleUrl,
     toLngLat,
 } from '@/lib/maplibre';
+import { percentileOf } from '@/lib/telemetry';
 import { M_TO_FT, useUnits } from '@/lib/units';
 import {
     computeEffectiveWind,
@@ -41,6 +42,7 @@ const props = withDefaults(
         polyline: [number, number][];
         series?: StreamPoint[];
         colorMode?: MapColorMode;
+        usesPace?: boolean;
         accentColor?: string;
         activeIndex?: number | null;
         highlightRange?: HighlightRange | null;
@@ -52,6 +54,7 @@ const props = withDefaults(
     {
         series: () => [],
         colorMode: 'solid',
+        usesPace: false,
         accentColor: '#f59e0b',
         activeIndex: null,
         highlightRange: null,
@@ -103,8 +106,14 @@ let cachedWindArrowImageData: ImageData | null = null;
 
 const containerRef = ref<HTMLElement | null>(null);
 const { isDark } = useChartTheme();
-const { units, isImperial, formatElevation, formatSpeed, formatSpeedKmh } =
-    useUnits();
+const {
+    units,
+    isImperial,
+    formatElevation,
+    formatPace,
+    formatSpeed,
+    formatSpeedKmh,
+} = useUnits();
 
 let map: MapLibreMap | null = null;
 let endpointPopup: Popup | null = null;
@@ -159,8 +168,8 @@ function getMetricValue(point: StreamPoint, mode: MapColorMode): number | null {
     }
 }
 
-function interpolateTelemetryColor(ratio: number): string {
-    const clamped = Math.max(0, Math.min(1, ratio));
+function interpolateTelemetryColor(ratio: number, invert = false): string {
+    const clamped = Math.max(0, Math.min(1, invert ? 1 - ratio : ratio));
     const scaled = clamped * (TELEMETRY_STOPS.length - 1);
     const index = Math.min(Math.floor(scaled), TELEMETRY_STOPS.length - 2);
     const localT = scaled - index;
@@ -532,37 +541,51 @@ const activeMetricRange = computed<MetricRange | null>(() => {
         return null;
     }
 
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    let count = 0;
+    const rawValues: number[] = [];
 
     for (const item of gnssSeriesPoints.value) {
         const val = getMetricValue(item.point, props.colorMode);
 
         if (val !== null) {
-            if (val < min) {
-                min = val;
-            }
-
-            if (val > max) {
-                max = val;
-            }
-
-            count += 1;
+            rawValues.push(val);
         }
     }
 
-    if (count < 2 || !Number.isFinite(min) || !Number.isFinite(max)) {
+    if (rawValues.length < 2) {
         return null;
     }
 
-    return { min, max };
+    const movingValues =
+        props.colorMode === 'speed'
+            ? rawValues.filter((v) => v > 0.3)
+            : rawValues;
+    const values = (movingValues.length >= 2 ? movingValues : rawValues).sort(
+        (a, b) => a - b,
+    );
+
+    const rawMin = values[0];
+    const rawMax = values[values.length - 1];
+
+    if (values.length >= 10) {
+        const p02 = percentileOf(values, 0.02);
+        const p98 = percentileOf(values, 0.98);
+
+        if (Number.isFinite(p02) && Number.isFinite(p98) && p98 > p02) {
+            return { min: p02, max: p98 };
+        }
+    }
+
+    if (!Number.isFinite(rawMin) || !Number.isFinite(rawMax)) {
+        return null;
+    }
+
+    return { min: rawMin, max: rawMax };
 });
 
 function formatLegendValue(value: number, mode: MapColorMode): string {
     switch (mode) {
         case 'speed':
-            return formatSpeed(value, 1);
+            return props.usesPace ? formatPace(value) : formatSpeed(value, 1);
         case 'hr':
             return `${Math.round(value)} bpm`;
         case 'altitude':
@@ -583,7 +606,7 @@ function formatLegendValue(value: number, mode: MapColorMode): string {
 const legendLabel = computed<string>(() => {
     switch (props.colorMode) {
         case 'speed':
-            return 'Speed';
+            return props.usesPace ? 'Pace' : 'Speed';
         case 'hr':
             return 'HR';
         case 'altitude':
@@ -617,7 +640,11 @@ const windArrowsLegendDisplay = computed<{
 
 const windLegendDisplay = computed<{ head: string; tail: string } | null>(
     () => {
-        if (props.colorMode !== 'wind' || !hasWeatherSamples.value) {
+        if (
+            props.highlightRange ||
+            props.colorMode !== 'wind' ||
+            !hasWeatherSamples.value
+        ) {
             return null;
         }
 
@@ -630,8 +657,13 @@ const windLegendDisplay = computed<{ head: string; tail: string } | null>(
     },
 );
 
-const legendDisplay = computed<{ min: string; max: string } | null>(() => {
+const legendDisplay = computed<{
+    min: string;
+    max: string;
+    gradient: string;
+} | null>(() => {
     if (
+        props.highlightRange ||
         !activeMetricRange.value ||
         props.colorMode === 'solid' ||
         props.colorMode === 'wind'
@@ -639,9 +671,24 @@ const legendDisplay = computed<{ min: string; max: string } | null>(() => {
         return null;
     }
 
+    const forwardGradient =
+        'linear-gradient(90deg, #0ea5e9 0%, #10b981 33%, #f59e0b 66%, #f43f5e 100%)';
+    const reversedGradient =
+        'linear-gradient(90deg, #f43f5e 0%, #f59e0b 33%, #10b981 66%, #0ea5e9 100%)';
+
+    if (props.colorMode === 'speed' && props.usesPace) {
+        return {
+            min: formatPace(activeMetricRange.value.max),
+            max: formatPace(activeMetricRange.value.min),
+            gradient: reversedGradient,
+        };
+    }
+
     return {
         min: formatLegendValue(activeMetricRange.value.min, props.colorMode),
         max: formatLegendValue(activeMetricRange.value.max, props.colorMode),
+        gradient:
+            props.colorMode === 'stamina' ? reversedGradient : forwardGradient,
     };
 });
 
@@ -808,7 +855,10 @@ function buildRouteGeoJson(): {
             const color =
                 segValue === null
                     ? props.accentColor
-                    : interpolateTelemetryColor(ratio);
+                    : interpolateTelemetryColor(
+                          ratio,
+                          props.colorMode === 'stamina',
+                      );
 
             features.push({
                 type: 'Feature',
@@ -1957,7 +2007,7 @@ onBeforeUnmount(() => {
 
         <div
             v-if="windArrowsLegendDisplay || windLegendDisplay || legendDisplay"
-            class="pointer-events-none absolute bottom-3 left-3 z-[400] flex flex-col items-start gap-1.5"
+            class="pointer-events-none absolute bottom-3 left-3 z-[400] flex max-w-[calc(100%-6.5rem)] flex-col items-start gap-1.5"
         >
             <div
                 v-if="windArrowsLegendDisplay"
@@ -1984,7 +2034,9 @@ onBeforeUnmount(() => {
                     class="h-1.5 w-16 rounded-full"
                     :style="{ background: windArrowsLegendDisplay.gradient }"
                 />
-                <span class="text-violet-600 tabular-nums dark:text-violet-400">
+                <span
+                    class="text-fuchsia-600 tabular-nums dark:text-fuchsia-400"
+                >
                     {{ windArrowsLegendDisplay.maxLabel }}
                 </span>
             </div>
@@ -2038,15 +2090,7 @@ onBeforeUnmount(() => {
                 <span class="tabular-nums">{{ legendDisplay.min }}</span>
                 <span
                     class="h-1.5 w-16 rounded-full"
-                    style="
-                        background: linear-gradient(
-                            90deg,
-                            #0ea5e9 0%,
-                            #10b981 33%,
-                            #f59e0b 66%,
-                            #f43f5e 100%
-                        );
-                    "
+                    :style="{ background: legendDisplay.gradient }"
                 />
                 <span class="tabular-nums">{{ legendDisplay.max }}</span>
             </div>
