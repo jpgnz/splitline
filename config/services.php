@@ -72,10 +72,10 @@ return [
         'retry_failed_days' => (int) env('NOMINATIM_RETRY_FAILED_DAYS', 7),
     ],
 
-    'import_watch' => [
-        'dir' => env('IMPORT_WATCH_DIR'),
-        'mode' => env('IMPORT_WATCH_MODE', 'keep'),
-        'min_file_age_seconds' => (int) env('IMPORT_WATCH_MIN_FILE_AGE_SECONDS', 5),
+    'auto_import' => [
+        'dir' => env('AUTO_IMPORT_DIR'),
+        'mode' => env('AUTO_IMPORT_MODE', 'keep'),
+        'min_file_age_seconds' => (int) env('AUTO_IMPORT_MIN_FILE_AGE_SECONDS', 5),
     ],
 
 ];
