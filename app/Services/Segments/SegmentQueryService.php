@@ -265,6 +265,9 @@ class SegmentQueryService
      * Build the full detail payload for a Segment including polyline, elevation profile, KPI summary,
      * chronological progression, available years, available sports/disciplines, and personal leaderboard.
      *
+     * Year and sport filters scope `display_rank` / `is_display_pr` and the summary, while each effort's
+     * stored `rank` / `is_pr` stay ranked across every discipline and year.
+     *
      * @return array<string, mixed>
      */
     public function show(Segment $segment, ?int $year = null, ?string $sport = null): array
@@ -288,36 +291,18 @@ class SegmentQueryService
         foreach ($allEfforts as $effort) {
             $effortSportKey = $registry->resolveActivitySportKey($effort->activity);
             $effortSportKeysById[$effort->id] = $effortSportKey;
-            $startedAt = $effort->started_at_local->format('Y-m-d H:i:s');
-
-            if (! isset($effortSportCounts[$effortSportKey])) {
-                $effortSportCounts[$effortSportKey] = [
-                    'count' => 1,
-                    'latest_at' => $startedAt,
-                ];
-            } else {
-                $effortSportCounts[$effortSportKey]['count']++;
-
-                if ($startedAt > $effortSportCounts[$effortSportKey]['latest_at']) {
-                    $effortSportCounts[$effortSportKey]['latest_at'] = $startedAt;
-                }
-            }
+            $registry->addSportKeyCount(
+                $effortSportCounts,
+                $effortSportKey,
+                $effort->started_at_local->format('Y-m-d H:i:s'),
+            );
         }
 
         $availableSports = $registry->buildSportFilterOptions($effortSportCounts);
-
-        $selectedSport = null;
-
-        if ($sport !== null && trim($sport) !== '') {
-            $normalizedSport = $registry->normalizeKey($sport);
-
-            if (isset($effortSportCounts[$normalizedSport])) {
-                $selectedSport = $normalizedSport;
-            }
-        }
+        $selectedSport = $registry->resolveSportFilterSelection($availableSports, $sport);
 
         $sportFilteredEfforts = $selectedSport !== null
-            ? $allEfforts->filter(static fn (SegmentEffort $e): bool => ($effortSportKeysById[$e->id] ?? null) === $selectedSport)->values()
+            ? $allEfforts->filter(static fn (SegmentEffort $e): bool => $registry->sportKeysShareBucket($effortSportKeysById[$e->id], $selectedSport))->values()
             : $allEfforts->values();
 
         /** @var array<int, true> $yearSet */
@@ -402,7 +387,7 @@ class SegmentQueryService
                 'id' => $effort->id,
                 'activity_id' => $effort->activity_id,
                 'activity_name' => $activity->name,
-                'sport_key' => $effortSportKeysById[$effort->id] ?? $registry->resolveActivitySportKey($activity),
+                'sport_key' => $effortSportKeysById[$effort->id],
                 'date' => $effort->started_at_local->format('Y-m-d'),
                 'started_at_local' => $effort->started_at_local->format('Y-m-d H:i:s'),
                 'year' => (int) $effort->started_at_local->format('Y'),
@@ -467,7 +452,7 @@ class SegmentQueryService
             'elevation_profile' => $elevationProfile,
             'summary' => [
                 'effort_count' => count($progression),
-                'all_time_effort_count' => $allEfforts->count(),
+                'all_time_effort_count' => $sportFilteredEfforts->count(),
                 'pr_elapsed_seconds' => $prElapsed,
                 'pr_speed_mps' => $prEffort?->avg_speed !== null ? round($prEffort->avg_speed, 3) : null,
                 'pr_vam' => $prEffort?->vam !== null ? round($prEffort->vam, 1) : null,
@@ -718,19 +703,8 @@ class SegmentQueryService
                 $latestAt = is_string($row->latest_at) ? $row->latest_at : '';
 
                 $sportKey = $registry->resolveSportKey($sportCategory, $effectiveDiscipline, $isIndoor);
-
-                if (! isset($countsBySegment[$segmentId][$sportKey])) {
-                    $countsBySegment[$segmentId][$sportKey] = [
-                        'count' => $count,
-                        'latest_at' => $latestAt,
-                    ];
-                } else {
-                    $countsBySegment[$segmentId][$sportKey]['count'] += $count;
-
-                    if ($latestAt > $countsBySegment[$segmentId][$sportKey]['latest_at']) {
-                        $countsBySegment[$segmentId][$sportKey]['latest_at'] = $latestAt;
-                    }
-                }
+                $countsBySegment[$segmentId] ??= [];
+                $registry->addSportKeyCount($countsBySegment[$segmentId], $sportKey, $latestAt, $count);
             }
         }
 

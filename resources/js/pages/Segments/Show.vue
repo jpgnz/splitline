@@ -23,6 +23,7 @@ import BaseChart, {
     type ChartPointClickPayload,
 } from '@/components/charts/BaseChart.vue';
 import ActivityMap from '@/components/maps/ActivityMap.vue';
+import SportFilterPills from '@/components/SportFilterPills.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
     formatDurationClock,
@@ -66,7 +67,7 @@ const categoryMeta = computed(() =>
     climbCategoryMeta(props.segment.climb_category),
 );
 const hasMixedSports = computed<boolean>(
-    () => (props.available_sports?.length ?? 0) > 1,
+    () => props.available_sports.length > 1,
 );
 const selectedSportMeta = computed(() =>
     props.selected_sport ? getSportMeta(props.selected_sport) : null,
@@ -209,10 +210,10 @@ function confirmDeleteSegment(): void {
     });
 }
 
-function applyLeaderboardFilters(
+function leaderboardFilterUrl(
     year: number | null,
     sport: string | null,
-): void {
+): string {
     const query: Record<string, string> = {};
 
     if (year !== null) {
@@ -223,19 +224,49 @@ function applyLeaderboardFilters(
         query.sport = sport;
     }
 
-    router.get(showSegment.url(props.segment.id), query, {
-        preserveState: true,
-        preserveScroll: true,
-        replace: true,
-    });
+    return showSegment.url(props.segment.id, { query });
+}
+
+function applyLeaderboardFilters(
+    year: number | null,
+    sport: string | null,
+): void {
+    router.get(
+        leaderboardFilterUrl(year, sport),
+        {},
+        {
+            preserveState: true,
+            preserveScroll: true,
+            replace: true,
+            onSuccess: (page) => {
+                const resolved = page.props as unknown as SegmentShowProps;
+
+                // The server drops filters with no matching efforts (e.g. a year without efforts
+                // in the chosen discipline), so keep the URL in sync with what is actually applied.
+                if (
+                    resolved.selected_year !== year ||
+                    resolved.selected_sport !== sport
+                ) {
+                    router.replace({
+                        url: leaderboardFilterUrl(
+                            resolved.selected_year,
+                            resolved.selected_sport,
+                        ),
+                        preserveState: true,
+                        preserveScroll: true,
+                    });
+                }
+            },
+        },
+    );
 }
 
 function selectYear(year: number | null): void {
-    applyLeaderboardFilters(year, props.selected_sport ?? null);
+    applyLeaderboardFilters(year, props.selected_sport);
 }
 
 function selectSport(sport: string | null): void {
-    applyLeaderboardFilters(props.selected_year ?? null, sport);
+    applyLeaderboardFilters(props.selected_year, sport);
 }
 
 const hasAnyPower = computed<boolean>(() =>
@@ -1090,46 +1121,12 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
 
                 <div class="flex flex-wrap items-center gap-2">
                     <!-- Discipline Filter Pills (shown when efforts span multiple disciplines) -->
-                    <div
+                    <SportFilterPills
                         v-if="hasMixedSports"
-                        class="flex flex-wrap items-center gap-1"
-                    >
-                        <button
-                            type="button"
-                            class="cursor-pointer rounded-md border px-2 py-1 font-mono text-[11px] font-medium transition-colors"
-                            :class="
-                                selected_sport === null
-                                    ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
-                                    : 'border-zinc-200/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100'
-                            "
-                            @click="selectSport(null)"
-                        >
-                            All
-                        </button>
-                        <button
-                            v-for="sportOption in available_sports"
-                            :key="sportOption.key"
-                            type="button"
-                            class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-[11px] font-medium tabular-nums transition-colors"
-                            :class="
-                                selected_sport === sportOption.key
-                                    ? 'border-zinc-900 bg-zinc-900 text-white dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950'
-                                    : 'border-zinc-200/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:text-zinc-400 dark:hover:text-zinc-100'
-                            "
-                            @click="selectSport(sportOption.key)"
-                        >
-                            <span
-                                class="size-1.5 rounded-full"
-                                :style="{
-                                    backgroundColor: sportOption.accent_hex,
-                                }"
-                            />
-                            <span>{{ sportOption.short_label }}</span>
-                            <span class="opacity-65">{{
-                                sportOption.count
-                            }}</span>
-                        </button>
-                    </div>
+                        :options="available_sports"
+                        :selected="selected_sport"
+                        @select="selectSport"
+                    />
 
                     <span
                         v-if="hasMixedSports && available_years.length > 0"
