@@ -387,9 +387,5 @@ export interface ActivityDerivedMetricsPayload {
     hr_low_pct: number | null;
     hr_moderate_pct: number | null;
     hr_high_pct: number | null;
-    end_lat: number | null;
-    end_lng: number | null;
-    start_to_end_meters: number | null;
-    is_loop: boolean | null;
     computed_at: string;
 }

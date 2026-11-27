@@ -10,11 +10,21 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Query\Builder as QueryBuilder;
 
 /**
- * Computes and persists derived aerobic, pacing, heart-rate polarization, and route geometry
- * metrics for streamed activities.
+ * Computes and persists derived aerobic and pacing metrics for streamed activities.
  */
 class ActivityDerivedMetricsService
 {
+    /**
+     * Minimum gap (seconds) between consecutive samples that is treated as a pause. Mirrored by
+     * `resolvePauseThresholdSeconds()` in resources/js/lib/streamSelection.ts.
+     */
+    public const float PAUSE_MIN_SECONDS = 15.0;
+
+    /**
+     * Multiple of the median sampling interval that is treated as a pause for sparsely recorded streams.
+     */
+    public const float PAUSE_MEDIAN_MULTIPLIER = 4.0;
+
     private const float MIN_ACTIVE_HR = 40.0;
 
     private const float MIN_ACTIVE_SPEED_MPS = 0.5;
@@ -25,17 +35,13 @@ class ActivityDerivedMetricsService
 
     private const float METRIC_COVERAGE_THRESHOLD = 0.8;
 
+    private const int NORMALIZED_POWER_WINDOW_SECONDS = 30;
+
     private const float MIN_FULL_SPLIT_METERS = 400.0;
 
     private const float NEGATIVE_SPLIT_THRESHOLD = 1.015;
 
     private const float POSITIVE_SPLIT_THRESHOLD = 0.985;
-
-    private const float LOOP_MAX_DISTANCE_METERS = 500.0;
-
-    private const int FINGERPRINT_WAYPOINTS = 10;
-
-    private const float EARTH_RADIUS_METERS = 6371000.0;
 
     /**
      * Compute and persist all derived metrics for an activity.
@@ -46,12 +52,9 @@ class ActivityDerivedMetricsService
 
         $series = is_array($resolvedStream?->series) ? $resolvedStream->series : [];
         $kmSplits = is_array($resolvedStream?->km_splits) ? $resolvedStream->km_splits : [];
-        $polyline = is_array($resolvedStream?->polyline) ? $resolvedStream->polyline : [];
 
         $aerobic = $this->computeAerobicDecoupling($series);
         $pacing = $this->computePacingStrategy($kmSplits);
-        $hrSplit = $this->computePolarizedHrSplit($activity);
-        $geometry = $this->computeRouteGeometry($polyline);
 
         $metric = ActivityDerivedMetric::query()->updateOrCreate(
             ['activity_id' => $activity->id],
@@ -65,18 +68,6 @@ class ActivityDerivedMetricsService
                 'pacing_strategy' => $pacing['pacing_strategy'],
                 'split_ratio' => $pacing['split_ratio'],
                 'pace_cv_pct' => $pacing['pace_cv_pct'],
-                'hr_low_pct' => $hrSplit['hr_low_pct'],
-                'hr_moderate_pct' => $hrSplit['hr_moderate_pct'],
-                'hr_high_pct' => $hrSplit['hr_high_pct'],
-                'end_lat' => $geometry['end_lat'],
-                'end_lng' => $geometry['end_lng'],
-                'start_to_end_meters' => $geometry['start_to_end_meters'],
-                'is_loop' => $geometry['is_loop'],
-                'bbox_min_lat' => $geometry['bbox_min_lat'],
-                'bbox_max_lat' => $geometry['bbox_max_lat'],
-                'bbox_min_lng' => $geometry['bbox_min_lng'],
-                'bbox_max_lng' => $geometry['bbox_max_lng'],
-                'route_fingerprint' => $geometry['route_fingerprint'],
                 'computed_at' => CarbonImmutable::now('UTC'),
             ],
         );
@@ -109,8 +100,10 @@ class ActivityDerivedMetricsService
 
     /**
      * Backfill derived metrics for streamed activities in chunks.
+     *
+     * Each chunk eager-loads full telemetry series, so keep the chunk size small.
      */
-    public function backfill(bool $force = false, int $chunkSize = 100): int
+    public function backfill(bool $force = false, int $chunkSize = 25): int
     {
         $query = Activity::query()
             ->whereExists(function (QueryBuilder $streamSub): void {
@@ -136,6 +129,7 @@ class ActivityDerivedMetricsService
         $query->chunkById($safeChunk, function (Collection $activities) use (&$processed): void {
             foreach ($activities as $activity) {
                 $this->computeAndStore($activity, $activity->stream);
+                $activity->unsetRelation('stream');
                 $processed++;
             }
         });
@@ -144,7 +138,42 @@ class ActivityDerivedMetricsService
     }
 
     /**
-     * Compute Aerobic Decoupling (Pa:Hr / Pw:Hr / Spd:Hr) and Efficiency Factor from telemetry series.
+     * Compute the polarized heart-rate split (Low Z1-Z2 / Moderate Z3 / High Z4-Z5) percentages
+     * from the activity's current HR zone durations.
+     *
+     * @return array{hr_low_pct: ?float, hr_moderate_pct: ?float, hr_high_pct: ?float}
+     */
+    public function polarizedHrSplit(Activity $activity): array
+    {
+        $z1 = max(0.0, (float) ($activity->hr_zone_1_seconds ?? 0.0));
+        $z2 = max(0.0, (float) ($activity->hr_zone_2_seconds ?? 0.0));
+        $z3 = max(0.0, (float) ($activity->hr_zone_3_seconds ?? 0.0));
+        $z4 = max(0.0, (float) ($activity->hr_zone_4_seconds ?? 0.0));
+        $z5 = max(0.0, (float) ($activity->hr_zone_5_seconds ?? 0.0));
+
+        $total = $z1 + $z2 + $z3 + $z4 + $z5;
+
+        if ($total <= 0.0) {
+            return [
+                'hr_low_pct' => null,
+                'hr_moderate_pct' => null,
+                'hr_high_pct' => null,
+            ];
+        }
+
+        return [
+            'hr_low_pct' => round((($z1 + $z2) / $total) * 100.0, 1),
+            'hr_moderate_pct' => round(($z3 / $total) * 100.0, 1),
+            'hr_high_pct' => round((($z4 + $z5) / $total) * 100.0, 1),
+        ];
+    }
+
+    /**
+     * Compute Aerobic Decoupling (Pw:Hr / Pa:Hr / Spd:Hr) and Efficiency Factor from telemetry series.
+     *
+     * Power-based EF uses Normalized Power (zeros from coasting included) over average heart rate;
+     * speed-based EF uses time-weighted average speed in m/min over average heart rate. Samples
+     * without heart rate, stopped samples, and pause gaps are excluded from both halves.
      *
      * @param  array<int|string, mixed>  $series
      * @return array{
@@ -173,13 +202,14 @@ class ActivityDerivedMetricsService
             return $empty;
         }
 
-        $pauseThreshold = $this->resolvePauseThreshold($points);
         $fallbackDt = $this->resolveMedianPositiveDt($points);
+        $pauseThreshold = $this->resolvePauseThreshold($fallbackDt);
 
-        /** @var list<array{active_t: float, dt: float, hr: float, speed: ?float, gap_speed: ?float, power: ?float}> $activePoints */
+        /** @var list<array{time: float, active_t: float, dt: float, hr: float, speed: ?float, gap_speed: ?float, power: ?float, resumes: bool}> $activePoints */
         $activePoints = [];
         $activeElapsed = 0.0;
         $prevTime = null;
+        $prevActiveTime = null;
 
         foreach ($points as $point) {
             $time = $point['time'];
@@ -205,13 +235,17 @@ class ActivityDerivedMetricsService
             $activeElapsed += $dt;
 
             $activePoints[] = [
+                'time' => $time,
                 'active_t' => $activeElapsed,
                 'dt' => $dt > 0.0 ? $dt : $fallbackDt,
                 'hr' => $hr,
                 'speed' => $speed,
                 'gap_speed' => $point['gap_speed'],
                 'power' => $power,
+                'resumes' => $prevActiveTime === null || ($time - $prevActiveTime) > $pauseThreshold,
             ];
+
+            $prevActiveTime = $time;
         }
 
         $activeCount = count($activePoints);
@@ -225,7 +259,7 @@ class ActivityDerivedMetricsService
         $speedCount = 0;
 
         foreach ($activePoints as $point) {
-            if ($point['power'] !== null && $point['power'] > 0.0) {
+            if ($point['power'] !== null && $point['power'] >= 0.0) {
                 $powerCount++;
             }
 
@@ -254,54 +288,27 @@ class ActivityDerivedMetricsService
             return $empty;
         }
 
+        $isPower = $metric === 'power';
         $midpoint = $activeElapsed / 2.0;
 
-        $firstOutputSum = 0.0;
-        $firstHrSum = 0.0;
-        $firstWeight = 0.0;
-
-        $secondOutputSum = 0.0;
-        $secondHrSum = 0.0;
-        $secondWeight = 0.0;
+        /** @var array{0: list<array{time: float, active_t: float, dt: float, hr: float, speed: ?float, gap_speed: ?float, power: ?float, resumes: bool}>, 1: list<array{time: float, active_t: float, dt: float, hr: float, speed: ?float, gap_speed: ?float, power: ?float, resumes: bool}>} $halves */
+        $halves = [[], []];
 
         foreach ($activePoints as $point) {
             $output = $point[$field];
 
-            if ($output === null || $output <= 0.0) {
+            if ($output === null || ($isPower ? $output < 0.0 : $output <= 0.0)) {
                 continue;
             }
 
-            $weight = $point['dt'];
-
-            if ($point['active_t'] <= $midpoint) {
-                $firstOutputSum += $output * $weight;
-                $firstHrSum += $point['hr'] * $weight;
-                $firstWeight += $weight;
-            } else {
-                $secondOutputSum += $output * $weight;
-                $secondHrSum += $point['hr'] * $weight;
-                $secondWeight += $weight;
-            }
+            $halves[$point['active_t'] <= $midpoint ? 0 : 1][] = $point;
         }
 
-        if ($firstWeight <= 0.0 || $secondWeight <= 0.0 || $firstHrSum <= 0.0 || $secondHrSum <= 0.0) {
-            return $empty;
-        }
+        $ef1 = $this->efficiencyFactor($halves[0], $field, $scale, $isPower, $pauseThreshold);
+        $ef2 = $this->efficiencyFactor($halves[1], $field, $scale, $isPower, $pauseThreshold);
+        $overallEf = $this->efficiencyFactor([...$halves[0], ...$halves[1]], $field, $scale, $isPower, $pauseThreshold);
 
-        $avgOutput1 = $firstOutputSum / $firstWeight;
-        $avgHr1 = $firstHrSum / $firstWeight;
-        $ef1 = ($avgOutput1 * $scale) / $avgHr1;
-
-        $avgOutput2 = $secondOutputSum / $secondWeight;
-        $avgHr2 = $secondHrSum / $secondWeight;
-        $ef2 = ($avgOutput2 * $scale) / $avgHr2;
-
-        $totalWeight = $firstWeight + $secondWeight;
-        $overallOutput = ($firstOutputSum + $secondOutputSum) / $totalWeight;
-        $overallHr = ($firstHrSum + $secondHrSum) / $totalWeight;
-        $overallEf = ($overallOutput * $scale) / $overallHr;
-
-        if ($ef1 <= 0.0) {
+        if ($ef1 === null || $ef2 === null || $overallEf === null || $ef1 <= 0.0) {
             return $empty;
         }
 
@@ -323,6 +330,120 @@ class ActivityDerivedMetricsService
             'first_half_ef' => round($ef1, 3),
             'second_half_ef' => round($ef2, 3),
         ];
+    }
+
+    /**
+     * Efficiency Factor for a run of active samples: output (NP for power, time-weighted average
+     * for speed) divided by time-weighted average heart rate.
+     *
+     * @param  list<array{time: float, active_t: float, dt: float, hr: float, speed: ?float, gap_speed: ?float, power: ?float, resumes: bool}>  $points
+     */
+    private function efficiencyFactor(array $points, string $field, float $scale, bool $isPower, float $pauseThreshold): ?float
+    {
+        $outputSum = 0.0;
+        $hrSum = 0.0;
+        $weight = 0.0;
+
+        foreach ($points as $point) {
+            $outputSum += (float) $point[$field] * $point['dt'];
+            $hrSum += $point['hr'] * $point['dt'];
+            $weight += $point['dt'];
+        }
+
+        if ($weight <= 0.0 || $hrSum <= 0.0) {
+            return null;
+        }
+
+        $output = $isPower
+            ? $this->normalizedPower($points, $pauseThreshold)
+            : $outputSum / $weight;
+
+        if ($output === null || $output <= 0.0) {
+            return null;
+        }
+
+        return ($output * $scale) / ($hrSum / $weight);
+    }
+
+    /**
+     * Coggan Normalized Power: 30-second rolling average of power resampled to a 1-second grid,
+     * raised to the 4th power, averaged, then 4th-rooted. Zero-power (coasting) samples count;
+     * the rolling window restarts after pauses.
+     *
+     * @param  list<array{time: float, active_t: float, dt: float, hr: float, speed: ?float, gap_speed: ?float, power: ?float, resumes: bool}>  $points
+     */
+    private function normalizedPower(array $points, float $pauseThreshold): ?float
+    {
+        $window = self::NORMALIZED_POWER_WINDOW_SECONDS;
+        $ring = array_fill(0, $window, 0.0);
+        $ringPos = 0;
+        $ringCount = 0;
+        $ringSum = 0.0;
+        $fourthSum = 0.0;
+        $fourthCount = 0;
+
+        $push = function (float $watts) use (&$ring, &$ringPos, &$ringCount, &$ringSum, &$fourthSum, &$fourthCount, $window): void {
+            if ($ringCount === $window) {
+                $ringSum -= $ring[$ringPos];
+            } else {
+                $ringCount++;
+            }
+
+            $ring[$ringPos] = $watts;
+            $ringSum += $watts;
+            $ringPos = ($ringPos + 1) % $window;
+
+            if ($ringCount === $window) {
+                $fourthSum += ($ringSum / $window) ** 4;
+                $fourthCount++;
+            }
+        };
+
+        $resetRing = function () use (&$ringPos, &$ringCount, &$ringSum): void {
+            $ringPos = 0;
+            $ringCount = 0;
+            $ringSum = 0.0;
+        };
+
+        $prevTime = null;
+        $prevPower = null;
+
+        foreach ($points as $point) {
+            $power = (float) $point['power'];
+            $time = $point['time'];
+
+            if ($prevTime === null || $prevPower === null) {
+                $push($power);
+                $prevTime = $time;
+                $prevPower = $power;
+
+                continue;
+            }
+
+            $dt = (int) round($time - $prevTime);
+
+            if ($dt <= 0) {
+                continue;
+            }
+
+            if ($point['resumes'] || $dt > $pauseThreshold) {
+                $resetRing();
+                $push($power);
+            } else {
+                for ($step = 1; $step <= $dt; $step++) {
+                    $push($prevPower + (($power - $prevPower) * $step) / $dt);
+                }
+            }
+
+            $prevTime = $time;
+            $prevPower = $power;
+        }
+
+        if ($fourthCount === 0) {
+            return null;
+        }
+
+        return ($fourthSum / $fourthCount) ** 0.25;
     }
 
     /**
@@ -378,14 +499,9 @@ class ActivityDerivedMetricsService
         return $deltas[$mid];
     }
 
-    /**
-     * @param  list<array{time: float, hr: ?float, speed: ?float, gap_speed: ?float, power: ?float}>  $points
-     */
-    private function resolvePauseThreshold(array $points): float
+    private function resolvePauseThreshold(float $medianDt): float
     {
-        $medianDt = $this->resolveMedianPositiveDt($points);
-
-        return max(60.0, $medianDt * 4.0);
+        return max(self::PAUSE_MIN_SECONDS, $medianDt * self::PAUSE_MEDIAN_MULTIPLIER);
     }
 
     /**
@@ -508,156 +624,5 @@ class ActivityDerivedMetricsService
             'split_ratio' => $splitRatio,
             'pace_cv_pct' => $paceCvPct,
         ];
-    }
-
-    /**
-     * Compute polarized heart-rate split (Low Z1-Z2 / Moderate Z3 / High Z4-Z5) percentages.
-     *
-     * @return array{hr_low_pct: ?float, hr_moderate_pct: ?float, hr_high_pct: ?float}
-     */
-    private function computePolarizedHrSplit(Activity $activity): array
-    {
-        $z1 = max(0.0, (float) ($activity->hr_zone_1_seconds ?? 0.0));
-        $z2 = max(0.0, (float) ($activity->hr_zone_2_seconds ?? 0.0));
-        $z3 = max(0.0, (float) ($activity->hr_zone_3_seconds ?? 0.0));
-        $z4 = max(0.0, (float) ($activity->hr_zone_4_seconds ?? 0.0));
-        $z5 = max(0.0, (float) ($activity->hr_zone_5_seconds ?? 0.0));
-
-        $total = $z1 + $z2 + $z3 + $z4 + $z5;
-
-        if ($total <= 0.0) {
-            return [
-                'hr_low_pct' => null,
-                'hr_moderate_pct' => null,
-                'hr_high_pct' => null,
-            ];
-        }
-
-        return [
-            'hr_low_pct' => round((($z1 + $z2) / $total) * 100.0, 1),
-            'hr_moderate_pct' => round(($z3 / $total) * 100.0, 1),
-            'hr_high_pct' => round((($z4 + $z5) / $total) * 100.0, 1),
-        ];
-    }
-
-    /**
-     * Compute route endpoints, loop detection, bounding box, and 10-point fingerprint from polyline.
-     *
-     * @param  array<int|string, mixed>  $polyline
-     * @return array{
-     *     end_lat: ?float,
-     *     end_lng: ?float,
-     *     start_to_end_meters: ?float,
-     *     is_loop: ?bool,
-     *     bbox_min_lat: ?float,
-     *     bbox_max_lat: ?float,
-     *     bbox_min_lng: ?float,
-     *     bbox_max_lng: ?float,
-     *     route_fingerprint: ?list<array{0: float, 1: float}>
-     * }
-     */
-    private function computeRouteGeometry(array $polyline): array
-    {
-        $empty = [
-            'end_lat' => null,
-            'end_lng' => null,
-            'start_to_end_meters' => null,
-            'is_loop' => null,
-            'bbox_min_lat' => null,
-            'bbox_max_lat' => null,
-            'bbox_min_lng' => null,
-            'bbox_max_lng' => null,
-            'route_fingerprint' => null,
-        ];
-
-        /** @var list<array{0: float, 1: float}> $coords */
-        $coords = [];
-
-        foreach ($polyline as $point) {
-            if (! is_array($point) || ! isset($point[0], $point[1]) || ! is_numeric($point[0]) || ! is_numeric($point[1])) {
-                continue;
-            }
-
-            $lat = (float) $point[0];
-            $lng = (float) $point[1];
-
-            if (! is_finite($lat) || ! is_finite($lng) || $lat < -90.0 || $lat > 90.0 || $lng < -180.0 || $lng > 180.0) {
-                continue;
-            }
-
-            $coords[] = [$lat, $lng];
-        }
-
-        $count = count($coords);
-
-        if ($count === 0) {
-            return $empty;
-        }
-
-        $first = $coords[0];
-        $last = $coords[$count - 1];
-
-        $minLat = $first[0];
-        $maxLat = $first[0];
-        $minLng = $first[1];
-        $maxLng = $first[1];
-
-        foreach ($coords as [$lat, $lng]) {
-            if ($lat < $minLat) {
-                $minLat = $lat;
-            }
-
-            if ($lat > $maxLat) {
-                $maxLat = $lat;
-            }
-
-            if ($lng < $minLng) {
-                $minLng = $lng;
-            }
-
-            if ($lng > $maxLng) {
-                $maxLng = $lng;
-            }
-        }
-
-        $startToEnd = round($this->haversineMeters($first[0], $first[1], $last[0], $last[1]), 1);
-
-        /** @var list<array{0: float, 1: float}> $fingerprint */
-        $fingerprint = [];
-
-        if ($count === 1) {
-            $fingerprint[] = [round($first[0], 6), round($first[1], 6)];
-        } else {
-            for ($i = 0; $i < self::FINGERPRINT_WAYPOINTS; $i++) {
-                $index = (int) round(($i / (self::FINGERPRINT_WAYPOINTS - 1)) * ($count - 1));
-                $waypoint = $coords[$index];
-                $fingerprint[] = [round($waypoint[0], 6), round($waypoint[1], 6)];
-            }
-        }
-
-        return [
-            'end_lat' => round($last[0], 6),
-            'end_lng' => round($last[1], 6),
-            'start_to_end_meters' => $startToEnd,
-            'is_loop' => $startToEnd <= self::LOOP_MAX_DISTANCE_METERS,
-            'bbox_min_lat' => round($minLat, 6),
-            'bbox_max_lat' => round($maxLat, 6),
-            'bbox_min_lng' => round($minLng, 6),
-            'bbox_max_lng' => round($maxLng, 6),
-            'route_fingerprint' => $fingerprint,
-        ];
-    }
-
-    private function haversineMeters(float $lat1, float $lng1, float $lat2, float $lng2): float
-    {
-        $dLat = deg2rad($lat2 - $lat1);
-        $dLng = deg2rad($lng2 - $lng1);
-
-        $a = sin($dLat / 2.0) ** 2
-            + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * (sin($dLng / 2.0) ** 2);
-
-        $c = 2.0 * atan2(sqrt($a), sqrt(max(0.0, 1.0 - $a)));
-
-        return self::EARTH_RADIUS_METERS * $c;
     }
 }

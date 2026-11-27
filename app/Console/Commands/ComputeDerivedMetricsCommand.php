@@ -18,14 +18,14 @@ class ComputeDerivedMetricsCommand extends Command
         {--activity= : Compute derived metrics for a single activity ID}
         {--force : Recompute all existing derived metrics}
         {--queue : Queue backfill onto the background streams queue instead of running inline}
-        {--chunk=100 : Number of streamed activities to process per chunk}';
+        {--chunk=25 : Number of streamed activities to process per chunk}';
 
     /**
      * The console command description.
      *
      * @var string
      */
-    protected $description = 'Compute aerobic decoupling, efficiency factor, pacing, HR split, and route geometry metrics';
+    protected $description = 'Compute aerobic decoupling, efficiency factor, and pacing metrics';
 
     /**
      * Execute the console command.

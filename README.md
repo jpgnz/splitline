@@ -111,7 +111,7 @@ Prefix commands with `docker exec -it splitline` when running in Docker.
 | `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`        | Fetch and store historical Open-Meteo weather for outdoor activities.                 |
 | `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                     | Fingerprint outdoor GNSS polylines and cluster repeated matched routes.               |
 | `php artisan segments:scan [--rebuild] [--queue] [--chunk=50]`                                     | Auto-detect climbs and match personal segments across outdoor streams.                |
-| `php artisan activities:compute-derived-metrics [--activity=ID] [--force] [--queue] [--chunk=100]` | Compute aerobic decoupling (Pa:Hr / Pw:Hr), EF, pacing, HR split, and route geometry. |
+| `php artisan activities:compute-derived-metrics [--activity=ID] [--force] [--queue] [--chunk=25]`  | Compute aerobic decoupling (Pa:Hr / Pw:Hr), EF, and pacing metrics.                   |
 | `php artisan geocode:sync [--queue] [--limit=50] [--force]`                                        | Reverse-geocode matched routes, segments, and activities missing place names.         |
 
 ## Configuration

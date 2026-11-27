@@ -24,7 +24,7 @@ class ComputeDerivedMetricsJob implements ShouldBeUnique, ShouldQueue
 
     public function __construct(
         public readonly bool $force = false,
-        public readonly int $chunkSize = 100,
+        public readonly int $chunkSize = 25,
     ) {
         $this->onQueue(self::QUEUE);
     }

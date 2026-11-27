@@ -1461,11 +1461,22 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
         return {};
     }
 
-    const efValues = points.map((p) => p.efficiency_factor);
-    const rollingEf: Array<number | null> = points.map((_, idx) => {
-        const windowSlice = efValues
-            .slice(Math.max(0, idx - 4), idx + 1)
-            .filter((v): v is number => v !== null && Number.isFinite(v));
+    // Only plot EF for the primary metric: W/bpm (power) and m/min/bpm (speed/GAP) are not comparable.
+    const primaryMetric = props.aerobicDrift?.primary_metric ?? null;
+    const efValues = points.map((p) =>
+        primaryMetric === null || p.decoupling_metric === primaryMetric
+            ? p.efficiency_factor
+            : null,
+    );
+    const recentEf: number[] = [];
+    const rollingEf: Array<number | null> = efValues.map((value) => {
+        if (value === null || !Number.isFinite(value)) {
+            return null;
+        }
+
+        recentEf.push(value);
+
+        const windowSlice = recentEf.slice(-5);
 
         if (windowSlice.length < 2) {
             return null;

@@ -23,22 +23,9 @@ return new class extends Migration
             $table->string('pacing_strategy', 24)->nullable();
             $table->float('split_ratio')->nullable();
             $table->float('pace_cv_pct')->nullable();
-            $table->float('hr_low_pct')->nullable();
-            $table->float('hr_moderate_pct')->nullable();
-            $table->float('hr_high_pct')->nullable();
-            $table->double('end_lat')->nullable();
-            $table->double('end_lng')->nullable();
-            $table->double('start_to_end_meters')->nullable();
-            $table->boolean('is_loop')->nullable();
-            $table->double('bbox_min_lat')->nullable();
-            $table->double('bbox_max_lat')->nullable();
-            $table->double('bbox_min_lng')->nullable();
-            $table->double('bbox_max_lng')->nullable();
-            $table->json('route_fingerprint')->nullable();
             $table->timestamp('computed_at');
             $table->timestamps();
 
-            $table->index(['bbox_min_lat', 'bbox_max_lat', 'bbox_min_lng', 'bbox_max_lng'], 'adm_bbox_idx');
             $table->index('computed_at');
         });
     }

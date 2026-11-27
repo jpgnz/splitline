@@ -88,6 +88,20 @@ const decouplingBadge = computed<{
         return null;
     }
 
+    const pct = props.derivedMetrics?.decoupling_pct ?? 0;
+
+    // Strongly negative drift (HR falling vs output) usually means a skewed warm-up or HR data issue.
+    if (pct < -5) {
+        return {
+            label: 'Negative Drift',
+            thresholdHint: 'check warm-up / HR data',
+            badgeClass:
+                'border-sky-500/35 bg-sky-50 text-sky-700 dark:border-sky-500/30 dark:bg-sky-500/15 dark:text-sky-300',
+            dotClass: 'bg-sky-500',
+            valueClass: 'text-sky-700 dark:text-sky-400',
+        };
+    }
+
     if (rating === 'well_coupled') {
         return {
             label: 'Well Coupled',
