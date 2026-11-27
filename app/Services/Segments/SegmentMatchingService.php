@@ -2863,6 +2863,7 @@ class SegmentMatchingService
     {
         if (
             $segment->geocoded_at === null
+            && $segment->geocode_attempted_at === null
             && $segment->isVisible()
             && (bool) config('services.nominatim.enabled', true)
             && (bool) config('services.nominatim.auto_sync', true)

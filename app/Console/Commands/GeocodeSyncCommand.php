@@ -238,18 +238,18 @@ class GeocodeSyncCommand extends Command
      */
     private function resolveTargetSegmentIds(int $limit, bool $force): array
     {
-        $query = Segment::query()
-            ->visible()
-            ->orderByDesc('effort_count')
-            ->orderByDesc('id');
-
-        if (! $force) {
-            $query->whereNull('geocoded_at');
-        }
+        $query = $force
+            ? Segment::query()->visible()
+            : Segment::query()->awaitingGeocoding();
 
         return array_values(array_map(
             'intval',
-            $query->limit($limit)->pluck('id')->all(),
+            $query
+                ->orderByDesc('effort_count')
+                ->orderByDesc('id')
+                ->limit($limit)
+                ->pluck('id')
+                ->all(),
         ));
     }
 
