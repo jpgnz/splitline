@@ -12,6 +12,7 @@ import {
     Pencil,
     RotateCcw,
     Sparkles,
+    Target,
     Trophy,
     Undo2,
     X,
@@ -311,6 +312,28 @@ interface RecentActivityRow {
     is_pr: boolean;
 }
 
+interface EddingtonTarget {
+    target: number;
+    completed_days: number;
+    remaining_days: number;
+}
+
+interface EddingtonUnitSummary {
+    unit: 'km' | 'mi';
+    number: number;
+    next_target: number;
+    completed_for_next: number;
+    days_needed_for_next: number;
+    next_targets: EddingtonTarget[];
+}
+
+interface EddingtonPayload {
+    active_days: number;
+    max_single_day_meters: number;
+    metric: EddingtonUnitSummary;
+    imperial: EddingtonUnitSummary;
+}
+
 interface SportsEnduranceProps {
     sport: {
         key: string;
@@ -365,6 +388,7 @@ interface SportsEnduranceProps {
     };
     weeklyVolume: WeeklyVolumePoint[];
     annualSummary: AnnualActivitySummaryPayload | null;
+    eddington: EddingtonPayload | null;
     hrZones: {
         range: string;
         total_seconds: number;
@@ -1301,7 +1325,27 @@ const weeklyVolumeChartOption = computed<EChartsOption>(() => {
     };
 });
 
-// HR Zones & Milestones
+// HR Zones, Milestones & Eddington Number
+const activeEddington = computed<EddingtonUnitSummary | null>(() => {
+    if (!props.eddington) {
+        return null;
+    }
+
+    return units.isImperial.value
+        ? props.eddington.imperial
+        : props.eddington.metric;
+});
+
+const eddingtonNextProgressPct = computed<number>(() => {
+    const current = activeEddington.value;
+
+    if (!current || current.next_target <= 0) {
+        return 0;
+    }
+
+    return clampPct((current.completed_for_next / current.next_target) * 100);
+});
+
 const hasHrZoneData = computed<boolean>(() => props.hrZones.total_seconds > 0);
 
 interface MilestoneDisplayItem {
@@ -3525,6 +3569,202 @@ const recentHasOffroad = computed<boolean>(() =>
                     class="flex h-48 items-center justify-center rounded-lg border border-dashed border-zinc-200/80 font-mono text-xs text-zinc-400 dark:border-zinc-800/80 dark:text-zinc-500"
                 >
                     No qualifying milestones recorded yet.
+                </div>
+            </div>
+        </section>
+
+        <!-- Eddington Number Card -->
+        <section
+            v-if="eddington && activeEddington"
+            class="relative overflow-hidden rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
+        >
+            <span
+                class="absolute top-0 left-0 h-0.5 w-12"
+                :style="{ backgroundColor: accentHex }"
+            />
+
+            <div class="grid gap-5 lg:grid-cols-12 lg:items-center">
+                <!-- Left: Headline E = N, Progress Bar & Longest Day -->
+                <div class="space-y-4 lg:col-span-7">
+                    <div
+                        class="flex flex-wrap items-start justify-between gap-3"
+                    >
+                        <div>
+                            <p
+                                class="font-mono text-[10px] tracking-widest uppercase"
+                                :style="{ color: accentHex }"
+                            >
+                                Eddington Number · Daily Distance Consistency
+                            </p>
+                            <div
+                                class="mt-1.5 flex items-baseline gap-2.5 tabular-nums"
+                            >
+                                <span
+                                    class="font-mono text-3xl font-semibold tracking-tight text-zinc-900 sm:text-4xl dark:text-zinc-100"
+                                >
+                                    E =
+                                    {{
+                                        formatNumber(activeEddington.number, 0)
+                                    }}
+                                </span>
+                                <span
+                                    class="rounded-md border border-zinc-200/90 bg-[#f7f7f5] px-2 py-0.5 font-mono text-xs font-medium text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/70 dark:text-zinc-300"
+                                >
+                                    {{ activeEddington.unit }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <div
+                            class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"
+                        >
+                            <div
+                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            >
+                                <span
+                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Longest Day
+                                </span>
+                                <p
+                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{
+                                        eddington.max_single_day_meters > 0
+                                            ? units.formatDistanceCompact(
+                                                  eddington.max_single_day_meters,
+                                                  1,
+                                              )
+                                            : '—'
+                                    }}
+                                </p>
+                            </div>
+                            <div
+                                class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1.5 dark:border-zinc-800/80 dark:bg-zinc-900/50"
+                            >
+                                <span
+                                    class="text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                >
+                                    Active Days
+                                </span>
+                                <p
+                                    class="mt-0.5 font-semibold text-zinc-900 dark:text-zinc-100"
+                                >
+                                    {{ formatNumber(eddington.active_days, 0) }}
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress Toward E + 1 -->
+                    <div class="space-y-2">
+                        <div
+                            class="flex flex-wrap items-center justify-between gap-2 font-mono text-xs tabular-nums"
+                        >
+                            <span class="text-zinc-700 dark:text-zinc-300">
+                                <strong
+                                    class="font-semibold text-zinc-950 dark:text-white"
+                                >
+                                    {{
+                                        formatNumber(
+                                            activeEddington.days_needed_for_next,
+                                            0,
+                                        )
+                                    }}
+                                </strong>
+                                more
+                                {{
+                                    activeEddington.days_needed_for_next === 1
+                                        ? 'day'
+                                        : 'days'
+                                }}
+                                of ≥ {{ activeEddington.next_target }}
+                                {{ activeEddington.unit }} to reach E =
+                                {{ activeEddington.next_target }}
+                            </span>
+                            <span
+                                class="text-[11px] text-zinc-500 dark:text-zinc-400"
+                            >
+                                {{ activeEddington.completed_for_next }} /
+                                {{ activeEddington.next_target }} days
+                            </span>
+                        </div>
+
+                        <div
+                            class="h-2.5 w-full overflow-hidden rounded-full bg-zinc-100 dark:bg-zinc-800"
+                        >
+                            <div
+                                class="h-full rounded-full transition-all duration-300"
+                                :style="{
+                                    width: `${eddingtonNextProgressPct}%`,
+                                    backgroundColor: accentHex,
+                                }"
+                            />
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right: Next 3 Milestones Mini-Table -->
+                <div
+                    class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/60 p-3.5 lg:col-span-5 dark:border-zinc-800/80 dark:bg-zinc-900/40"
+                >
+                    <div class="mb-2.5 flex items-center justify-between gap-2">
+                        <span
+                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Next Targets
+                        </span>
+                        <Target
+                            class="size-3.5"
+                            :style="{ color: accentHex }"
+                        />
+                    </div>
+
+                    <div
+                        class="divide-y divide-zinc-200/70 dark:divide-zinc-800/70"
+                    >
+                        <div
+                            v-for="row in activeEddington.next_targets"
+                            :key="row.target"
+                            class="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0"
+                        >
+                            <span
+                                class="font-semibold text-zinc-900 dark:text-zinc-100"
+                            >
+                                E = {{ row.target }}
+                            </span>
+
+                            <div class="flex items-center gap-2">
+                                <div
+                                    class="h-1.5 flex-1 overflow-hidden rounded-full bg-zinc-200/80 dark:bg-zinc-800"
+                                >
+                                    <div
+                                        class="h-full rounded-full"
+                                        :style="{
+                                            width: `${clampPct((row.completed_days / row.target) * 100)}%`,
+                                            backgroundColor: accentHex,
+                                        }"
+                                    />
+                                </div>
+                                <span
+                                    class="text-[11px] text-zinc-500 dark:text-zinc-400"
+                                >
+                                    {{ row.completed_days }}/{{ row.target }}
+                                </span>
+                            </div>
+
+                            <span
+                                class="text-right text-[11px] font-medium text-zinc-700 dark:text-zinc-300"
+                            >
+                                +{{ row.remaining_days }}
+                                {{ row.remaining_days === 1 ? 'day' : 'days' }}
+                                <span class="text-zinc-400 dark:text-zinc-500">
+                                    ≥ {{ row.target }}
+                                    {{ activeEddington.unit }}
+                                </span>
+                            </span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </section>

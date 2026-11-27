@@ -34,6 +34,7 @@ Route::post('/sports/reclassify', [SportsController::class, 'bulkReclassify'])->
 Route::patch('/best-efforts/{bestEffort}', [BestEffortController::class, 'update'])->name('best-efforts.update');
 
 Route::get('/heatmap', [HeatmapController::class, 'index'])->name('heatmap.index');
+Route::get('/heatmap/explorer', [HeatmapController::class, 'explorer'])->name('heatmap.explorer');
 Route::post('/heatmap/sync-streams', [HeatmapController::class, 'syncStreams'])->name('heatmap.streams.sync');
 
 Route::get('/routes', [RouteController::class, 'index'])->name('routes.index');
