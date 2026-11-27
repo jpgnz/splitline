@@ -144,6 +144,23 @@ const baselineActivity = computed<ComparisonActivity | null>(
 
 const canCompare = computed<boolean>(() => props.activities.length >= 2);
 
+const fallbackNotice = computed<string | null>(() => {
+    switch (props.fallback_reason) {
+        case 'missing_distance_stream':
+            return 'Aligned by time (missing distance stream)';
+        case 'missing_time_stream':
+            return 'Aligned by distance (missing time stream)';
+        default:
+            return null;
+    }
+});
+
+const hasMixedSports = computed<boolean>(
+    () =>
+        new Set(props.activities.map((activity) => activity.sport_category))
+            .size > 1,
+);
+
 const baselineMetricMode = computed<
     'pace' | 'speed' | 'pace_100m' | 'duration'
 >(() => {
@@ -750,7 +767,7 @@ const ghostPacerOption = computed<EChartsOption>(() => {
             max: paddedBound,
             name:
                 mode === 'distance'
-                    ? 'Behind (+) / Ahead (−)'
+                    ? 'Elapsed: Behind (+) / Ahead (−)'
                     : 'Ahead (+) / Behind (−)',
             nameTextStyle: {
                 color: theme.mutedColor.value,
@@ -886,7 +903,7 @@ function buildOverlayOption(params: {
             lineStyle: {
                 color: s.color,
                 width: s.isBaseline ? 2.2 : 2,
-                type: s.isBaseline ? ('solid' as const) : ('solid' as const),
+                type: 'solid' as const,
             },
             itemStyle: { color: s.color },
             ...(s.areaOpacity
@@ -1049,6 +1066,14 @@ const elevationOverlayOption = computed<EChartsOption>(() => {
     });
 });
 
+function formatSplitTimeDelta(entry: AlignedSplitEntry): string {
+    const formatted = formatSignedSecondsCompact(entry.time_delta_seconds);
+
+    return entry.time_delta_basis === 'pace'
+        ? `${formatted}/${props.split_unit}`
+        : formatted;
+}
+
 function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
     if (entry.avg_speed !== null && entry.avg_speed > 0) {
         return formatSpeedOrPace(entry.avg_speed);
@@ -1089,10 +1114,10 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
             <!-- Distance / Time Alignment Toggle -->
             <div class="flex flex-wrap items-center gap-2">
                 <span
-                    v-if="fallback_reason === 'missing_distance_stream'"
+                    v-if="fallbackNotice"
                     class="rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 font-mono text-[10px] text-amber-700 dark:text-amber-300"
                 >
-                    Aligned by time (missing distance stream)
+                    {{ fallbackNotice }}
                 </span>
 
                 <div
@@ -1359,6 +1384,14 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
             </div>
         </section>
 
+        <p
+            v-if="hasMixedSports"
+            class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 font-mono text-[11px] text-amber-700 dark:text-amber-300"
+        >
+            These activities are different sports. Pace, speed, and split
+            comparisons use the Baseline's sport and may not be meaningful.
+        </p>
+
         <!-- Empty or Single-Activity Guidance State -->
         <section
             v-if="!canCompare"
@@ -1384,7 +1417,7 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                 >
                     {{
                         activities.length === 1
-                            ? `Pick another ${sportMetaFor(activities[0]).label} session below to see time-gap curves, telemetry overlays, weather differences, and kilometer split deltas.`
+                            ? `Pick another ${sportMetaFor(activities[0]).label} session below to see time-gap curves, telemetry overlays, weather differences, and split deltas.`
                             : 'Choose any recent session below as your Baseline, then add 1–2 sessions to compare pacing, heart rate, power, and weather.'
                     }}
                 </p>
@@ -2098,7 +2131,7 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                                 />
                                 {{
                                     aligned.mode === 'distance'
-                                        ? 'Ghost Pacer — Time Gap vs Baseline'
+                                        ? 'Ghost Pacer — Elapsed Time Gap vs Baseline'
                                         : 'Ghost Pacer — Distance Gap vs Baseline'
                                 }}
                             </h2>
@@ -2107,7 +2140,7 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                             >
                                 {{
                                     aligned.mode === 'distance'
-                                        ? `Aligned across ${formatDistance(aligned.axis_max, 2)} · below zero = ahead of Baseline, above zero = behind`
+                                        ? `Elapsed-time gap (includes stops) across ${formatDistance(aligned.axis_max, 2)} · below zero = ahead of Baseline, above zero = behind`
                                         : `Aligned across ${formatDurationClock(aligned.axis_max)} · above zero = ahead of Baseline, below zero = behind`
                                 }}
                             </p>
@@ -2324,12 +2357,13 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                     <h2
                         class="font-mono text-xs font-medium tracking-wider text-zinc-700 uppercase dark:text-zinc-200"
                     >
-                        Splits Diff ({{ splits.length }} × 1 km)
+                        Splits Diff ({{ splits.length }} × 1 {{ split_unit }})
                     </h2>
                     <span
                         class="font-mono text-[11px] text-zinc-400 dark:text-zinc-500"
                     >
-                        Negative delta = faster split than Baseline
+                        Negative delta = faster split than Baseline · partial
+                        splits compare pace /{{ split_unit }}
                     </span>
                 </div>
 
@@ -2411,9 +2445,7 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                                                 ]"
                                             >
                                                 {{
-                                                    formatSignedSecondsCompact(
-                                                        entry.time_delta_seconds,
-                                                    )
+                                                    formatSplitTimeDelta(entry)
                                                 }}
                                             </span>
                                             <span

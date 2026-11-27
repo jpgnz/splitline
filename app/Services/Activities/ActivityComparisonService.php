@@ -4,6 +4,7 @@ namespace App\Services\Activities;
 
 use App\Models\Activity;
 use App\Models\ActivityWeather;
+use App\Support\AppSettings;
 
 /**
  * Builds side-by-side activity comparisons ("Ghost Pacer"):
@@ -93,8 +94,6 @@ use App\Models\ActivityWeather;
  * }
  * @phpstan-type AlignedSeriesSummary array{
  *     final_time_delta_seconds: ?float,
- *     max_ahead_seconds: ?float,
- *     max_behind_seconds: ?float,
  *     final_distance_delta_meters: ?float
  * }
  * @phpstan-type AlignedTelemetrySeries array{
@@ -139,6 +138,7 @@ use App\Models\ActivityWeather;
  *     elevation_loss: ?float,
  *     elevation_delta: ?float,
  *     time_delta_seconds: ?float,
+ *     time_delta_basis: 'duration'|'pace'|null,
  *     hr_delta: ?int,
  *     is_partial: bool
  * }
@@ -146,6 +146,18 @@ use App\Models\ActivityWeather;
  *     split_index: int,
  *     label: string,
  *     entries: list<AlignedSplitEntry>
+ * }
+ * @phpstan-type SplitSource array{
+ *     km: int,
+ *     distance_meters: ?float,
+ *     duration_seconds: ?float,
+ *     avg_speed: ?float,
+ *     pace_seconds_per_km: ?float,
+ *     gap_seconds_per_km: ?float,
+ *     avg_hr: ?int,
+ *     avg_power: ?float,
+ *     elevation_gain: ?float,
+ *     elevation_loss: ?float
  * }
  */
 class ActivityComparisonService
@@ -155,6 +167,24 @@ class ActivityComparisonService
     public const int MAX_CANDIDATES = 40;
 
     public const int SAMPLE_BINS = 160;
+
+    public const float METERS_PER_KM = 1000.0;
+
+    public const float METERS_PER_MILE = 1609.344;
+
+    /**
+     * Splits shorter than this fraction of the split length are treated as partial.
+     */
+    private const float PARTIAL_SPLIT_RATIO = 0.95;
+
+    /**
+     * Trailing stream remainders shorter than this are dropped when building splits from streams.
+     */
+    private const float MIN_TRAILING_SPLIT_METERS = 100.0;
+
+    public function __construct(
+        private readonly AppSettings $settings,
+    ) {}
 
     /**
      * Parse requested activity IDs from comma-separated string, array, or integer.
@@ -228,6 +258,7 @@ class ActivityComparisonService
      *     activities: list<ComparisonActivity>,
      *     candidates: list<ComparisonCandidate>,
      *     aligned: AlignedTelemetryPayload,
+     *     split_unit: 'km'|'mi',
      *     splits: list<AlignedSplitRow>
      * }
      */
@@ -241,7 +272,7 @@ class ActivityComparisonService
 
         if ($requestedIds !== []) {
             $found = Activity::query()
-                ->with(['stream', 'weather'])
+                ->with(['stream:id,activity_id,series,km_splits', 'weather'])
                 ->whereIn('id', $requestedIds)
                 ->get()
                 ->keyBy('id');
@@ -260,22 +291,34 @@ class ActivityComparisonService
             $activities,
         );
 
-        /** @var array<int, list<StreamPoint>> $normalizedSeries */
-        $normalizedSeries = [];
+        /** @var array<int, list<StreamPoint>> $distanceStreams */
+        $distanceStreams = [];
+        /** @var array<int, list<StreamPoint>> $timeStreams */
+        $timeStreams = [];
+        /** @var array<int, bool> $hasStreams */
+        $hasStreams = [];
 
         foreach ($activities as $activity) {
-            $normalizedSeries[$activity->id] = $this->normalizeSeries($activity->stream?->series);
+            $points = $this->normalizeSeries($activity->stream?->series);
+
+            // Free the full-resolution raw series once normalised so up to three streams are not held twice.
+            $activity->stream?->offsetUnset('series');
+
+            $hasStreams[$activity->id] = count($points) >= 2;
+            $distanceStreams[$activity->id] = $this->extractMonotonicPoints($points, 'distance');
+            $timeStreams[$activity->id] = $this->extractMonotonicPoints($points, 'time');
+
+            unset($points);
         }
 
         $baseline = $activities[0] ?? null;
         $mappedActivities = [];
 
         foreach ($activities as $index => $activity) {
-            $hasStreams = count($normalizedSeries[$activity->id]) >= 2;
             $mappedActivities[] = $this->mapActivity(
                 $activity,
                 $index === 0 ? null : $baseline,
-                $hasStreams,
+                $hasStreams[$activity->id],
             );
         }
 
@@ -286,11 +329,13 @@ class ActivityComparisonService
 
         [$aligned, $fallbackReason] = $this->buildAlignedTelemetry(
             $activities,
-            $normalizedSeries,
+            $distanceStreams,
+            $timeStreams,
             $requestedAlign,
         );
 
-        $splits = $this->buildAlignedSplits($activities);
+        $splitUnit = $this->resolveSplitUnit($activities, $distanceStreams);
+        $splits = $this->buildAlignedSplits($activities, $distanceStreams, $splitUnit);
 
         return [
             'align' => $aligned['mode'],
@@ -300,6 +345,7 @@ class ActivityComparisonService
             'activities' => $mappedActivities,
             'candidates' => $candidates,
             'aligned' => $aligned,
+            'split_unit' => $splitUnit,
             'splits' => $splits,
         ];
     }
@@ -533,13 +579,15 @@ class ActivityComparisonService
      * Build distance- or time-aligned telemetry curves and Ghost Pacer gap deltas.
      *
      * @param  list<Activity>  $activities
-     * @param  array<int, list<StreamPoint>>  $normalizedSeries
+     * @param  array<int, list<StreamPoint>>  $monotonicDistanceStreams
+     * @param  array<int, list<StreamPoint>>  $monotonicTimeStreams
      * @param  'distance'|'time'  $requestedAlign
      * @return array{0: AlignedTelemetryPayload, 1: ?string}
      */
     private function buildAlignedTelemetry(
         array $activities,
-        array $normalizedSeries,
+        array $monotonicDistanceStreams,
+        array $monotonicTimeStreams,
         string $requestedAlign,
     ): array {
         if (count($activities) < 2) {
@@ -557,9 +605,7 @@ class ActivityComparisonService
         $maxTimes = [];
 
         foreach ($activities as $activity) {
-            $raw = $normalizedSeries[$activity->id] ?? [];
-
-            $distPoints = $this->extractMonotonicPoints($raw, 'distance');
+            $distPoints = $monotonicDistanceStreams[$activity->id] ?? [];
             $lastDist = $distPoints !== [] ? ($distPoints[count($distPoints) - 1]['distance'] ?? 0.0) : 0.0;
 
             if (count($distPoints) >= 2 && $lastDist > 0.0) {
@@ -567,7 +613,7 @@ class ActivityComparisonService
                 $maxDistances[$activity->id] = $lastDist;
             }
 
-            $timePoints = $this->extractMonotonicPoints($raw, 'time');
+            $timePoints = $monotonicTimeStreams[$activity->id] ?? [];
             $lastTime = $timePoints !== [] ? $timePoints[count($timePoints) - 1]['time'] : 0.0;
 
             if (count($timePoints) >= 2 && $lastTime > 0.0) {
@@ -584,16 +630,21 @@ class ActivityComparisonService
         $fallbackReason = null;
 
         if ($requestedAlign === 'distance' && ! $canAlignDistance) {
-            if ($canAlignTime) {
-                $effectiveAlign = 'time';
-                $fallbackReason = 'missing_distance_stream';
-            } else {
+            if (! $canAlignTime) {
                 return [$this->emptyAlignedPayload('distance', false), 'missing_streams'];
             }
+
+            $effectiveAlign = 'time';
+            $fallbackReason = 'missing_distance_stream';
         }
 
-        if ($effectiveAlign === 'time' && ! $canAlignTime) {
-            return [$this->emptyAlignedPayload('time', $canAlignDistance), 'missing_streams'];
+        if ($requestedAlign === 'time' && ! $canAlignTime) {
+            if (! $canAlignDistance) {
+                return [$this->emptyAlignedPayload('time', false), 'missing_streams'];
+            }
+
+            $effectiveAlign = 'distance';
+            $fallbackReason = 'missing_time_stream';
         }
 
         $axisMax = 0.0;
@@ -663,8 +714,6 @@ class ActivityComparisonService
                     'cadence' => $nulls,
                     'summary' => [
                         'final_time_delta_seconds' => null,
-                        'max_ahead_seconds' => null,
-                        'max_behind_seconds' => null,
                         'final_distance_delta_meters' => null,
                     ],
                 ];
@@ -682,8 +731,6 @@ class ActivityComparisonService
             $timeDeltas = [];
             $distanceDeltas = [];
             $finalTimeDelta = null;
-            $maxAhead = null;
-            $maxBehind = null;
             $finalDistanceDelta = null;
 
             for ($i = 0; $i < $binCount; $i++) {
@@ -700,14 +747,6 @@ class ActivityComparisonService
                         $delta = round($sampled['elapsed_seconds'][$i] - $baselineSampled['elapsed_seconds'][$i], 2);
                         $timeDeltas[] = $delta;
                         $finalTimeDelta = $delta;
-
-                        if ($maxAhead === null || $delta < $maxAhead) {
-                            $maxAhead = $delta;
-                        }
-
-                        if ($maxBehind === null || $delta > $maxBehind) {
-                            $maxBehind = $delta;
-                        }
                     } else {
                         $timeDeltas[] = null;
                     }
@@ -746,8 +785,6 @@ class ActivityComparisonService
                 'cadence' => $sampled['cadence'],
                 'summary' => [
                     'final_time_delta_seconds' => $isBaseline ? 0.0 : $finalTimeDelta,
-                    'max_ahead_seconds' => $isBaseline ? 0.0 : $maxAhead,
-                    'max_behind_seconds' => $isBaseline ? 0.0 : $maxBehind,
                     'final_distance_delta_meters' => $isBaseline ? 0.0 : $finalDistanceDelta,
                 ],
             ];
@@ -887,41 +924,75 @@ class ActivityComparisonService
     }
 
     /**
-     * Align km_splits by split index (1..maxSplits) with time/HR deltas against Baseline.
+     * Use mile splits for imperial users when every activity has a usable distance stream,
+     * otherwise fall back to the stored kilometer splits for all activities so rows stay comparable.
      *
      * @param  list<Activity>  $activities
+     * @param  array<int, list<StreamPoint>>  $distanceStreams
+     * @return 'km'|'mi'
+     */
+    private function resolveSplitUnit(array $activities, array $distanceStreams): string
+    {
+        if (count($activities) < 2 || ! $this->settings->isImperial()) {
+            return 'km';
+        }
+
+        foreach ($activities as $activity) {
+            if (! $this->hasUsableSplitDistance($distanceStreams[$activity->id] ?? [])) {
+                return 'km';
+            }
+        }
+
+        return 'mi';
+    }
+
+    /**
+     * @param  list<StreamPoint>  $points
+     */
+    private function hasUsableSplitDistance(array $points): bool
+    {
+        $count = count($points);
+
+        if ($count < 2) {
+            return false;
+        }
+
+        $span = ($points[$count - 1]['distance'] ?? 0.0) - ($points[0]['distance'] ?? 0.0);
+
+        return $span >= self::MIN_TRAILING_SPLIT_METERS;
+    }
+
+    /**
+     * Align splits by split index (1..maxSplits) with time/HR deltas against Baseline.
+     *
+     * @param  list<Activity>  $activities
+     * @param  array<int, list<StreamPoint>>  $distanceStreams
+     * @param  'km'|'mi'  $splitUnit
      * @return list<AlignedSplitRow>
      */
-    private function buildAlignedSplits(array $activities): array
+    private function buildAlignedSplits(array $activities, array $distanceStreams, string $splitUnit): array
     {
         if (count($activities) < 2) {
             return [];
         }
 
-        /** @var array<int, array<int, array<string, mixed>>> $splitsByActivity */
+        $splitMeters = $splitUnit === 'mi' ? self::METERS_PER_MILE : self::METERS_PER_KM;
+        $labelPrefix = $splitUnit === 'mi' ? 'Mi' : 'Km';
+
+        /** @var array<int, array<int, SplitSource>> $splitsByActivity */
         $splitsByActivity = [];
         $maxSplitIndex = 0;
 
         foreach ($activities as $idx => $activity) {
-            $rawSplits = $activity->stream?->km_splits;
+            $sources = $splitUnit === 'mi'
+                ? $this->buildSplitsFromStream($distanceStreams[$activity->id] ?? [], $splitMeters)
+                : $this->normalizeStoredSplits($activity->stream?->km_splits);
+
             $indexed = [];
 
-            if (is_array($rawSplits)) {
-                $position = 1;
-
-                foreach ($rawSplits as $split) {
-                    if (! is_array($split)) {
-                        continue;
-                    }
-
-                    $km = isset($split['km']) && is_numeric($split['km']) && (int) $split['km'] > 0
-                        ? (int) $split['km']
-                        : $position;
-
-                    $indexed[$km] = $split;
-                    $maxSplitIndex = max($maxSplitIndex, $km);
-                    $position++;
-                }
+            foreach ($sources as $source) {
+                $indexed[$source['km']] = $source;
+                $maxSplitIndex = max($maxSplitIndex, $source['km']);
             }
 
             $splitsByActivity[$idx] = $indexed;
@@ -933,15 +1004,12 @@ class ActivityComparisonService
 
         $rows = [];
 
-        for ($km = 1; $km <= $maxSplitIndex; $km++) {
-            $baseSplit = $splitsByActivity[0][$km] ?? null;
-            $baseDuration = $baseSplit !== null ? $this->toNullableFloat($baseSplit['duration_seconds'] ?? null) : null;
-            $baseHr = $baseSplit !== null ? $this->toNullableInt($baseSplit['avg_hr'] ?? null) : null;
-
+        for ($splitIndex = 1; $splitIndex <= $maxSplitIndex; $splitIndex++) {
+            $baseSplit = $splitsByActivity[0][$splitIndex] ?? null;
             $entries = [];
 
             foreach ($activities as $idx => $activity) {
-                $split = $splitsByActivity[$idx][$km] ?? null;
+                $split = $splitsByActivity[$idx][$splitIndex] ?? null;
 
                 if ($split === null) {
                     $entries[] = [
@@ -957,6 +1025,7 @@ class ActivityComparisonService
                         'elevation_loss' => null,
                         'elevation_delta' => null,
                         'time_delta_seconds' => null,
+                        'time_delta_basis' => null,
                         'hr_delta' => null,
                         'is_partial' => false,
                     ];
@@ -964,54 +1033,304 @@ class ActivityComparisonService
                     continue;
                 }
 
-                $distance = $this->toNullableFloat($split['distance_meters'] ?? null);
-                $duration = $this->toNullableFloat($split['duration_seconds'] ?? null);
-                $avgSpeed = $this->toNullableFloat($split['avg_speed'] ?? null);
-                $paceSec = $this->toNullableFloat($split['pace_seconds_per_km'] ?? null);
-                $gapSec = $this->toNullableFloat($split['gap_seconds_per_km'] ?? null);
-                $avgHr = $this->toNullableInt($split['avg_hr'] ?? null);
-                $avgPower = $this->toNullableFloat($split['avg_power'] ?? null);
-                $elevGain = $this->toNullableFloat($split['elevation_gain'] ?? null);
-                $elevLoss = $this->toNullableFloat($split['elevation_loss'] ?? null);
+                $elevGain = $split['elevation_gain'];
+                $elevLoss = $split['elevation_loss'];
 
                 $elevDelta = ($elevGain !== null || $elevLoss !== null)
                     ? round(($elevGain ?? 0.0) - ($elevLoss ?? 0.0), 1)
                     : null;
 
-                $timeDelta = ($idx > 0 && $duration !== null && $baseDuration !== null)
-                    ? round($duration - $baseDuration, 1)
-                    : null;
+                [$timeDelta, $timeDeltaBasis] = ($idx > 0 && $baseSplit !== null)
+                    ? $this->splitTimeDelta($split, $baseSplit, $splitMeters)
+                    : [null, null];
 
-                $hrDelta = ($idx > 0 && $avgHr !== null && $baseHr !== null)
-                    ? $avgHr - $baseHr
+                $hrDelta = ($idx > 0 && $split['avg_hr'] !== null && $baseSplit !== null && $baseSplit['avg_hr'] !== null)
+                    ? $split['avg_hr'] - $baseSplit['avg_hr']
                     : null;
 
                 $entries[] = [
                     'activity_id' => $activity->id,
-                    'distance_meters' => $distance !== null ? round($distance, 1) : null,
-                    'duration_seconds' => $duration !== null ? round($duration, 1) : null,
-                    'avg_speed' => $avgSpeed !== null ? round($avgSpeed, 3) : null,
-                    'pace_seconds_per_km' => $paceSec !== null ? round($paceSec, 1) : null,
-                    'gap_seconds_per_km' => $gapSec !== null ? round($gapSec, 1) : null,
-                    'avg_hr' => $avgHr,
-                    'avg_power' => $avgPower !== null ? round($avgPower, 1) : null,
-                    'elevation_gain' => $elevGain !== null ? round($elevGain, 1) : null,
-                    'elevation_loss' => $elevLoss !== null ? round($elevLoss, 1) : null,
+                    'distance_meters' => $this->roundNullable($split['distance_meters'], 1),
+                    'duration_seconds' => $this->roundNullable($split['duration_seconds'], 1),
+                    'avg_speed' => $this->roundNullable($split['avg_speed'], 3),
+                    'pace_seconds_per_km' => $this->roundNullable($split['pace_seconds_per_km'], 1),
+                    'gap_seconds_per_km' => $this->roundNullable($split['gap_seconds_per_km'], 1),
+                    'avg_hr' => $split['avg_hr'],
+                    'avg_power' => $this->roundNullable($split['avg_power'], 1),
+                    'elevation_gain' => $this->roundNullable($elevGain, 1),
+                    'elevation_loss' => $this->roundNullable($elevLoss, 1),
                     'elevation_delta' => $elevDelta,
                     'time_delta_seconds' => $timeDelta,
+                    'time_delta_basis' => $timeDeltaBasis,
                     'hr_delta' => $hrDelta,
-                    'is_partial' => $distance !== null && $distance < 950.0,
+                    'is_partial' => $this->isPartialSplit($split['distance_meters'], $splitMeters),
                 ];
             }
 
             $rows[] = [
-                'split_index' => $km,
-                'label' => "Km {$km}",
+                'split_index' => $splitIndex,
+                'label' => "{$labelPrefix} {$splitIndex}",
                 'entries' => $entries,
             ];
         }
 
         return $rows;
+    }
+
+    /**
+     * Compare split durations when both splits cover the full split length. When either is partial
+     * (typically the final split, ending at different distances) compare pace per split length instead,
+     * since raw durations over different distances are meaningless.
+     *
+     * @param  SplitSource  $split
+     * @param  SplitSource  $baseSplit
+     * @return array{0: ?float, 1: 'duration'|'pace'|null}
+     */
+    private function splitTimeDelta(array $split, array $baseSplit, float $splitMeters): array
+    {
+        $duration = $split['duration_seconds'];
+        $baseDuration = $baseSplit['duration_seconds'];
+
+        if ($duration === null || $baseDuration === null) {
+            return [null, null];
+        }
+
+        $distance = $split['distance_meters'];
+        $baseDistance = $baseSplit['distance_meters'];
+
+        if (! $this->isPartialSplit($distance, $splitMeters) && ! $this->isPartialSplit($baseDistance, $splitMeters)) {
+            return [round($duration - $baseDuration, 1), 'duration'];
+        }
+
+        if ($distance === null || $baseDistance === null || $distance <= 0.0 || $baseDistance <= 0.0) {
+            return [null, null];
+        }
+
+        $pace = ($duration / $distance) * $splitMeters;
+        $basePace = ($baseDuration / $baseDistance) * $splitMeters;
+
+        return [round($pace - $basePace, 1), 'pace'];
+    }
+
+    private function isPartialSplit(?float $distance, float $splitMeters): bool
+    {
+        return $distance !== null && $distance < $splitMeters * self::PARTIAL_SPLIT_RATIO;
+    }
+
+    /**
+     * Normalize stored km_splits. Uses each split's `km` number when every split has a unique positive one,
+     * otherwise falls back to list position so mixed or duplicate keys never overwrite each other.
+     *
+     * @return list<SplitSource>
+     */
+    private function normalizeStoredSplits(mixed $rawSplits): array
+    {
+        if (! is_array($rawSplits)) {
+            return [];
+        }
+
+        $rows = array_values(array_filter($rawSplits, 'is_array'));
+
+        if ($rows === []) {
+            return [];
+        }
+
+        $storedKeys = array_map(
+            static fn (array $row): int => isset($row['km']) && is_numeric($row['km']) ? (int) $row['km'] : 0,
+            $rows,
+        );
+
+        $useStoredKeys = min($storedKeys) > 0 && count(array_unique($storedKeys)) === count($storedKeys);
+        $sources = [];
+
+        foreach ($rows as $position => $row) {
+            $sources[] = [
+                'km' => $useStoredKeys ? $storedKeys[$position] : $position + 1,
+                'distance_meters' => $this->toNullableFloat($row['distance_meters'] ?? null),
+                'duration_seconds' => $this->toNullableFloat($row['duration_seconds'] ?? null),
+                'avg_speed' => $this->toNullableFloat($row['avg_speed'] ?? null),
+                'pace_seconds_per_km' => $this->toNullableFloat($row['pace_seconds_per_km'] ?? null),
+                'gap_seconds_per_km' => $this->toNullableFloat($row['gap_seconds_per_km'] ?? null),
+                'avg_hr' => $this->toNullableInt($row['avg_hr'] ?? null),
+                'avg_power' => $this->toNullableFloat($row['avg_power'] ?? null),
+                'elevation_gain' => $this->toNullableFloat($row['elevation_gain'] ?? null),
+                'elevation_loss' => $this->toNullableFloat($row['elevation_loss'] ?? null),
+            ];
+        }
+
+        return $sources;
+    }
+
+    /**
+     * Build fixed-length splits (e.g. miles) from a monotonic distance stream by interpolating boundary crossings.
+     * Pace and GAP are expressed per kilometer to match stored km_splits; the client converts for display.
+     *
+     * @param  list<StreamPoint>  $points
+     * @return list<SplitSource>
+     */
+    private function buildSplitsFromStream(array $points, float $splitMeters): array
+    {
+        if (! $this->hasUsableSplitDistance($points)) {
+            return [];
+        }
+
+        $splits = [];
+        $splitIndex = 1;
+        $previous = $points[0];
+        $splitStartDistance = $previous['distance'] ?? 0.0;
+        $splitStartTime = $previous['time'];
+        $boundary = $splitStartDistance + $splitMeters;
+
+        $accumulator = $this->newSplitAccumulator();
+        $this->accumulateSplitSample($accumulator, $previous);
+
+        $count = count($points);
+
+        for ($i = 1; $i < $count; $i++) {
+            $current = $points[$i];
+            $currentDistance = $current['distance'] ?? 0.0;
+
+            $segmentDistance = $previous['distance'] ?? 0.0;
+            $segmentTime = $previous['time'];
+            $segmentAltitude = $previous['altitude'];
+
+            while ($currentDistance >= $boundary && $currentDistance > $segmentDistance) {
+                $fraction = ($boundary - $segmentDistance) / ($currentDistance - $segmentDistance);
+                $crossTime = $segmentTime + ($fraction * ($current['time'] - $segmentTime));
+                $crossAltitude = $this->lerpNullable($segmentAltitude, $current['altitude'], $fraction, 3);
+
+                $this->accumulateSplitElevation($accumulator, $segmentAltitude, $crossAltitude);
+
+                if ($accumulator['sample_count'] === 0) {
+                    $this->accumulateSplitSample($accumulator, $current);
+                }
+
+                $splits[] = $this->finalizeStreamSplit(
+                    $splitIndex,
+                    $boundary - $splitStartDistance,
+                    $crossTime - $splitStartTime,
+                    $accumulator,
+                );
+
+                $splitIndex++;
+                $splitStartDistance = $boundary;
+                $splitStartTime = $crossTime;
+                $boundary += $splitMeters;
+
+                $segmentDistance = $splitStartDistance;
+                $segmentTime = $crossTime;
+                $segmentAltitude = $crossAltitude;
+
+                $accumulator = $this->newSplitAccumulator();
+            }
+
+            $this->accumulateSplitElevation($accumulator, $segmentAltitude, $current['altitude']);
+            $this->accumulateSplitSample($accumulator, $current);
+
+            $previous = $current;
+        }
+
+        $remaining = ($previous['distance'] ?? 0.0) - $splitStartDistance;
+
+        if ($remaining >= self::MIN_TRAILING_SPLIT_METERS) {
+            $splits[] = $this->finalizeStreamSplit(
+                $splitIndex,
+                $remaining,
+                $previous['time'] - $splitStartTime,
+                $accumulator,
+            );
+        }
+
+        return $splits;
+    }
+
+    /**
+     * @return array{sample_count: int, hr_sum: float, hr_count: int, power_sum: float, power_count: int, gap_sum: float, gap_count: int, gain: float, loss: float}
+     */
+    private function newSplitAccumulator(): array
+    {
+        return [
+            'sample_count' => 0,
+            'hr_sum' => 0.0,
+            'hr_count' => 0,
+            'power_sum' => 0.0,
+            'power_count' => 0,
+            'gap_sum' => 0.0,
+            'gap_count' => 0,
+            'gain' => 0.0,
+            'loss' => 0.0,
+        ];
+    }
+
+    /**
+     * @param  array{sample_count: int, hr_sum: float, hr_count: int, power_sum: float, power_count: int, gap_sum: float, gap_count: int, gain: float, loss: float}  $accumulator
+     * @param  StreamPoint  $point
+     */
+    private function accumulateSplitSample(array &$accumulator, array $point): void
+    {
+        $accumulator['sample_count']++;
+
+        if ($point['hr'] !== null) {
+            $accumulator['hr_sum'] += $point['hr'];
+            $accumulator['hr_count']++;
+        }
+
+        if ($point['power'] !== null) {
+            $accumulator['power_sum'] += $point['power'];
+            $accumulator['power_count']++;
+        }
+
+        if ($point['gap_speed'] !== null && $point['gap_speed'] > 0.0) {
+            $accumulator['gap_sum'] += $point['gap_speed'];
+            $accumulator['gap_count']++;
+        }
+    }
+
+    /**
+     * @param  array{sample_count: int, hr_sum: float, hr_count: int, power_sum: float, power_count: int, gap_sum: float, gap_count: int, gain: float, loss: float}  $accumulator
+     */
+    private function accumulateSplitElevation(array &$accumulator, ?float $fromAltitude, ?float $toAltitude): void
+    {
+        if ($fromAltitude === null || $toAltitude === null) {
+            return;
+        }
+
+        $delta = $toAltitude - $fromAltitude;
+
+        if ($delta > 0.0) {
+            $accumulator['gain'] += $delta;
+        } elseif ($delta < 0.0) {
+            $accumulator['loss'] += abs($delta);
+        }
+    }
+
+    /**
+     * @param  array{sample_count: int, hr_sum: float, hr_count: int, power_sum: float, power_count: int, gap_sum: float, gap_count: int, gain: float, loss: float}  $accumulator
+     * @return SplitSource
+     */
+    private function finalizeStreamSplit(int $splitIndex, float $distance, float $duration, array $accumulator): array
+    {
+        $duration = max(0.0, $duration);
+        $avgSpeed = $duration > 0.0 ? $distance / $duration : null;
+        $avgGapSpeed = $accumulator['gap_count'] > 0 ? $accumulator['gap_sum'] / $accumulator['gap_count'] : null;
+
+        return [
+            'km' => $splitIndex,
+            'distance_meters' => round($distance, 2),
+            'duration_seconds' => round($duration, 2),
+            'avg_speed' => $avgSpeed !== null ? round($avgSpeed, 3) : null,
+            'pace_seconds_per_km' => $avgSpeed !== null && $avgSpeed > 0.0 ? round(self::METERS_PER_KM / $avgSpeed, 2) : null,
+            'gap_seconds_per_km' => $avgGapSpeed !== null ? round(self::METERS_PER_KM / $avgGapSpeed, 2) : null,
+            'avg_hr' => $accumulator['hr_count'] > 0 ? (int) round($accumulator['hr_sum'] / $accumulator['hr_count']) : null,
+            'avg_power' => $accumulator['power_count'] > 0 ? round($accumulator['power_sum'] / $accumulator['power_count'], 1) : null,
+            'elevation_gain' => round($accumulator['gain'], 1),
+            'elevation_loss' => round($accumulator['loss'], 1),
+        ];
+    }
+
+    private function roundNullable(?float $value, int $precision): ?float
+    {
+        return $value !== null ? round($value, $precision) : null;
     }
 
     /**

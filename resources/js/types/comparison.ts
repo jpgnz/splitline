@@ -77,8 +77,6 @@ export interface ComparisonCandidate {
 
 export interface AlignedSeriesSummary {
     final_time_delta_seconds: number | null;
-    max_ahead_seconds: number | null;
-    max_behind_seconds: number | null;
     final_distance_delta_meters: number | null;
 }
 
@@ -126,9 +124,13 @@ export interface AlignedSplitEntry {
     elevation_loss: number | null;
     elevation_delta: number | null;
     time_delta_seconds: number | null;
+    /** `duration` compares full split times; `pace` compares pace per split length (partial splits). */
+    time_delta_basis: 'duration' | 'pace' | null;
     hr_delta: number | null;
     is_partial: boolean;
 }
+
+export type ComparisonSplitUnit = 'km' | 'mi';
 
 export interface AlignedSplitRow {
     split_index: number;
@@ -136,13 +138,19 @@ export interface AlignedSplitRow {
     entries: AlignedSplitEntry[];
 }
 
+export type ComparisonFallbackReason =
+    | 'missing_distance_stream'
+    | 'missing_time_stream'
+    | 'missing_streams';
+
 export interface ActivityCompareProps {
     align: ComparisonAlignMode;
     requested_align: ComparisonAlignMode;
-    fallback_reason: string | null;
+    fallback_reason: ComparisonFallbackReason | null;
     selected_ids: number[];
     activities: ComparisonActivity[];
     candidates: ComparisonCandidate[];
     aligned: AlignedTelemetryPayload;
+    split_unit: ComparisonSplitUnit;
     splits: AlignedSplitRow[];
 }

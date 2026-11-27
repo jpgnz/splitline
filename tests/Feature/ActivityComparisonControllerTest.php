@@ -122,6 +122,7 @@ it('renders side-by-side comparison for comma-separated activity IDs', function 
             ->where('aligned.mode', 'distance')
             ->where('aligned.axis_max', 5000)
             ->where('aligned.series.1.summary.final_time_delta_seconds', 60)
+            ->where('split_unit', 'km')
             ->has('splits', 1)
             ->where('splits.0.entries.1.time_delta_seconds', 12),
         );
@@ -156,5 +157,28 @@ it('supports array ids parameter and time alignment query option', function () {
             ->where('activities.0.id', $second->id)
             ->where('aligned.mode', 'time')
             ->where('aligned.series.1.summary.final_distance_delta_meters', -200),
+        );
+});
+
+it('rejects invalid comparison query parameters', function (string $query, string $errorKey) {
+    $this->get("/activities/compare?{$query}")
+        ->assertRedirect()
+        ->assertSessionHasErrors($errorKey);
+})->with([
+    'non-numeric id' => ['ids=abc', 'ids.0'],
+    'zero id' => ['ids=0', 'ids.0'],
+    'duplicate ids' => ['ids=4,4', 'ids.0'],
+    'more than three ids' => ['ids=1,2,3,4', 'ids'],
+    'unknown align axis' => ['ids=1,2&align=pace', 'align'],
+]);
+
+it('ignores requested activity IDs that do not exist', function () {
+    $activity = Activity::factory()->create();
+
+    $this->get("/activities/compare?ids={$activity->id},999999")
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('selected_ids', [$activity->id])
+            ->has('activities', 1),
         );
 });
