@@ -672,7 +672,7 @@ function formatGoalPaceLabel(goal: {
 
         return goal.delta >= 0
             ? `On track · +${converted.toFixed(1)} mi ahead`
-            : `Behind · -${converted.toFixed(1)} mi`;
+            : `Behind · ${converted.toFixed(1)} mi behind`;
     }
 
     if (goal.unit === 'm') {
@@ -680,7 +680,7 @@ function formatGoalPaceLabel(goal: {
 
         return goal.delta >= 0
             ? `On track · +${formatNumber(converted, 0)} ft ahead`
-            : `Behind · -${formatNumber(converted, 0)} ft`;
+            : `Behind · ${formatNumber(converted, 0)} ft behind`;
     }
 
     return goal.pace_label;
@@ -1212,14 +1212,6 @@ const bodyBatteryChartOption = computed<EChartsOption>(() => {
         grid: { left: 4, right: 6, top: 20, bottom: 4, containLabel: false },
         tooltip: {
             trigger: 'axis',
-            backgroundColor: theme.tooltipBg.value,
-            borderColor: theme.tooltipBorder.value,
-            borderWidth: 1,
-            textStyle: {
-                color: theme.tooltipText.value,
-                fontFamily: theme.fontFamilyMono,
-                fontSize: 11,
-            },
             formatter: (params: unknown) => {
                 const list = Array.isArray(params) ? params : [params];
                 const first = list[0] as
@@ -1316,14 +1308,6 @@ const sleepTrendChartOption = computed<EChartsOption>(() => {
         tooltip: {
             trigger: 'axis',
             axisPointer: { type: 'shadow' },
-            backgroundColor: theme.tooltipBg.value,
-            borderColor: theme.tooltipBorder.value,
-            borderWidth: 1,
-            textStyle: {
-                color: theme.tooltipText.value,
-                fontFamily: theme.fontFamilyMono,
-                fontSize: 11,
-            },
             formatter: (params: unknown) => {
                 const list = Array.isArray(params) ? params : [params];
                 const first = list[0] as { dataIndex?: number } | undefined;
@@ -1403,14 +1387,6 @@ const hrvChartOption = computed<EChartsOption>(() => {
         grid: { left: 2, right: 2, top: 8, bottom: 4, containLabel: false },
         tooltip: {
             trigger: 'axis',
-            backgroundColor: theme.tooltipBg.value,
-            borderColor: theme.tooltipBorder.value,
-            borderWidth: 1,
-            textStyle: {
-                color: theme.tooltipText.value,
-                fontFamily: theme.fontFamilyMono,
-                fontSize: 11,
-            },
             formatter: (params: unknown) => {
                 const list = Array.isArray(params) ? params : [params];
                 const first = list[0] as { dataIndex?: number } | undefined;
@@ -1493,14 +1469,6 @@ const hrSparklineOption = computed<EChartsOption>(() => {
         grid: { left: 1, right: 1, top: 4, bottom: 2, containLabel: false },
         tooltip: {
             trigger: 'axis',
-            backgroundColor: theme.tooltipBg.value,
-            borderColor: theme.tooltipBorder.value,
-            borderWidth: 1,
-            textStyle: {
-                color: theme.tooltipText.value,
-                fontFamily: theme.fontFamilyMono,
-                fontSize: 10,
-            },
             formatter: (params: unknown) => {
                 const list = Array.isArray(params) ? params : [params];
                 const first = list[0] as
@@ -1716,14 +1684,8 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                     v-if="!isProviderConfigured"
                     class="text-sm text-zinc-500 dark:text-zinc-400"
                 >
-                    Set
-                    <code
-                        class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-xs text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200"
-                    >
-                        GARMIN_KEY
-                    </code>
-                    in your environment to enable syncing activities, sleep,
-                    HRV, and route data.
+                    Connect your data provider in Settings to start syncing
+                    activities and health metrics.
                 </p>
                 <p v-else class="text-sm text-zinc-500 dark:text-zinc-400">
                     Click
@@ -1771,23 +1733,29 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                         >
                             Body Battery
                         </span>
-                        <span
-                            v-if="
-                                bodyBattery.charged !== null ||
-                                bodyBattery.drained !== null
-                            "
-                            class="font-mono text-xs tabular-nums"
-                        >
-                            <span class="text-emerald-500"
-                                >+{{ bodyBattery.charged ?? 0 }}</span
+                        <div class="flex items-center gap-2">
+                            <span
+                                v-if="
+                                    bodyBattery.charged !== null ||
+                                    bodyBattery.drained !== null
+                                "
+                                class="font-mono text-xs tabular-nums"
                             >
-                            <span class="mx-1 text-zinc-300 dark:text-zinc-700"
-                                >/</span
-                            >
-                            <span class="text-zinc-500 dark:text-zinc-400"
-                                >-{{ bodyBattery.drained ?? 0 }}</span
-                            >
-                        </span>
+                                <span class="text-emerald-500"
+                                    >+{{ bodyBattery.charged ?? 0 }}</span
+                                >
+                                <span
+                                    class="mx-1 text-zinc-300 dark:text-zinc-700"
+                                    >/</span
+                                >
+                                <span class="text-zinc-500 dark:text-zinc-400"
+                                    >-{{ bodyBattery.drained ?? 0 }}</span
+                                >
+                            </span>
+                            <ArrowUpRight
+                                class="size-3.5 text-zinc-300 transition-colors group-hover:text-zinc-600 dark:text-zinc-700 dark:group-hover:text-zinc-300"
+                            />
+                        </div>
                     </div>
 
                     <div
@@ -1862,6 +1830,9 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                             >
                                 Score {{ sleep.score }}
                             </span>
+                            <ArrowUpRight
+                                class="ml-0.5 size-3.5 text-zinc-300 transition-colors group-hover:text-zinc-600 dark:text-zinc-700 dark:group-hover:text-zinc-300"
+                            />
                         </div>
                     </div>
 
@@ -1955,13 +1926,18 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                         >
                             HRV Status
                         </span>
-                        <span
-                            v-if="hrv.status"
-                            class="rounded-full px-2 py-0.5 font-mono text-[10px] font-medium uppercase"
-                            :class="hrvStatusClass"
-                        >
-                            {{ formatQualifier(hrv.status) }}
-                        </span>
+                        <div class="flex items-center gap-2">
+                            <span
+                                v-if="hrv.status"
+                                class="rounded-full px-2 py-0.5 font-mono text-[10px] font-medium uppercase"
+                                :class="hrvStatusClass"
+                            >
+                                {{ formatQualifier(hrv.status) }}
+                            </span>
+                            <ArrowUpRight
+                                class="size-3.5 text-zinc-300 transition-colors group-hover:text-zinc-600 dark:text-zinc-700 dark:group-hover:text-zinc-300"
+                            />
+                        </div>
                     </div>
 
                     <div
@@ -2858,7 +2834,7 @@ const hrSparklineOption = computed<EChartsOption>(() => {
                             </span>
                             <span
                                 title="Evaluated locally against your personal 28-day baselines for HRV, Resting HR, Respiration, and SpO2"
-                                class="rounded bg-zinc-500/10 px-1.5 py-0.5 font-mono text-[9px] font-medium text-zinc-500 uppercase dark:text-zinc-400"
+                                class="rounded-full bg-zinc-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Est.
                             </span>
