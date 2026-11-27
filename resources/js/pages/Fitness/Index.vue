@@ -1122,16 +1122,6 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div class="space-y-1">
-                <div class="flex items-center gap-2">
-                    <span
-                        class="inline-flex size-2 rounded-full bg-emerald-500"
-                    />
-                    <span
-                        class="font-mono text-[10px] font-medium tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        Performance Management
-                    </span>
-                </div>
                 <h1
                     class="text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl dark:text-zinc-50"
                 >

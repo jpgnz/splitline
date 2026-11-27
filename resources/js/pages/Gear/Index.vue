@@ -555,13 +555,8 @@ function activitySportAccentHex(activity: GearRecentActivity): string {
             class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"
         >
             <div>
-                <p
-                    class="font-mono text-[11px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                >
-                    Planning &amp; Equipment
-                </p>
                 <h1
-                    class="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
+                    class="text-2xl font-semibold tracking-tight text-zinc-900 sm:text-3xl dark:text-zinc-100"
                 >
                     Gear Tracking
                 </h1>
@@ -696,13 +691,8 @@ function activitySportAccentHex(activity: GearRecentActivity): string {
 
             <div class="flex items-start justify-between gap-4">
                 <div>
-                    <p
-                        class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        {{ isEditing ? 'Update Equipment' : 'New Equipment' }}
-                    </p>
                     <h2
-                        class="mt-0.5 text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
+                        class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                     >
                         {{
                             isEditing
