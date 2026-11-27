@@ -19,10 +19,13 @@ export type ChartPointClickPayload = {
 const props = withDefaults(
     defineProps<{
         option: EChartsOption;
+        /** Partial option merged on top of `option` (e.g. highlights) without a full re-render. */
+        overlayOption?: EChartsOption | null;
         height?: number | string;
         group?: string;
     }>(),
     {
+        overlayOption: null,
         height: 240,
         group: undefined,
     },
@@ -94,6 +97,10 @@ function renderChart(): void {
     }
 
     chart.setOption(mergedOption.value, { notMerge: true });
+
+    if (props.overlayOption) {
+        chart.setOption(props.overlayOption);
+    }
 }
 
 onMounted(() => {
@@ -149,6 +156,21 @@ onMounted(() => {
 watch([mergedOption, isDark], () => {
     renderChart();
 });
+
+watch(
+    () => props.overlayOption,
+    (overlay, previous) => {
+        if (!chart) {
+            return;
+        }
+
+        if (overlay) {
+            chart.setOption(overlay, { lazyUpdate: true });
+        } else if (previous) {
+            renderChart();
+        }
+    },
+);
 
 watch(
     () => props.group,

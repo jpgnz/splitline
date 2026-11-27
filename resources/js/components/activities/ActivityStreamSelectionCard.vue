@@ -778,6 +778,17 @@ function toggleHalfComparison(): void {
                         {{ formatDurationClock(selectionStats.startTime) }} –
                         {{ formatDurationClock(selectionStats.endTime) }}
                     </div>
+                    <div
+                        v-if="
+                            selectionStats.elapsedSeconds -
+                                selectionStats.durationSeconds >=
+                            1
+                        "
+                        class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                    >
+                        Elapsed
+                        {{ formatDurationClock(selectionStats.elapsedSeconds) }}
+                    </div>
                 </div>
 
                 <!-- Distance -->

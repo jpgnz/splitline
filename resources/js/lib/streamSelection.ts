@@ -13,7 +13,9 @@ export interface StreamSelectionStats {
     pointCount: number;
     startTime: number;
     endTime: number;
+    /** Moving time: elapsed time minus pause gaps (see resolvePauseThresholdSeconds). */
     durationSeconds: number;
+    elapsedSeconds: number;
     startDistanceMeters: number | null;
     endDistanceMeters: number | null;
     distanceMeters: number | null;
@@ -72,6 +74,54 @@ function medianOf(values: number[]): number | null {
     return (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+/** Mirrors ActivityDerivedMetricsService::PAUSE_MIN_SECONDS. */
+const PAUSE_MIN_SECONDS = 15;
+
+/** Mirrors ActivityDerivedMetricsService::PAUSE_MEDIAN_MULTIPLIER. */
+const PAUSE_MEDIAN_MULTIPLIER = 4;
+
+/** Mirrors ClimbDetector::SMOOTHING_WINDOW / ALTITUDE_GAIN_NOISE_THRESHOLD. */
+const ALTITUDE_SMOOTHING_RADIUS = 2;
+const ALTITUDE_NOISE_THRESHOLD_METERS = 0.2;
+
+/**
+ * Median positive sampling interval for a slice (upper-middle value, matching the backend).
+ */
+function medianPositiveStep(
+    series: StreamPoint[],
+    startIdx: number,
+    endIdx: number,
+): number {
+    const deltas: number[] = [];
+
+    for (let i = startIdx + 1; i <= endIdx; i += 1) {
+        const dt = series[i].time - series[i - 1].time;
+
+        if (Number.isFinite(dt) && dt > 0) {
+            deltas.push(dt);
+        }
+    }
+
+    if (deltas.length === 0) {
+        return 1;
+    }
+
+    deltas.sort((a, b) => a - b);
+
+    return deltas[Math.floor(deltas.length / 2)];
+}
+
+/**
+ * Gap between consecutive samples (seconds) treated as a pause: the same rule the backend
+ * uses for aerobic decoupling, max(15s, 4 x median sampling interval).
+ */
+function resolvePauseThresholdSeconds(medianStepSeconds: number): number {
+    return Math.max(
+        PAUSE_MIN_SECONDS,
+        medianStepSeconds * PAUSE_MEDIAN_MULTIPLIER,
+    );
+}
+
 function approxMetersBetween(
     lat1: number,
     lng1: number,
@@ -88,13 +138,14 @@ function approxMetersBetween(
 /**
  * Standard Coggan 30-second rolling-average 4th-power Normalized Power (NP).
  * Resamples irregularly spaced telemetry onto a 1-second grid while resetting
- * across pause gaps (> 15s) so cafe stops never distort NP.
+ * across pause gaps so cafe stops never distort NP.
  */
 function computeNormalizedPower(
     series: StreamPoint[],
     startIdx: number,
     endIdx: number,
     durationSeconds: number,
+    pauseThresholdSeconds: number,
 ): number | null {
     if (durationSeconds < 30) {
         return null;
@@ -155,7 +206,7 @@ function computeNormalizedPower(
             continue;
         }
 
-        if (dt > 15) {
+        if (dt > pauseThresholdSeconds) {
             ringPos = 0;
             ringCount = 0;
             ringSum = 0;
@@ -178,6 +229,55 @@ function computeNormalizedPower(
     }
 
     return Math.round((fourthSum / fourthCount) ** 0.25);
+}
+
+/**
+ * Elevation gain/loss over a centred moving average with a small per-step noise threshold,
+ * matching how segment and climb efforts are measured on the backend.
+ */
+function computeElevationChange(
+    altitudes: number[],
+): { gain: number; loss: number; net: number } | null {
+    const count = altitudes.length;
+
+    if (count < 2) {
+        return null;
+    }
+
+    const smoothed: number[] = [];
+
+    for (let i = 0; i < count; i += 1) {
+        const lo = Math.max(0, i - ALTITUDE_SMOOTHING_RADIUS);
+        const hi = Math.min(count - 1, i + ALTITUDE_SMOOTHING_RADIUS);
+        let sum = 0;
+
+        for (let k = lo; k <= hi; k += 1) {
+            sum += altitudes[k];
+        }
+
+        smoothed.push(sum / (hi - lo + 1));
+    }
+
+    let gain = 0;
+    let loss = 0;
+
+    for (let i = 1; i < count; i += 1) {
+        const delta = smoothed[i] - smoothed[i - 1];
+
+        if (delta > ALTITUDE_NOISE_THRESHOLD_METERS) {
+            gain += delta;
+        } else if (delta < -ALTITUDE_NOISE_THRESHOLD_METERS) {
+            loss += Math.abs(delta);
+        }
+    }
+
+    const net = smoothed[count - 1] - smoothed[0];
+
+    return {
+        gain: Math.max(gain, Math.max(0, net)),
+        loss: Math.max(loss, Math.max(0, -net)),
+        net,
+    };
 }
 
 function computeAverageEffectiveWind(
@@ -282,19 +382,11 @@ export function computeStreamSelectionStats(
     const endPoint = series[end];
     const startTime = startPoint.time;
     const endTime = endPoint.time;
-    const durationSeconds = Math.max(0, endTime - startTime);
+    const elapsedSeconds = Math.max(0, endTime - startTime);
 
-    const positiveSteps: number[] = [];
-
-    for (let i = start + 1; i <= end; i += 1) {
-        const dt = series[i].time - series[i - 1].time;
-
-        if (Number.isFinite(dt) && dt > 0 && dt <= 30) {
-            positiveSteps.push(dt);
-        }
-    }
-
-    const medianStep = medianOf(positiveSteps) ?? 1;
+    const medianStep = medianPositiveStep(series, start, end);
+    const pauseThreshold = resolvePauseThresholdSeconds(medianStep);
+    let movingSeconds = 0;
 
     let startDistanceMeters: number | null = null;
     let endDistanceMeters: number | null = null;
@@ -306,12 +398,7 @@ export function computeStreamSelectionStats(
     let gapWeightedSum = 0;
     let gapWeightSum = 0;
 
-    let firstAlt: number | null = null;
-    let lastAlt: number | null = null;
-    let prevAlt: number | null = null;
-    let altCount = 0;
-    let elevGain = 0;
-    let elevLoss = 0;
+    const altitudes: number[] = [];
 
     let gradeWeightedSum = 0;
     let gradeWeightSum = 0;
@@ -337,10 +424,13 @@ export function computeStreamSelectionStats(
                     ? series[start + 1].time - pt.time
                     : 1
                 : pt.time - series[i - 1].time;
-        const dt =
-            Number.isFinite(rawDt) && rawDt > 0 && rawDt <= 15
-                ? rawDt
-                : medianStep;
+        const isContinuous =
+            Number.isFinite(rawDt) && rawDt > 0 && rawDt <= pauseThreshold;
+        const dt = isContinuous ? rawDt : medianStep;
+
+        if (i > start && isContinuous) {
+            movingSeconds += rawDt;
+        }
 
         if (isFiniteNumber(pt.distance)) {
             if (startDistanceMeters === null) {
@@ -365,23 +455,7 @@ export function computeStreamSelectionStats(
         }
 
         if (isFiniteNumber(pt.altitude)) {
-            if (firstAlt === null) {
-                firstAlt = pt.altitude;
-            }
-
-            if (prevAlt !== null) {
-                const deltaAlt = pt.altitude - prevAlt;
-
-                if (deltaAlt > 0) {
-                    elevGain += deltaAlt;
-                } else if (deltaAlt < 0) {
-                    elevLoss += Math.abs(deltaAlt);
-                }
-            }
-
-            prevAlt = pt.altitude;
-            lastAlt = pt.altitude;
-            altCount += 1;
+            altitudes.push(pt.altitude);
         }
 
         if (isFiniteNumber(pt.grade)) {
@@ -428,6 +502,8 @@ export function computeStreamSelectionStats(
             ? roundTo(endDistanceMeters - startDistanceMeters, 2)
             : null;
 
+    const durationSeconds = movingSeconds;
+
     const avgSpeed =
         distanceMeters !== null && distanceMeters > 0 && durationSeconds > 0
             ? roundTo(distanceMeters / durationSeconds, 3)
@@ -438,12 +514,10 @@ export function computeStreamSelectionStats(
     const avgGapSpeed =
         gapWeightSum > 0 ? roundTo(gapWeightedSum / gapWeightSum, 3) : null;
 
-    const elevationGain = altCount >= 2 ? roundTo(elevGain, 1) : null;
-    const elevationLoss = altCount >= 2 ? roundTo(elevLoss, 1) : null;
-    const netElevation =
-        altCount >= 2 && firstAlt !== null && lastAlt !== null
-            ? roundTo(lastAlt - firstAlt, 1)
-            : null;
+    const elevation = computeElevationChange(altitudes);
+    const elevationGain = elevation ? roundTo(elevation.gain, 1) : null;
+    const elevationLoss = elevation ? roundTo(elevation.loss, 1) : null;
+    const netElevation = elevation ? roundTo(elevation.net, 1) : null;
 
     const avgGradePct =
         netElevation !== null && distanceMeters !== null && distanceMeters >= 10
@@ -464,7 +538,13 @@ export function computeStreamSelectionStats(
             ? Math.round(powerWeightedSum / powerWeightSum)
             : null;
     const normalizedPower = hasPositivePower
-        ? computeNormalizedPower(series, start, end, durationSeconds)
+        ? computeNormalizedPower(
+              series,
+              start,
+              end,
+              durationSeconds,
+              pauseThreshold,
+          )
         : null;
     const avgCadence =
         cadenceWeightSum > 0
@@ -485,6 +565,7 @@ export function computeStreamSelectionStats(
         startTime,
         endTime,
         durationSeconds: roundTo(durationSeconds, 1),
+        elapsedSeconds: roundTo(elapsedSeconds, 1),
         startDistanceMeters:
             startDistanceMeters !== null
                 ? roundTo(startDistanceMeters, 2)

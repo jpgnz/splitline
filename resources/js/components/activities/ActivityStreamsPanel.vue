@@ -177,7 +177,7 @@ export function countTelemetryPanels(
 <script setup lang="ts">
 import type { EChartsOption, SeriesOption } from 'echarts';
 import { Crosshair } from '@lucide/vue';
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
 import ActivityStreamSelectionCard from '@/components/activities/ActivityStreamSelectionCard.vue';
 import BaseChart, {
     type ChartPointClickPayload,
@@ -211,9 +211,11 @@ const props = withDefaults(
         isRunning: boolean;
         hasAmbientWeather: boolean;
         weather?: ActivityWeatherPayload | null;
+        highlightRange?: HighlightRange | null;
     }>(),
     {
         weather: null,
+        highlightRange: null,
     },
 );
 
@@ -254,18 +256,23 @@ const selectionEndIndex = ref<number | null>(null);
 const selectionLabel = ref('Selected Slice');
 const activeIntervalId = ref<string | null>(null);
 const pendingClickStart = ref<number | null>(null);
-const hoveredStreamIndex = ref<number | null>(null);
 
-const isPointerDown = ref(false);
-const dragAnchorIndex = ref<number | null>(null);
-const didDragSelect = ref(false);
+let hoveredStreamIndex: number | null = null;
+let pointerPanelKey: string | null = null;
+let isPointerDown = false;
+let dragAnchorIndex: number | null = null;
+let didDragSelect = false;
+let pendingDragIndex: number | null = null;
+let dragFrameId: number | null = null;
 let lastPointClickAt = 0;
 let suppressNextClickUntil = 0;
 
+/** Ranges this panel emitted, so external highlight changes can be told apart from our own. */
+const emittedRanges = new WeakSet<HighlightRange>();
+let lastEmittedRange: HighlightRange | null | undefined = undefined;
+
 const isCycling = computed<boolean>(
-    () =>
-        props.activity.sport_category === 'biking' ||
-        props.activity.sport_category === 'cycling',
+    () => props.activity.sport_category === 'biking',
 );
 
 const detectedIntervals = computed<DetectedInterval[]>(() =>
@@ -292,11 +299,19 @@ function resolveHighlightRange(
         const dist = props.series[i]?.distance;
 
         if (typeof dist === 'number' && Number.isFinite(dist)) {
-            if (startDistance === null) {
-                startDistance = dist;
-            }
+            startDistance = dist;
 
+            break;
+        }
+    }
+
+    for (let i = endIdx; i >= startIdx; i -= 1) {
+        const dist = props.series[i]?.distance;
+
+        if (typeof dist === 'number' && Number.isFinite(dist)) {
             endDistance = dist;
+
+            break;
         }
     }
 
@@ -313,6 +328,29 @@ function resolveHighlightRange(
     }
 
     return null;
+}
+
+function emitSelectRange(range: HighlightRange | null): void {
+    if (range !== null) {
+        emittedRanges.add(range);
+    }
+
+    lastEmittedRange = range;
+    emit('selectRange', range);
+}
+
+function isOwnHighlight(range: HighlightRange | null | undefined): boolean {
+    const raw = range ? toRaw(range) : null;
+
+    return raw === null ? lastEmittedRange === null : emittedRanges.has(raw);
+}
+
+function resetLocalSelection(): void {
+    selectionStartIndex.value = null;
+    selectionEndIndex.value = null;
+    selectionLabel.value = 'Selected Slice';
+    activeIntervalId.value = null;
+    pendingClickStart.value = null;
 }
 
 function setSelectionRange(
@@ -335,22 +373,33 @@ function setSelectionRange(
         Math.min(maxIdx, Math.floor(endIdx)),
     );
 
+    if (
+        selectionStartIndex.value === clampedStart &&
+        selectionEndIndex.value === clampedEnd &&
+        selectionLabel.value === label &&
+        activeIntervalId.value === intervalId &&
+        pendingClickStart.value === null
+    ) {
+        return;
+    }
+
     selectionStartIndex.value = clampedStart;
     selectionEndIndex.value = clampedEnd;
     selectionLabel.value = label;
     activeIntervalId.value = intervalId;
     pendingClickStart.value = null;
 
-    emit('selectRange', resolveHighlightRange(clampedStart, clampedEnd, label));
+    emitSelectRange(resolveHighlightRange(clampedStart, clampedEnd, label));
 }
 
 function clearSelection(): void {
-    selectionStartIndex.value = null;
-    selectionEndIndex.value = null;
-    selectionLabel.value = 'Selected Slice';
-    activeIntervalId.value = null;
-    pendingClickStart.value = null;
-    emit('selectRange', null);
+    const hadSelection = hasActiveSelection.value;
+
+    resetLocalSelection();
+
+    if (hadSelection && isOwnHighlight(props.highlightRange)) {
+        emitSelectRange(null);
+    }
 }
 
 function toggleInspectMode(): void {
@@ -391,10 +440,7 @@ function handleInspectClick(index: number): void {
 
     if (pendingClickStart.value === null) {
         if (hasActiveSelection.value) {
-            selectionStartIndex.value = null;
-            selectionEndIndex.value = null;
-            activeIntervalId.value = null;
-            emit('selectRange', null);
+            clearSelection();
         }
 
         pendingClickStart.value = clamped;
@@ -414,25 +460,81 @@ function handleInspectClick(index: number): void {
     setSelectionRange(start, end, 'Custom Slice', null);
 }
 
-function handleChartHover(index: number | null): void {
-    hoveredStreamIndex.value = index;
-    emit('hoverIndex', index);
+function applyPendingDrag(): void {
+    dragFrameId = null;
+
+    const index = pendingDragIndex;
+    pendingDragIndex = null;
 
     if (
-        isPointerDown.value &&
-        inspectMode.value &&
-        dragAnchorIndex.value !== null &&
-        index !== null &&
-        Math.abs(index - dragAnchorIndex.value) >= 2
+        !isPointerDown ||
+        !inspectMode.value ||
+        dragAnchorIndex === null ||
+        index === null ||
+        Math.abs(index - dragAnchorIndex) < 2
     ) {
-        didDragSelect.value = true;
-        pendingClickStart.value = null;
-        setSelectionRange(
-            Math.min(dragAnchorIndex.value, index),
-            Math.max(dragAnchorIndex.value, index),
-            'Custom Slice',
-            null,
-        );
+        return;
+    }
+
+    didDragSelect = true;
+    setSelectionRange(
+        Math.min(dragAnchorIndex, index),
+        Math.max(dragAnchorIndex, index),
+        'Custom Slice',
+        null,
+    );
+}
+
+function cancelPendingDrag(): void {
+    if (dragFrameId !== null) {
+        cancelAnimationFrame(dragFrameId);
+        dragFrameId = null;
+    }
+
+    pendingDragIndex = null;
+}
+
+/**
+ * Connected charts all report the shared axis pointer, so only the chart under the pointer
+ * drives hover and brushing, unchanged indices are skipped, and drag updates are batched per frame.
+ */
+function handleChartHover(panelKey: string, index: number | null): void {
+    if (pointerPanelKey !== null && panelKey !== pointerPanelKey) {
+        return;
+    }
+
+    if (index === hoveredStreamIndex) {
+        return;
+    }
+
+    hoveredStreamIndex = index;
+    emit('hoverIndex', index);
+
+    if (!isPointerDown || !inspectMode.value || index === null) {
+        return;
+    }
+
+    pendingDragIndex = index;
+
+    if (dragFrameId === null) {
+        dragFrameId = requestAnimationFrame(applyPendingDrag);
+    }
+}
+
+function handleChartPointerEnter(panelKey: string): void {
+    pointerPanelKey = panelKey;
+}
+
+function handleChartPointerLeave(panelKey: string): void {
+    if (pointerPanelKey !== panelKey) {
+        return;
+    }
+
+    pointerPanelKey = null;
+
+    if (hoveredStreamIndex !== null && !isPointerDown) {
+        hoveredStreamIndex = null;
+        emit('hoverIndex', null);
     }
 }
 
@@ -440,28 +542,33 @@ function handleChartPointerDown(event: PointerEvent): void {
     if (
         !inspectMode.value ||
         event.button !== 0 ||
-        hoveredStreamIndex.value === null
+        hoveredStreamIndex === null
     ) {
         return;
     }
 
-    isPointerDown.value = true;
-    dragAnchorIndex.value = hoveredStreamIndex.value;
-    didDragSelect.value = false;
+    isPointerDown = true;
+    dragAnchorIndex = hoveredStreamIndex;
+    didDragSelect = false;
 }
 
 function handleWindowPointerUp(): void {
-    if (!isPointerDown.value) {
+    if (!isPointerDown) {
         return;
     }
 
-    if (didDragSelect.value) {
+    if (dragFrameId !== null) {
+        cancelAnimationFrame(dragFrameId);
+        applyPendingDrag();
+    }
+
+    if (didDragSelect) {
         suppressNextClickUntil = Date.now() + 150;
     }
 
-    isPointerDown.value = false;
-    dragAnchorIndex.value = null;
-    didDragSelect.value = false;
+    isPointerDown = false;
+    dragAnchorIndex = null;
+    didDragSelect = false;
 }
 
 function handleChartPointClick(payload: ChartPointClickPayload): void {
@@ -478,8 +585,8 @@ function handleChartContainerClick(): void {
         return;
     }
 
-    if (hoveredStreamIndex.value !== null) {
-        handleInspectClick(hoveredStreamIndex.value);
+    if (hoveredStreamIndex !== null) {
+        handleInspectClick(hoveredStreamIndex);
     }
 }
 
@@ -489,12 +596,14 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
     window.removeEventListener('pointerup', handleWindowPointerUp);
+    cancelPendingDrag();
 });
 
 watch(
     () => props.activity.id,
     () => {
         inspectMode.value = false;
+        cancelPendingDrag();
         clearSelection();
     },
 );
@@ -507,6 +616,18 @@ watch(
             selectionEndIndex.value >= len
         ) {
             clearSelection();
+        }
+    },
+);
+
+watch(
+    () => props.highlightRange,
+    (range) => {
+        if (
+            (hasActiveSelection.value || pendingClickStart.value !== null) &&
+            !isOwnHighlight(range)
+        ) {
+            resetLocalSelection();
         }
     },
 );
@@ -1241,7 +1362,7 @@ const thresholdPowerRef = computed<number | null>(
     () => props.activity.ftp ?? props.activity.threshold_power ?? null,
 );
 
-const baseTelemetryPanels = computed<TelemetryPanel[]>(() => {
+const telemetryPanels = computed<TelemetryPanel[]>(() => {
     if (props.series.length === 0) {
         return [];
     }
@@ -2046,81 +2167,86 @@ const baseTelemetryPanels = computed<TelemetryPanel[]>(() => {
     }));
 });
 
-function applySelectionOverlay(
+/**
+ * Partial option merged onto a panel's chart (without rebuilding its full option) to draw the
+ * brushed slice and the pending click anchor on the first series.
+ */
+function buildSelectionOverlay(
     option: EChartsOption,
     range: { start: number; end: number } | null,
     anchorIndex: number | null,
-): EChartsOption {
+): EChartsOption | null {
     if (!range && anchorIndex === null) {
-        return option;
+        return null;
     }
 
     if (!Array.isArray(option.series) || option.series.length === 0) {
-        return option;
+        return null;
     }
 
-    const firstSeries = option.series[0] as Record<string, unknown>;
-    const nextFirstSeries: Record<string, unknown> = { ...firstSeries };
-
-    if (range) {
-        nextFirstSeries.markArea = {
-            silent: true,
-            itemStyle: {
-                color: theme.isDark.value
-                    ? 'rgba(99, 102, 241, 0.20)'
-                    : 'rgba(99, 102, 241, 0.14)',
-                borderColor: theme.isDark.value
-                    ? 'rgba(129, 140, 248, 0.65)'
-                    : 'rgba(79, 70, 229, 0.55)',
-                borderWidth: 1,
-                borderType: 'dashed',
-            },
-            data: [[{ xAxis: range.start }, { xAxis: range.end }]],
-        };
-    }
-
-    if (anchorIndex !== null) {
-        const existingMarkLine = firstSeries.markLine as
-            | { data?: unknown[]; [key: string]: unknown }
-            | undefined;
-        const existingData = Array.isArray(existingMarkLine?.data)
-            ? existingMarkLine.data
+    const existingMarkLine = (option.series[0] as Record<string, unknown>)
+        .markLine as { data?: unknown[] } | undefined;
+    const existingData = Array.isArray(existingMarkLine?.data)
+        ? existingMarkLine.data
+        : [];
+    const anchorLineItems =
+        anchorIndex !== null
+            ? [
+                  {
+                      xAxis: anchorIndex,
+                      lineStyle: {
+                          color: theme.isDark.value ? '#818cf8' : '#4f46e5',
+                          width: 1.5,
+                          type: 'solid',
+                      },
+                      label: {
+                          show: true,
+                          position: 'insideStartTop',
+                          formatter: 'Start',
+                          color: '#ffffff',
+                          backgroundColor: theme.isDark.value
+                              ? '#6366f1'
+                              : '#4f46e5',
+                          padding: [2, 5],
+                          borderRadius: 3,
+                          fontFamily: theme.fontFamilyMono,
+                          fontSize: 10,
+                      },
+                  },
+              ]
             : [];
-        const anchorLineItem = {
-            xAxis: anchorIndex,
-            lineStyle: {
-                color: theme.isDark.value ? '#818cf8' : '#4f46e5',
-                width: 1.5,
-                type: 'solid',
-            },
-            label: {
-                show: true,
-                position: 'insideStartTop',
-                formatter: 'Start',
-                color: '#ffffff',
-                backgroundColor: theme.isDark.value ? '#6366f1' : '#4f46e5',
-                padding: [2, 5],
-                borderRadius: 3,
-                fontFamily: theme.fontFamilyMono,
-                fontSize: 10,
-            },
-        };
-
-        nextFirstSeries.markLine = {
-            silent: true,
-            symbol: ['none', 'none'],
-            ...existingMarkLine,
-            data: [...existingData, anchorLineItem],
-        };
-    }
 
     return {
-        ...option,
-        series: [nextFirstSeries as SeriesOption, ...option.series.slice(1)],
+        series: [
+            {
+                markArea: {
+                    silent: true,
+                    itemStyle: {
+                        color: theme.isDark.value
+                            ? 'rgba(99, 102, 241, 0.20)'
+                            : 'rgba(99, 102, 241, 0.14)',
+                        borderColor: theme.isDark.value
+                            ? 'rgba(129, 140, 248, 0.65)'
+                            : 'rgba(79, 70, 229, 0.55)',
+                        borderWidth: 1,
+                        borderType: 'dashed',
+                    },
+                    data: range
+                        ? [[{ xAxis: range.start }, { xAxis: range.end }]]
+                        : [],
+                },
+                markLine: {
+                    ...(existingMarkLine
+                        ? {}
+                        : { silent: true, symbol: ['none', 'none'] }),
+                    data: [...existingData, ...anchorLineItems],
+                },
+            } as SeriesOption,
+        ],
     };
 }
 
-const telemetryPanels = computed<TelemetryPanel[]>(() => {
+const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
     const range =
         hasActiveSelection.value &&
         selectionStartIndex.value !== null &&
@@ -2131,15 +2257,17 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
               }
             : null;
     const anchor = pendingClickStart.value;
+    const overlays: Record<string, EChartsOption | null> = {};
 
-    if (!range && anchor === null) {
-        return baseTelemetryPanels.value;
+    for (const panel of telemetryPanels.value) {
+        overlays[panel.key] = buildSelectionOverlay(
+            panel.option,
+            range,
+            anchor,
+        );
     }
 
-    return baseTelemetryPanels.value.map((panel) => ({
-        ...panel,
-        option: applySelectionOverlay(panel.option, range, anchor),
-    }));
+    return overlays;
 });
 </script>
 
@@ -2295,14 +2423,19 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                         :class="
                             inspectMode ? 'cursor-crosshair select-none' : ''
                         "
+                        @pointerenter="handleChartPointerEnter(panel.key)"
+                        @pointerleave="handleChartPointerLeave(panel.key)"
                         @pointerdown="handleChartPointerDown"
                         @click="handleChartContainerClick"
                     >
                         <BaseChart
                             :option="panel.option"
+                            :overlay-option="
+                                selectionOverlays[panel.key] ?? null
+                            "
                             :height="panel.height"
                             group="activity-telemetry"
-                            @hover-index="handleChartHover"
+                            @hover-index="handleChartHover(panel.key, $event)"
                             @point-click="handleChartPointClick"
                         />
                     </div>
