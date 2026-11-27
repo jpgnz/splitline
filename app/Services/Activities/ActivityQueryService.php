@@ -235,28 +235,17 @@ class ActivityQueryService
         $timezone = $this->timezone();
         $today = CarbonImmutable::now($timezone)->startOfDay();
 
-        $search = $this->normalizeSearch($filters['search'] ?? null);
-        $sport = $this->normalizeChoice($filters['sport'] ?? null, self::VALID_SPORTS, 'all');
-        $rawRange = is_string($filters['range'] ?? null) ? $filters['range'] : null;
-        $rawEnd = is_string($filters['end'] ?? null) ? $filters['end'] : null;
-        $rawFrom = is_string($filters['from'] ?? null) ? $filters['from'] : null;
-        $rawTo = is_string($filters['to'] ?? null) ? $filters['to'] : null;
-
-        $dateWindow = $this->dateWindowResolver()->resolveDayWindow(
-            $rawRange,
-            $rawEnd,
-            $rawFrom,
-            $rawTo,
-            $today,
-            self::VALID_RANGES,
-            'all',
-        );
+        [
+            'search' => $search,
+            'sport' => $sport,
+            'dateWindow' => $dateWindow,
+            'pr' => $pr,
+            'favorite' => $favorite,
+        ] = $this->resolveListFilters($filters, $today);
         $range = $dateWindow['range'];
         $from = $dateWindow['from'];
         $to = $dateWindow['to'];
 
-        $pr = $this->normalizeBool($filters['pr'] ?? false);
-        $favorite = $this->normalizeBool($filters['favorite'] ?? false);
         $view = $this->normalizeChoice($filters['view'] ?? null, self::VALID_VIEWS, 'table');
         $sort = $this->normalizeChoice($filters['sort'] ?? null, self::VALID_SORTS, 'date');
         $dir = ($filters['dir'] ?? null) === 'asc' ? 'asc' : 'desc';
@@ -577,6 +566,65 @@ class ActivityQueryService
         }
 
         return false;
+    }
+
+    /**
+     * Build the Activity query matching the Activities index filters (search, sport, date window, PR, favorite).
+     *
+     * @param  array<string, mixed>  $filters
+     * @return Builder<Activity>
+     */
+    public function filteredQuery(array $filters = []): Builder
+    {
+        $today = CarbonImmutable::now($this->timezone())->startOfDay();
+
+        [
+            'search' => $search,
+            'sport' => $sport,
+            'dateWindow' => $dateWindow,
+            'pr' => $pr,
+            'favorite' => $favorite,
+        ] = $this->resolveListFilters($filters, $today);
+
+        $query = Activity::query();
+        $this->applyFacetFilters($query, $search, $sport, $pr, $favorite);
+        $this->applyDateWindowFilter($query, $dateWindow);
+
+        return $query;
+    }
+
+    /**
+     * @param  array<string, mixed>  $filters
+     * @return array{
+     *     search: ?string,
+     *     sport: string,
+     *     dateWindow: array{range: string, start: ?string, end: string, from: ?string, to: ?string},
+     *     pr: bool,
+     *     favorite: bool
+     * }
+     */
+    private function resolveListFilters(array $filters, CarbonImmutable $today): array
+    {
+        $rawRange = is_string($filters['range'] ?? null) ? $filters['range'] : null;
+        $rawEnd = is_string($filters['end'] ?? null) ? $filters['end'] : null;
+        $rawFrom = is_string($filters['from'] ?? null) ? $filters['from'] : null;
+        $rawTo = is_string($filters['to'] ?? null) ? $filters['to'] : null;
+
+        return [
+            'search' => $this->normalizeSearch($filters['search'] ?? null),
+            'sport' => $this->normalizeChoice($filters['sport'] ?? null, self::VALID_SPORTS, 'all'),
+            'dateWindow' => $this->dateWindowResolver()->resolveDayWindow(
+                $rawRange,
+                $rawEnd,
+                $rawFrom,
+                $rawTo,
+                $today,
+                self::VALID_RANGES,
+                'all',
+            ),
+            'pr' => $this->normalizeBool($filters['pr'] ?? false),
+            'favorite' => $this->normalizeBool($filters['favorite'] ?? false),
+        ];
     }
 
     /**

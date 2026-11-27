@@ -15,8 +15,12 @@ class ExportController extends Controller
         private readonly DataExportService $exportService,
     ) {}
 
-    public function backup(): Response
+    public function backup(Request $request): Response
     {
+        if ($request->headers->get('Sec-Fetch-Site') === 'cross-site') {
+            abort(403, 'Database backups can only be downloaded from Splitline itself.');
+        }
+
         try {
             $snapshot = $this->exportService->createSqliteBackupSnapshot();
         } catch (RuntimeException $exception) {

@@ -6,6 +6,8 @@ use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
 use App\Services\Export\DataExportService;
 use Carbon\CarbonImmutable;
+use Illuminate\Console\Scheduling\Event;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 
@@ -15,8 +17,7 @@ beforeEach(function () {
 });
 
 it('creates a valid compacted sqlite backup snapshot from a file-backed sqlite database', function () {
-    $tempDbPath = '/tmp/opencode/splitline-test-source-'.uniqid('', true).'.sqlite';
-    @mkdir(dirname($tempDbPath), 0777, true);
+    $tempDbPath = sys_get_temp_dir().'/splitline-test-source-'.uniqid('', true).'.sqlite';
     touch($tempDbPath);
 
     $originalDefault = config('database.default');
@@ -43,7 +44,8 @@ it('creates a valid compacted sqlite backup snapshot from a file-backed sqlite d
 
         expect($snapshot['filename'])->toBe('splitline-backup-2026-11-26-093015.sqlite')
             ->and($snapshot['size_bytes'])->toBeGreaterThan(0)
-            ->and(is_file($snapshotPath))->toBeTrue();
+            ->and(is_file($snapshotPath))->toBeTrue()
+            ->and(fileperms($snapshotPath) & 0777)->toBe(0600);
 
         $pdo = new PDO('sqlite:'.$snapshotPath);
         $rows = $pdo->query('SELECT label FROM export_probe')->fetchAll(PDO::FETCH_COLUMN);
@@ -278,11 +280,33 @@ it('builds valid gpx 1.1 xml with telemetry extensions from stream series', func
         ->and((string) $trackPoints[0]->ele)->toBe('15.2')
         ->and((string) $trackPoints[0]->time)->toBe('2026-11-19T17:30:00Z')
         ->and((string) $trackPoints[1]->time)->toBe('2026-11-19T17:31:00Z')
-        ->and((string) $trackPoints[0]->extensions->power)->toBe('285');
+        ->and($trackPoints[0]->extensions->power->count())->toBe(0);
 
     $gpxtpx = $trackPoints[0]->extensions->children($namespaces['gpxtpx']);
+    $power = $trackPoints[0]->extensions->children('http://www.garmin.com/xmlschemas/PowerExtension/v1');
+
     expect((string) $gpxtpx->TrackPointExtension->hr)->toBe('142')
-        ->and((string) $gpxtpx->TrackPointExtension->cad)->toBe('174');
+        ->and((string) $gpxtpx->TrackPointExtension->cad)->toBe('174')
+        ->and((string) $power->PowerInWatts)->toBe('285');
+});
+
+it('strips characters that are invalid in xml from gpx names', function () {
+    $activity = Activity::factory()->create([
+        'name' => "Tempo\x01 Run\x0B",
+        'activity_type_key' => 'running',
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $activity->id,
+        'series' => [['time' => 0.0, 'lat' => -36.8485, 'lng' => 174.7633]],
+        'polyline' => [],
+    ]);
+
+    $result = app(DataExportService::class)->buildActivityGpx($activity);
+    $xml = new SimpleXMLElement($result['xml']);
+
+    expect((string) $xml->metadata->name)->toBe('Tempo Run')
+        ->and((string) $xml->trk->name)->toBe('Tempo Run');
 });
 
 it('falls back to stream polyline when series has no gps coordinates', function () {
@@ -379,4 +403,73 @@ it('resolves cached original archives and summarizes storage inventory', functio
         'cached_archives_count' => 2,
         'cached_archives_size_bytes' => strlen("PK\x03\x04zipbytes") + strlen('.FITBINARYDATA'),
     ]);
+});
+
+it('substitutes invalid utf-8 in json exports instead of truncating the stream', function () {
+    Activity::factory()->create(['name' => "Bad \xB1 Bytes"]);
+    Activity::factory()->create(['name' => 'Clean Run']);
+
+    $response = app(DataExportService::class)->streamActivitiesJson();
+
+    ob_start();
+    $response->sendContent();
+    $decoded = json_decode((string) ob_get_clean(), true, 512, JSON_THROW_ON_ERROR);
+
+    expect($decoded)->toHaveCount(2)
+        ->and(array_column($decoded, 'name'))->toContain("Bad \u{FFFD} Bytes", 'Clean Run');
+});
+
+it('prunes only stale backup snapshots from the snapshot directory', function () {
+    $directory = storage_path('app/private/tmp');
+    @mkdir($directory, 0777, true);
+
+    $suffix = bin2hex(random_bytes(6));
+    $staleSnapshot = "{$directory}/splitline-backup-stale-{$suffix}.sqlite";
+    $freshSnapshot = "{$directory}/splitline-backup-fresh-{$suffix}.sqlite";
+    $unrelatedFile = "{$directory}/unrelated-{$suffix}.sqlite";
+
+    try {
+        foreach ([$staleSnapshot, $freshSnapshot, $unrelatedFile] as $path) {
+            file_put_contents($path, 'snapshot');
+        }
+
+        touch($staleSnapshot, now()->subHours(2)->getTimestamp());
+        touch($unrelatedFile, now()->subHours(2)->getTimestamp());
+        touch($freshSnapshot, now()->subMinutes(5)->getTimestamp());
+
+        app(DataExportService::class)->pruneStaleBackupSnapshots();
+
+        expect(file_exists($staleSnapshot))->toBeFalse()
+            ->and(file_exists($freshSnapshot))->toBeTrue()
+            ->and(file_exists($unrelatedFile))->toBeTrue();
+    } finally {
+        foreach ([$staleSnapshot, $freshSnapshot, $unrelatedFile] as $path) {
+            @unlink($path);
+        }
+    }
+});
+
+it('schedules hourly pruning of stale backup snapshots', function () {
+    $event = collect(app(Schedule::class)->events())
+        ->first(fn (Event $event): bool => $event->description === 'exports:prune-backup-snapshots');
+
+    expect($event)->not->toBeNull()
+        ->and($event->expression)->toBe('0 * * * *');
+});
+
+it('caches the cached-archive inventory for the settings summary', function () {
+    Storage::fake('local');
+    Storage::disk('local')->put('fit_upload/fits/first.fit', '.FIT');
+
+    $service = app(DataExportService::class);
+
+    expect($service->summaryPayload()['cached_archives_count'])->toBe(1);
+
+    Storage::disk('local')->put('fit_upload/fits/second.fit', '.FIT');
+
+    expect($service->summaryPayload()['cached_archives_count'])->toBe(1);
+
+    $this->travel(6)->minutes();
+
+    expect($service->summaryPayload()['cached_archives_count'])->toBe(2);
 });

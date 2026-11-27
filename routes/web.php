@@ -22,7 +22,7 @@ Route::redirect('/dashboard', '/');
 Route::get('/health/{metric}', [HealthMetricController::class, 'show'])->name('health.show');
 Route::get('/fitness', [FitnessController::class, 'index'])->name('fitness.index');
 
-Route::get('/exports/backup', [ExportController::class, 'backup'])->name('exports.backup');
+Route::get('/exports/backup', [ExportController::class, 'backup'])->middleware('throttle:6,1')->name('exports.backup');
 Route::get('/exports/activities', [ExportController::class, 'activities'])->name('exports.activities');
 
 Route::get('/activities', [ActivityController::class, 'index'])->name('activities.index');
