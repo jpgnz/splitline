@@ -2,8 +2,10 @@
 
 use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\GeocodeRouteClusterJob;
+use App\Jobs\GeocodeSegmentJob;
 use App\Models\Activity;
 use App\Models\RouteCluster;
+use App\Models\Segment;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
@@ -192,4 +194,30 @@ it('never selects provider-supplied location names with --force', function () {
     Queue::assertPushed(GeocodeActivityLocationJob::class, 2);
     Queue::assertPushed(GeocodeActivityLocationJob::class, fn (GeocodeActivityLocationJob $job): bool => $job->activityId === $geocoded->id && $job->force);
     Queue::assertPushed(GeocodeActivityLocationJob::class, fn (GeocodeActivityLocationJob $job): bool => $job->activityId === $missing->id && $job->force);
+});
+
+it('queues only visible segments whose last failed lookup is outside the retry window', function () {
+    Queue::fake([GeocodeSegmentJob::class]);
+    config(['services.nominatim.retry_failed_days' => 7]);
+
+    Segment::factory()->custom()->create([
+        'geocoded_at' => null,
+        'geocode_attempted_at' => CarbonImmutable::now('UTC')->subDay(),
+    ]);
+    Segment::factory()->climb('cat4')->create([
+        'effort_count' => 1,
+        'detection_count' => 1,
+        'geocoded_at' => null,
+    ]);
+    $retryableSegment = Segment::factory()->custom()->create([
+        'geocoded_at' => null,
+        'geocode_attempted_at' => CarbonImmutable::now('UTC')->subDays(8),
+    ]);
+
+    $this->artisan('geocode:sync', ['--queue' => true])
+        ->expectsOutputToContain('1 segment(s)')
+        ->assertSuccessful();
+
+    Queue::assertPushed(GeocodeSegmentJob::class, 1);
+    Queue::assertPushed(GeocodeSegmentJob::class, fn (GeocodeSegmentJob $job): bool => $job->segmentId === $retryableSegment->id);
 });

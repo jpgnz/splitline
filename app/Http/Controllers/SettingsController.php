@@ -108,8 +108,7 @@ class SettingsController extends Controller
                 && (bool) config('services.nominatim.auto_sync', true)
             ) {
                 $unGeocodedIds = Segment::query()
-                    ->visible($minEfforts)
-                    ->whereNull('geocoded_at')
+                    ->awaitingGeocoding($minEfforts)
                     ->orderByDesc('effort_count')
                     ->orderBy('id')
                     ->limit(50)

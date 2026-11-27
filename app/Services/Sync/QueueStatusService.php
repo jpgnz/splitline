@@ -157,11 +157,8 @@ class QueueStatusService
             $pendingGeocoding += RouteCluster::query()->awaitingGeocoding()->count();
         }
 
-        if (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocoded_at')) {
-            $pendingGeocoding += Segment::query()
-                ->visible()
-                ->whereNull('geocoded_at')
-                ->count();
+        if (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocode_attempted_at')) {
+            $pendingGeocoding += Segment::query()->awaitingGeocoding()->count();
         }
 
         return [

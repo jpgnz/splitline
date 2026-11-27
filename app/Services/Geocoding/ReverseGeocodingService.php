@@ -144,6 +144,9 @@ class ReverseGeocodingService
      * Enrich a personal Segment or auto-detected Climb with a feature-tier OSM place_label
      * and cleanly upgrade fallback auto-names without overwriting user name_override.
      *
+     * Every completed lookup, including one that finds no usable place, records `geocode_attempted_at`
+     * so unresolvable segments are only retried after the configured retry window.
+     *
      * @throws GeocodingUnavailableException
      */
     public function enrichSegment(Segment $segment, bool $force = false): bool
@@ -154,14 +157,12 @@ class ReverseGeocodingService
 
         [$targetLat, $targetLng] = $this->segmentSampleCoordinate($segment);
         $feature = $this->resolveFeature($targetLat, $targetLng, $force);
-
-        if ($feature === null) {
-            return false;
-        }
-
         $placeLabel = $this->formatSubtitle($feature);
+        $now = CarbonImmutable::now('UTC');
 
-        if ($placeLabel === null || trim($placeLabel) === '') {
+        if ($feature === null || $placeLabel === null || trim($placeLabel) === '') {
+            $segment->update(['geocode_attempted_at' => $now]);
+
             return false;
         }
 
@@ -169,7 +170,8 @@ class ReverseGeocodingService
 
         $updates = [
             'place_label' => mb_substr(trim($placeLabel), 0, 160),
-            'geocoded_at' => CarbonImmutable::now('UTC'),
+            'geocoded_at' => $now,
+            'geocode_attempted_at' => $now,
         ];
 
         $hasNameOverride = is_string($segment->name_override) && trim($segment->name_override) !== '';
@@ -201,7 +203,7 @@ class ReverseGeocodingService
     public function pendingCount(): int
     {
         $pendingSegments = Schema::hasTable('segments')
-            ? Segment::query()->visible()->whereNull('geocoded_at')->count()
+            ? Segment::query()->awaitingGeocoding()->count()
             : 0;
 
         return RouteCluster::query()->awaitingGeocoding()->count()

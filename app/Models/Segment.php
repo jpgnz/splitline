@@ -48,6 +48,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
  * @property int|null $best_effort_id
  * @property CarbonImmutable|null $last_effort_at
  * @property CarbonImmutable|null $geocoded_at
+ * @property CarbonImmutable|null $geocode_attempted_at
  * @property CarbonImmutable|null $deleted_at
  * @property CarbonImmutable|null $created_at
  * @property CarbonImmutable|null $updated_at
@@ -117,6 +118,7 @@ class Segment extends Model
         'best_effort_id',
         'last_effort_at',
         'geocoded_at',
+        'geocode_attempted_at',
     ];
 
     /**
@@ -152,6 +154,7 @@ class Segment extends Model
             'best_effort_id' => 'integer',
             'last_effort_at' => 'immutable_datetime',
             'geocoded_at' => 'immutable_datetime',
+            'geocode_attempted_at' => 'immutable_datetime',
             'deleted_at' => 'immutable_datetime',
         ];
     }
@@ -277,6 +280,27 @@ class Segment extends Model
         }
 
         return true;
+    }
+
+    /**
+     * Scope visible segments that are not yet geocoded and have not had a reverse-geocoding attempt
+     * within the configured retry window.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeAwaitingGeocoding(Builder $query, ?int $minEfforts = null): Builder
+    {
+        $retryCutoff = CarbonImmutable::now('UTC')->subDays(max(1, (int) config('services.nominatim.retry_failed_days', 7)));
+
+        return $query
+            ->visible($minEfforts)
+            ->whereNull('geocoded_at')
+            ->where(function (Builder $attemptQuery) use ($retryCutoff): void {
+                $attemptQuery
+                    ->whereNull('geocode_attempted_at')
+                    ->orWhere('geocode_attempted_at', '<', $retryCutoff);
+            });
     }
 
     /**
