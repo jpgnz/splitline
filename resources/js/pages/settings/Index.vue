@@ -2343,7 +2343,7 @@ function submitSegmentsSettings(): void {
                                 Pending Enrichments
                             </p>
                             <div
-                                class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-5"
+                                class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-3 lg:grid-cols-6"
                             >
                                 <div
                                     class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
@@ -2419,6 +2419,25 @@ function submitSegmentsSettings(): void {
                                         class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                     >
                                         Segments
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.pending
+                                                    .derived_metrics,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Derived
                                     </p>
                                 </div>
                                 <div

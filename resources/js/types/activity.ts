@@ -367,3 +367,25 @@ export interface ActivityBestEffortItem {
     override_seconds: number | null;
     is_excluded: boolean;
 }
+
+export type DecouplingMetric = 'power' | 'gap' | 'speed';
+
+export type DecouplingRating = 'well_coupled' | 'moderate_drift' | 'high_drift';
+
+export type PacingStrategy = 'negative_split' | 'even_split' | 'positive_split';
+
+export interface ActivityDerivedMetricsPayload {
+    decoupling_pct: number | null;
+    decoupling_metric: DecouplingMetric | null;
+    decoupling_rating: DecouplingRating | null;
+    efficiency_factor: number | null;
+    first_half_ef: number | null;
+    second_half_ef: number | null;
+    pacing_strategy: PacingStrategy | null;
+    split_ratio: number | null;
+    pace_cv_pct: number | null;
+    hr_low_pct: number | null;
+    hr_moderate_pct: number | null;
+    hr_high_pct: number | null;
+    computed_at: string;
+}

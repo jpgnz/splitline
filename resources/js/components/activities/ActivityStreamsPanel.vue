@@ -175,31 +175,53 @@ export function countTelemetryPanels(
 </script>
 
 <script setup lang="ts">
-import type { EChartsOption } from 'echarts';
-import { computed } from 'vue';
-import BaseChart from '@/components/charts/BaseChart.vue';
+import type { EChartsOption, SeriesOption } from 'echarts';
+import { Crosshair } from '@lucide/vue';
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
+import ActivityStreamSelectionCard from '@/components/activities/ActivityStreamSelectionCard.vue';
+import BaseChart, {
+    type ChartPointClickPayload,
+} from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import { formatDurationClock, formatNumber } from '@/lib/format';
+import {
+    detectWorkIntervals,
+    type DetectedInterval,
+} from '@/lib/streamSelection';
 import {
     buildPaceTelemetrySeries,
     buildStartupGatedTelemetrySeries,
     rollingAverage,
 } from '@/lib/telemetry';
 import { M_TO_FT, useUnits } from '@/lib/units';
-import type { ActivityDetail, JumpEvent } from '@/types/activity';
+import type {
+    ActivityDetail,
+    ActivityWeatherPayload,
+    HighlightRange,
+    JumpEvent,
+} from '@/types/activity';
 
-const props = defineProps<{
-    activity: ActivityDetail;
-    series: StreamPoint[];
-    runWalkSegments: RunWalkSegment[];
-    jumps: JumpEvent[];
-    usesPace: boolean;
-    isRunning: boolean;
-    hasAmbientWeather: boolean;
-}>();
+const props = withDefaults(
+    defineProps<{
+        activity: ActivityDetail;
+        series: StreamPoint[];
+        runWalkSegments: RunWalkSegment[];
+        jumps: JumpEvent[];
+        usesPace: boolean;
+        isRunning: boolean;
+        hasAmbientWeather: boolean;
+        weather?: ActivityWeatherPayload | null;
+        highlightRange?: HighlightRange | null;
+    }>(),
+    {
+        weather: null,
+        highlightRange: null,
+    },
+);
 
 const emit = defineEmits<{
     hoverIndex: [index: number | null];
+    selectRange: [range: HighlightRange | null];
 }>();
 
 const theme = useChartTheme();
@@ -227,6 +249,388 @@ const verticalMetricMode = defineModel<'ratio' | 'oscillation'>(
 const powerUnitMode = defineModel<'watts' | 'pct'>('powerUnitMode', {
     default: 'watts',
 });
+
+const inspectMode = ref(false);
+const selectionStartIndex = ref<number | null>(null);
+const selectionEndIndex = ref<number | null>(null);
+const selectionLabel = ref('Selected Slice');
+const activeIntervalId = ref<string | null>(null);
+const pendingClickStart = ref<number | null>(null);
+
+let hoveredStreamIndex: number | null = null;
+let pointerPanelKey: string | null = null;
+let isPointerDown = false;
+let dragAnchorIndex: number | null = null;
+let didDragSelect = false;
+let pendingDragIndex: number | null = null;
+let dragFrameId: number | null = null;
+let lastPointClickAt = 0;
+let suppressNextClickUntil = 0;
+
+/** Ranges this panel emitted, so external highlight changes can be told apart from our own. */
+const emittedRanges = new WeakSet<HighlightRange>();
+let lastEmittedRange: HighlightRange | null | undefined = undefined;
+
+const isCycling = computed<boolean>(
+    () => props.activity.sport_category === 'biking',
+);
+
+const detectedIntervals = computed<DetectedInterval[]>(() =>
+    detectWorkIntervals(props.series, isCycling.value, props.weather ?? null),
+);
+
+const hasActiveSelection = computed<boolean>(
+    () =>
+        selectionStartIndex.value !== null &&
+        selectionEndIndex.value !== null &&
+        selectionEndIndex.value > selectionStartIndex.value &&
+        props.series.length >= 2,
+);
+
+function resolveHighlightRange(
+    startIdx: number,
+    endIdx: number,
+    label: string,
+): HighlightRange | null {
+    let startDistance: number | null = null;
+    let endDistance: number | null = null;
+
+    for (let i = startIdx; i <= endIdx; i += 1) {
+        const dist = props.series[i]?.distance;
+
+        if (typeof dist === 'number' && Number.isFinite(dist)) {
+            startDistance = dist;
+
+            break;
+        }
+    }
+
+    for (let i = endIdx; i >= startIdx; i -= 1) {
+        const dist = props.series[i]?.distance;
+
+        if (typeof dist === 'number' && Number.isFinite(dist)) {
+            endDistance = dist;
+
+            break;
+        }
+    }
+
+    if (
+        startDistance !== null &&
+        endDistance !== null &&
+        endDistance > startDistance
+    ) {
+        return {
+            startDistance,
+            endDistance,
+            label,
+        };
+    }
+
+    return null;
+}
+
+function emitSelectRange(range: HighlightRange | null): void {
+    if (range !== null) {
+        emittedRanges.add(range);
+    }
+
+    lastEmittedRange = range;
+    emit('selectRange', range);
+}
+
+function isOwnHighlight(range: HighlightRange | null | undefined): boolean {
+    const raw = range ? toRaw(range) : null;
+
+    return raw === null ? lastEmittedRange === null : emittedRanges.has(raw);
+}
+
+function resetLocalSelection(): void {
+    selectionStartIndex.value = null;
+    selectionEndIndex.value = null;
+    selectionLabel.value = 'Selected Slice';
+    activeIntervalId.value = null;
+    pendingClickStart.value = null;
+}
+
+function setSelectionRange(
+    startIdx: number,
+    endIdx: number,
+    label = 'Custom Slice',
+    intervalId: string | null = null,
+): void {
+    if (props.series.length < 2) {
+        return;
+    }
+
+    const maxIdx = props.series.length - 1;
+    const clampedStart = Math.max(
+        0,
+        Math.min(maxIdx - 1, Math.floor(startIdx)),
+    );
+    const clampedEnd = Math.max(
+        clampedStart + 1,
+        Math.min(maxIdx, Math.floor(endIdx)),
+    );
+
+    if (
+        selectionStartIndex.value === clampedStart &&
+        selectionEndIndex.value === clampedEnd &&
+        selectionLabel.value === label &&
+        activeIntervalId.value === intervalId &&
+        pendingClickStart.value === null
+    ) {
+        return;
+    }
+
+    selectionStartIndex.value = clampedStart;
+    selectionEndIndex.value = clampedEnd;
+    selectionLabel.value = label;
+    activeIntervalId.value = intervalId;
+    pendingClickStart.value = null;
+
+    emitSelectRange(resolveHighlightRange(clampedStart, clampedEnd, label));
+}
+
+function clearSelection(): void {
+    const hadSelection = hasActiveSelection.value;
+
+    resetLocalSelection();
+
+    if (hadSelection && isOwnHighlight(props.highlightRange)) {
+        emitSelectRange(null);
+    }
+}
+
+function toggleInspectMode(): void {
+    inspectMode.value = !inspectMode.value;
+
+    if (!inspectMode.value) {
+        pendingClickStart.value = null;
+    }
+}
+
+function handleSelectionCardUpdate(payload: {
+    startIndex: number;
+    endIndex: number;
+    label?: string;
+    intervalId?: string | null;
+}): void {
+    setSelectionRange(
+        payload.startIndex,
+        payload.endIndex,
+        payload.label ?? 'Custom Slice',
+        payload.intervalId ?? null,
+    );
+}
+
+function handleInspectClick(index: number): void {
+    if (
+        !inspectMode.value ||
+        props.series.length < 2 ||
+        Date.now() < suppressNextClickUntil
+    ) {
+        return;
+    }
+
+    const clamped = Math.max(
+        0,
+        Math.min(props.series.length - 1, Math.floor(index)),
+    );
+
+    if (pendingClickStart.value === null) {
+        if (hasActiveSelection.value) {
+            clearSelection();
+        }
+
+        pendingClickStart.value = clamped;
+
+        return;
+    }
+
+    if (clamped === pendingClickStart.value) {
+        pendingClickStart.value = null;
+
+        return;
+    }
+
+    const start = Math.min(pendingClickStart.value, clamped);
+    const end = Math.max(pendingClickStart.value, clamped);
+
+    setSelectionRange(start, end, 'Custom Slice', null);
+}
+
+function applyPendingDrag(): void {
+    dragFrameId = null;
+
+    const index = pendingDragIndex;
+    pendingDragIndex = null;
+
+    if (
+        !isPointerDown ||
+        !inspectMode.value ||
+        dragAnchorIndex === null ||
+        index === null ||
+        Math.abs(index - dragAnchorIndex) < 2
+    ) {
+        return;
+    }
+
+    didDragSelect = true;
+    setSelectionRange(
+        Math.min(dragAnchorIndex, index),
+        Math.max(dragAnchorIndex, index),
+        'Custom Slice',
+        null,
+    );
+}
+
+function cancelPendingDrag(): void {
+    if (dragFrameId !== null) {
+        cancelAnimationFrame(dragFrameId);
+        dragFrameId = null;
+    }
+
+    pendingDragIndex = null;
+}
+
+/**
+ * Connected charts all report the shared axis pointer, so only the chart under the pointer
+ * drives hover and brushing, unchanged indices are skipped, and drag updates are batched per frame.
+ */
+function handleChartHover(panelKey: string, index: number | null): void {
+    if (pointerPanelKey !== null && panelKey !== pointerPanelKey) {
+        return;
+    }
+
+    if (index === hoveredStreamIndex) {
+        return;
+    }
+
+    hoveredStreamIndex = index;
+    emit('hoverIndex', index);
+
+    if (!isPointerDown || !inspectMode.value || index === null) {
+        return;
+    }
+
+    pendingDragIndex = index;
+
+    if (dragFrameId === null) {
+        dragFrameId = requestAnimationFrame(applyPendingDrag);
+    }
+}
+
+function handleChartPointerEnter(panelKey: string): void {
+    pointerPanelKey = panelKey;
+}
+
+function handleChartPointerLeave(panelKey: string): void {
+    if (pointerPanelKey !== panelKey) {
+        return;
+    }
+
+    pointerPanelKey = null;
+
+    if (hoveredStreamIndex !== null && !isPointerDown) {
+        hoveredStreamIndex = null;
+        emit('hoverIndex', null);
+    }
+}
+
+function handleChartPointerDown(event: PointerEvent): void {
+    if (
+        !inspectMode.value ||
+        event.button !== 0 ||
+        hoveredStreamIndex === null
+    ) {
+        return;
+    }
+
+    isPointerDown = true;
+    dragAnchorIndex = hoveredStreamIndex;
+    didDragSelect = false;
+}
+
+function handleWindowPointerUp(): void {
+    if (!isPointerDown) {
+        return;
+    }
+
+    if (dragFrameId !== null) {
+        cancelAnimationFrame(dragFrameId);
+        applyPendingDrag();
+    }
+
+    if (didDragSelect) {
+        suppressNextClickUntil = Date.now() + 150;
+    }
+
+    isPointerDown = false;
+    dragAnchorIndex = null;
+    didDragSelect = false;
+}
+
+function handleChartPointClick(payload: ChartPointClickPayload): void {
+    if (!inspectMode.value) {
+        return;
+    }
+
+    lastPointClickAt = Date.now();
+    handleInspectClick(payload.dataIndex);
+}
+
+function handleChartContainerClick(): void {
+    if (!inspectMode.value || Date.now() - lastPointClickAt < 100) {
+        return;
+    }
+
+    if (hoveredStreamIndex !== null) {
+        handleInspectClick(hoveredStreamIndex);
+    }
+}
+
+onMounted(() => {
+    window.addEventListener('pointerup', handleWindowPointerUp);
+});
+
+onBeforeUnmount(() => {
+    window.removeEventListener('pointerup', handleWindowPointerUp);
+    cancelPendingDrag();
+});
+
+watch(
+    () => props.activity.id,
+    () => {
+        inspectMode.value = false;
+        cancelPendingDrag();
+        clearSelection();
+    },
+);
+
+watch(
+    () => props.series.length,
+    (len) => {
+        if (
+            selectionEndIndex.value !== null &&
+            selectionEndIndex.value >= len
+        ) {
+            clearSelection();
+        }
+    },
+);
+
+watch(
+    () => props.highlightRange,
+    (range) => {
+        if (
+            (hasActiveSelection.value || pendingClickStart.value !== null) &&
+            !isOwnHighlight(range)
+        ) {
+            resetLocalSelection();
+        }
+    },
+);
 
 const availableStreams = computed<AvailableStreams>(() =>
     detectAvailableStreams(props.series),
@@ -1762,6 +2166,109 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
         option: panel.build(index === activePanels.length - 1),
     }));
 });
+
+/**
+ * Partial option merged onto a panel's chart (without rebuilding its full option) to draw the
+ * brushed slice and the pending click anchor on the first series.
+ */
+function buildSelectionOverlay(
+    option: EChartsOption,
+    range: { start: number; end: number } | null,
+    anchorIndex: number | null,
+): EChartsOption | null {
+    if (!range && anchorIndex === null) {
+        return null;
+    }
+
+    if (!Array.isArray(option.series) || option.series.length === 0) {
+        return null;
+    }
+
+    const existingMarkLine = (option.series[0] as Record<string, unknown>)
+        .markLine as { data?: unknown[] } | undefined;
+    const existingData = Array.isArray(existingMarkLine?.data)
+        ? existingMarkLine.data
+        : [];
+    const anchorLineItems =
+        anchorIndex !== null
+            ? [
+                  {
+                      xAxis: anchorIndex,
+                      lineStyle: {
+                          color: theme.isDark.value ? '#818cf8' : '#4f46e5',
+                          width: 1.5,
+                          type: 'solid',
+                      },
+                      label: {
+                          show: true,
+                          position: 'insideStartTop',
+                          formatter: 'Start',
+                          color: '#ffffff',
+                          backgroundColor: theme.isDark.value
+                              ? '#6366f1'
+                              : '#4f46e5',
+                          padding: [2, 5],
+                          borderRadius: 3,
+                          fontFamily: theme.fontFamilyMono,
+                          fontSize: 10,
+                      },
+                  },
+              ]
+            : [];
+
+    return {
+        series: [
+            {
+                markArea: {
+                    silent: true,
+                    itemStyle: {
+                        color: theme.isDark.value
+                            ? 'rgba(99, 102, 241, 0.20)'
+                            : 'rgba(99, 102, 241, 0.14)',
+                        borderColor: theme.isDark.value
+                            ? 'rgba(129, 140, 248, 0.65)'
+                            : 'rgba(79, 70, 229, 0.55)',
+                        borderWidth: 1,
+                        borderType: 'dashed',
+                    },
+                    data: range
+                        ? [[{ xAxis: range.start }, { xAxis: range.end }]]
+                        : [],
+                },
+                markLine: {
+                    ...(existingMarkLine
+                        ? {}
+                        : { silent: true, symbol: ['none', 'none'] }),
+                    data: [...existingData, ...anchorLineItems],
+                },
+            } as SeriesOption,
+        ],
+    };
+}
+
+const selectionOverlays = computed<Record<string, EChartsOption | null>>(() => {
+    const range =
+        hasActiveSelection.value &&
+        selectionStartIndex.value !== null &&
+        selectionEndIndex.value !== null
+            ? {
+                  start: selectionStartIndex.value,
+                  end: selectionEndIndex.value,
+              }
+            : null;
+    const anchor = pendingClickStart.value;
+    const overlays: Record<string, EChartsOption | null> = {};
+
+    for (const panel of telemetryPanels.value) {
+        overlays[panel.key] = buildSelectionOverlay(
+            panel.option,
+            range,
+            anchor,
+        );
+    }
+
+    return overlays;
+});
 </script>
 
 <template>
@@ -1774,18 +2281,57 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
             v-if="telemetryPanels.length > 0"
             class="rounded-xl border border-zinc-200/90 bg-white p-4 sm:p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
         >
-            <div class="mb-4 flex items-center justify-between gap-2">
-                <span
-                    class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+            <div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+                <div class="flex items-center gap-2.5">
+                    <span
+                        class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    >
+                        Streams
+                    </span>
+                    <span
+                        class="font-mono text-[11px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                    >
+                        {{ formatNumber(series.length, 0) }} samples
+                    </span>
+                </div>
+
+                <button
+                    v-if="series.length >= 2"
+                    type="button"
+                    class="inline-flex cursor-pointer items-center gap-1.5 rounded-md border px-2.5 py-1 font-mono text-[11px] tracking-wider uppercase transition"
+                    :class="
+                        inspectMode || hasActiveSelection
+                            ? 'border-indigo-500/70 bg-indigo-500/10 text-indigo-700 dark:border-indigo-400/60 dark:bg-indigo-500/15 dark:text-indigo-300'
+                            : 'border-zinc-200/90 bg-[#f7f7f5]/80 text-zinc-600 hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
+                    "
+                    @click="toggleInspectMode"
                 >
-                    Streams
-                </span>
-                <span
-                    class="font-mono text-[11px] text-zinc-400 tabular-nums dark:text-zinc-500"
-                >
-                    {{ formatNumber(series.length, 0) }} samples
-                </span>
+                    <Crosshair class="size-3.5" />
+                    <span>Inspect Slice</span>
+                    <span
+                        v-if="hasActiveSelection"
+                        class="size-1.5 rounded-full bg-indigo-500 dark:bg-indigo-400"
+                    />
+                </button>
             </div>
+
+            <ActivityStreamSelectionCard
+                :series="series"
+                :start-index="selectionStartIndex"
+                :end-index="selectionEndIndex"
+                :selection-label="selectionLabel"
+                :pending-start-index="pendingClickStart"
+                :inspect-mode="inspectMode"
+                :detected-intervals="detectedIntervals"
+                :active-interval-id="activeIntervalId"
+                :uses-pace="usesPace"
+                :is-running="isRunning"
+                :threshold-power="thresholdPowerRef"
+                :weather="weather"
+                @update-range="handleSelectionCardUpdate"
+                @clear="clearSelection"
+                @toggle-inspect-mode="toggleInspectMode"
+            />
 
             <div class="space-y-4">
                 <div
@@ -1873,12 +2419,26 @@ const telemetryPanels = computed<TelemetryPanel[]>(() => {
                         </div>
                     </div>
 
-                    <BaseChart
-                        :option="panel.option"
-                        :height="panel.height"
-                        group="activity-telemetry"
-                        @hover-index="emit('hoverIndex', $event)"
-                    />
+                    <div
+                        :class="
+                            inspectMode ? 'cursor-crosshair select-none' : ''
+                        "
+                        @pointerenter="handleChartPointerEnter(panel.key)"
+                        @pointerleave="handleChartPointerLeave(panel.key)"
+                        @pointerdown="handleChartPointerDown"
+                        @click="handleChartContainerClick"
+                    >
+                        <BaseChart
+                            :option="panel.option"
+                            :overlay-option="
+                                selectionOverlays[panel.key] ?? null
+                            "
+                            :height="panel.height"
+                            group="activity-telemetry"
+                            @hover-index="handleChartHover(panel.key, $event)"
+                            @point-click="handleChartPointClick"
+                        />
+                    </div>
                 </div>
             </div>
         </section>
