@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, Link, router } from '@inertiajs/vue3';
+import { Head, Link, router, usePage } from '@inertiajs/vue3';
 import {
     ArrowUpRight,
     Crosshair,
@@ -34,6 +34,7 @@ import {
     ref,
     watch,
 } from 'vue';
+import { toast } from 'vue-sonner';
 import DateRangeControl, {
     type DateRangePreset,
     type DateWindowMeta,
@@ -145,6 +146,7 @@ interface IndexedTrack {
 }
 
 const props = defineProps<HeatmapProps>();
+const page = usePage();
 
 const {
     getSportMeta,
@@ -204,6 +206,7 @@ const ORDER_OPTIONS: Array<{
 const { isDark } = useChartTheme();
 
 const mapContainerRef = ref<HTMLElement | null>(null);
+const inspectorRef = ref<HTMLElement | null>(null);
 const inspectedTracks = ref<DecodedHeatmapTrack[]>([]);
 const inspectedLatLng = ref<[number, number] | null>(null);
 const hoveredTrackId = ref<number | null>(null);
@@ -248,7 +251,7 @@ const sportFilterChips = computed<
     for (const sport of source) {
         chips.push({
             value: sport.key,
-            label: sport.label,
+            label: sport.short_label || sport.label,
             accentHex: sport.accent_hex || resolveCatalogAccentHex(sport.key),
         });
     }
@@ -560,6 +563,15 @@ function queueGnssSync(): void {
             onStart: () => {
                 isQueueingSync.value = true;
             },
+            onSuccess: () => {
+                toast.success(
+                    page.props.flash?.status ??
+                        'Requested GPS route data sync.',
+                );
+            },
+            onError: () => {
+                toast.error('Failed to queue GPS route data sync.');
+            },
             onFinish: () => {
                 isQueueingSync.value = false;
             },
@@ -707,6 +719,15 @@ function handleMapClick(event: MapMouseEvent): void {
     hoveredTrackId.value = null;
     updateBaseTrackStyle();
     renderHighlights();
+
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+        nextTick(() => {
+            inspectorRef.value?.scrollIntoView({
+                behavior: 'smooth',
+                block: 'nearest',
+            });
+        });
+    }
 }
 
 function closeInspector(): void {
@@ -1447,7 +1468,7 @@ onBeforeUnmount(() => {
         <Head title="Route Heatmap" />
 
         <!-- Page Header -->
-        <div
+        <header
             class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between"
         >
             <div>
@@ -1456,8 +1477,13 @@ onBeforeUnmount(() => {
                 >
                     Route Heatmap
                 </h1>
+                <p class="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    Click any route corridor to inspect overlapping activities,
+                    or toggle Explorer Tiles (z14 ~2.4 km squares) to track your
+                    Max Square and Max Cluster.
+                </p>
             </div>
-        </div>
+        </header>
 
         <!-- Compact Filter Bar + Summary Strip -->
         <section
@@ -1496,16 +1522,9 @@ onBeforeUnmount(() => {
                 </div>
 
                 <button
+                    v-if="hasActiveFilters"
                     type="button"
-                    :disabled="!hasActiveFilters"
-                    :class="[
-                        'inline-flex items-center gap-1 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-[11px] font-medium transition-colors dark:border-zinc-800/90 dark:bg-zinc-900/50',
-                        hasActiveFilters
-                            ? 'cursor-pointer text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
-                            : 'pointer-events-none opacity-0',
-                    ]"
-                    :tabindex="hasActiveFilters ? 0 : -1"
-                    :aria-hidden="!hasActiveFilters"
+                    class="inline-flex cursor-pointer items-center gap-1 rounded-lg border border-zinc-200/90 bg-white px-2.5 py-1.5 font-mono text-[11px] font-medium text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-zinc-900/50 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
                     @click="resetFilters"
                 >
                     <RotateCcw class="size-3" />
@@ -1532,7 +1551,8 @@ onBeforeUnmount(() => {
                     <!-- Explorer z14 Grid Toggle -->
                     <div class="flex flex-wrap items-center gap-1.5">
                         <span
-                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                            title="Explorer Tiles (z14 ~2.4 km squares): map grid squares visited by your routes"
+                            class="inline-flex cursor-help items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             <Grid2x2 class="size-3" />
                             <span>Explorer</span>
@@ -1547,7 +1567,7 @@ onBeforeUnmount(() => {
                                 class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     !showExplorerTiles
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="setExplorerTilesVisible(false)"
@@ -1561,7 +1581,7 @@ onBeforeUnmount(() => {
                                 class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-wait"
                                 :class="
                                     showExplorerTiles
-                                        ? 'bg-emerald-600 text-white dark:bg-emerald-500 dark:text-zinc-950'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="setExplorerTilesVisible(true)"
@@ -1577,7 +1597,7 @@ onBeforeUnmount(() => {
                         :class="!hasTracks ? 'opacity-50' : ''"
                     >
                         <span
-                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             <Layers class="size-3" />
                             <span>Order</span>
@@ -1596,7 +1616,7 @@ onBeforeUnmount(() => {
                                 class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed"
                                 :class="
                                     activeOrder === opt.value
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="selectOrder(opt.value)"
@@ -1615,7 +1635,7 @@ onBeforeUnmount(() => {
                 <div class="flex flex-wrap items-center gap-x-6 gap-y-2">
                     <div class="flex items-baseline gap-2">
                         <span
-                            class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Tracks
                         </span>
@@ -1628,7 +1648,7 @@ onBeforeUnmount(() => {
 
                     <div class="flex items-baseline gap-2">
                         <span
-                            class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Total Distance
                         </span>
@@ -1646,7 +1666,7 @@ onBeforeUnmount(() => {
 
                     <div class="flex items-baseline gap-2">
                         <span
-                            class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                            class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Total Elevation
                         </span>
@@ -1681,9 +1701,12 @@ onBeforeUnmount(() => {
                             class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1 dark:border-zinc-800/80 dark:bg-zinc-900/50"
                             title="Lifetime totals across all outdoor activities, independent of the sport and date filters"
                         >
-                            <div class="flex items-baseline gap-1.5">
+                            <div
+                                class="flex cursor-help items-baseline gap-1.5"
+                                title="Explorer Tiles (z14 ~2.4 km squares): unique map squares crossed by your routes"
+                            >
                                 <span
-                                    class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                                    class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:text-zinc-400 dark:decoration-zinc-600"
                                 >
                                     Lifetime Tiles
                                 </span>
@@ -1699,9 +1722,12 @@ onBeforeUnmount(() => {
                                 </span>
                             </div>
 
-                            <div class="flex items-baseline gap-1.5">
+                            <div
+                                class="flex cursor-help items-baseline gap-1.5"
+                                title="Max Square: largest solid N×N block of visited Explorer Tiles"
+                            >
                                 <span
-                                    class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                                    class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:text-zinc-400 dark:decoration-zinc-600"
                                 >
                                     Max Square
                                 </span>
@@ -1714,9 +1740,12 @@ onBeforeUnmount(() => {
                                 </span>
                             </div>
 
-                            <div class="flex items-baseline gap-1.5">
+                            <div
+                                class="flex cursor-help items-baseline gap-1.5"
+                                title="Max Cluster: largest connected group of interior Explorer Tiles surrounded on all 4 sides"
+                            >
                                 <span
-                                    class="font-mono text-[10px] tracking-widest text-zinc-400 uppercase dark:text-zinc-500"
+                                    class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:text-zinc-400 dark:decoration-zinc-600"
                                 >
                                     Max Cluster
                                 </span>
@@ -1800,6 +1829,7 @@ onBeforeUnmount(() => {
                 <!-- Floating Corridor Inspector Panel -->
                 <aside
                     v-if="isInspectorOpen"
+                    ref="inspectorRef"
                     aria-label="Overlapping activities"
                     class="border-t border-zinc-200/90 bg-white md:absolute md:top-3 md:right-3 md:bottom-3 md:z-[500] md:flex md:w-[340px] md:flex-col md:overflow-hidden md:rounded-xl md:border md:bg-white/95 md:backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417] md:dark:bg-[#141417]/95"
                 >

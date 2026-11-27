@@ -665,3 +665,126 @@ it('computes cycling power CTL/ATL/TSB with training_load fallback and 0.95 max 
         ->and($today['atl'])->toBe(12.2)
         ->and($today['tsb'])->toBe(-11.9);
 });
+
+it('reports the latest family activity with its effective discipline and local wall-clock start', function () {
+    Activity::factory()->trailRunning()->create([
+        'name' => 'Older Trail Run',
+        'started_at_local' => CarbonImmutable::parse('2026-11-20 07:00:00'),
+    ]);
+    $latestTrail = Activity::factory()->trailRunning()->create([
+        'name' => 'Ridgeline Loop',
+        'started_at_local' => CarbonImmutable::parse('2026-11-21 06:15:00'),
+        'distance_meters' => 10500.0,
+        'duration_seconds' => 3300.0,
+        'avg_speed' => 3.18,
+        'avg_hr' => 151,
+    ]);
+
+    app(SportRegistry::class)->flushMemo();
+
+    $latest = app(FamilyOverviewService::class)->overview('running')['latestActivity'];
+
+    expect($latest)->toBe([
+        'id' => $latestTrail->id,
+        'name' => 'Ridgeline Loop',
+        'sport_category' => 'running',
+        'effective_discipline' => 'trail',
+        'started_at_local' => '2026-11-21T06:15:00',
+        'is_today' => false,
+        'distance_meters' => 10500.0,
+        'duration_seconds' => 3300.0,
+        'avg_speed' => 3.18,
+        'avg_hr' => 151,
+    ]);
+});
+
+it('applies discipline overrides and flags today using the display timezone for the latest family activity', function () {
+    Activity::factory()->roadBiking()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-21 18:00:00'),
+    ]);
+    $reclassifiedRide = Activity::factory()->otherBiking()->create([
+        'name' => 'Dawn Singletrack',
+        'discipline_override' => 'mtb',
+        'started_at_local' => CarbonImmutable::parse('2026-11-22 06:30:00'),
+    ]);
+
+    app(SportRegistry::class)->flushMemo();
+
+    $latest = app(FamilyOverviewService::class)->overview('cycling')['latestActivity'];
+
+    expect($latest['id'])->toBe($reclassifiedRide->id)
+        ->and($latest['effective_discipline'])->toBe('mtb')
+        ->and($latest['started_at_local'])->toBe('2026-11-22T06:30:00')
+        ->and($latest['is_today'])->toBeTrue();
+});
+
+it('returns no latest family activity when the family has no sessions', function () {
+    Activity::factory()->roadBiking()->create();
+
+    app(SportRegistry::class)->flushMemo();
+
+    expect(app(FamilyOverviewService::class)->overview('running')['latestActivity'])->toBeNull();
+});
+
+it('includes override times and excluded efforts in cycling best efforts and reflects reset and restore requests', function () {
+    $fastRide = Activity::factory()->roadBiking()->create([
+        'name' => 'Tailwind TT',
+        'started_at_local' => CarbonImmutable::parse('2026-11-18 07:00:00'),
+    ]);
+    $steadyRide = Activity::factory()->roadBiking()->create([
+        'name' => 'Club Ride',
+        'started_at_local' => CarbonImmutable::parse('2026-11-20 07:00:00'),
+    ]);
+
+    $excludedEffort = BestEffort::factory()->excluded()->create([
+        'activity_id' => $fastRide->id,
+        'sport' => 'road_biking',
+        'distance_key' => '20k',
+        'distance_meters' => 20000.0,
+        'elapsed_seconds' => 1500.0,
+        'achieved_at' => $fastRide->started_at_local,
+    ]);
+    $overriddenEffort = BestEffort::factory()->create([
+        'activity_id' => $steadyRide->id,
+        'sport' => 'road_biking',
+        'distance_key' => '20k',
+        'distance_meters' => 20000.0,
+        'elapsed_seconds' => 2100.0,
+        'override_seconds' => 2000.0,
+        'achieved_at' => $steadyRide->started_at_local,
+    ]);
+
+    app(SportRegistry::class)->flushMemo();
+    $service = app(EnduranceHubService::class);
+    $twentyK = fn (): array => collect($service->hub('road_cycling')['modules']['power']['bestEfforts'])
+        ->firstWhere('key', '20k');
+
+    $initial = $twentyK();
+
+    expect($initial['best']['id'])->toBe($overriddenEffort->id)
+        ->and($initial['best']['override_seconds'])->toBe(2000.0)
+        ->and($initial['best']['effective_seconds'])->toBe(2000.0)
+        ->and($initial['excluded'])->toHaveCount(1)
+        ->and($initial['excluded'][0]['id'])->toBe($excludedEffort->id)
+        ->and($initial['excluded'][0]['activity_name'])->toBe('Tailwind TT')
+        ->and($initial['excluded'][0]['is_excluded'])->toBeTrue();
+
+    $this->from('/cycling/road')
+        ->patch("/best-efforts/{$overriddenEffort->id}", ['override_seconds' => null])
+        ->assertRedirect('/cycling/road');
+
+    $afterReset = $twentyK();
+
+    expect($afterReset['best']['id'])->toBe($overriddenEffort->id)
+        ->and($afterReset['best']['override_seconds'])->toBeNull()
+        ->and($afterReset['best']['effective_seconds'])->toBe(2100.0);
+
+    $this->from('/cycling/road')
+        ->patch("/best-efforts/{$excludedEffort->id}", ['is_excluded' => false])
+        ->assertRedirect('/cycling/road');
+
+    $afterRestore = $twentyK();
+
+    expect($afterRestore['best']['id'])->toBe($excludedEffort->id)
+        ->and($afterRestore['excluded'])->toBe([]);
+});
