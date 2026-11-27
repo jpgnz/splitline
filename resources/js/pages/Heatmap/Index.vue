@@ -666,116 +666,48 @@ function syncTerrainState(): void {
     });
 }
 
-function pointToSegmentDistancePx(
-    px: number,
-    py: number,
-    ax: number,
-    ay: number,
-    bx: number,
-    by: number,
-): number {
-    const dx = bx - ax;
-    const dy = by - ay;
-    const lenSq = dx * dx + dy * dy;
-
-    if (lenSq === 0) {
-        return Math.hypot(px - ax, py - ay);
-    }
-
-    const t = Math.max(
-        0,
-        Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq),
-    );
-    const projX = ax + t * dx;
-    const projY = ay + t * dy;
-
-    return Math.hypot(px - projX, py - projY);
-}
-
-function isTrackWithinClickRadius(
-    track: DecodedHeatmapTrack,
-    clickPoint: MapLibrePoint,
+/**
+ * Activity IDs of base tracks rendered within the click radius. Uses the rendered geometry so hit-testing
+ * stays accurate (and cheap) when the map is pitched or draped over 3D terrain.
+ */
+function renderedTrackIdsNearPoint(
     mapInstance: MapLibreMap,
-): boolean {
-    const pts = track.polyline;
+    point: MapLibrePoint,
+): Set<number> {
+    const ids = new Set<number>();
 
-    if (pts.length < 2) {
-        return false;
+    if (!mapInstance.getLayer(BASE_TRACKS_LAYER_ID)) {
+        return ids;
     }
 
-    let prev = mapInstance.project(toLngLat(pts[0]));
+    const features = mapInstance.queryRenderedFeatures(
+        [
+            [point.x - CLICK_RADIUS_PX, point.y - CLICK_RADIUS_PX],
+            [point.x + CLICK_RADIUS_PX, point.y + CLICK_RADIUS_PX],
+        ],
+        { layers: [BASE_TRACKS_LAYER_ID] },
+    );
 
-    for (let i = 1; i < pts.length; i += 1) {
-        const curr = mapInstance.project(toLngLat(pts[i]));
-        const dist = pointToSegmentDistancePx(
-            clickPoint.x,
-            clickPoint.y,
-            prev.x,
-            prev.y,
-            curr.x,
-            curr.y,
-        );
+    for (const feature of features) {
+        const activityId = Number(feature.properties?.activity_id);
 
-        if (dist <= CLICK_RADIUS_PX) {
-            return true;
+        if (Number.isFinite(activityId)) {
+            ids.add(activityId);
         }
-
-        prev = curr;
     }
 
-    return false;
+    return ids;
 }
 
 function handleMapClick(event: MapMouseEvent): void {
-    if (!map || indexedTracks.value.length === 0) {
+    if (!map || !styleReady || indexedTracks.value.length === 0) {
         return;
     }
 
-    const clickPoint = event.point;
-    const pad = CLICK_RADIUS_PX + 2;
-    const corners = [
-        map.unproject([clickPoint.x - pad, clickPoint.y - pad]),
-        map.unproject([clickPoint.x + pad, clickPoint.y - pad]),
-        map.unproject([clickPoint.x - pad, clickPoint.y + pad]),
-        map.unproject([clickPoint.x + pad, clickPoint.y + pad]),
-    ];
-
-    const validCorners = corners.filter(
-        (corner) =>
-            Number.isFinite(corner.lat) &&
-            Number.isFinite(corner.lng) &&
-            Math.abs(corner.lat) <= 85,
-    );
-    const useBboxFilter = validCorners.length === 4 && map.getPitch() < 45;
-    let searchMinLat = Number.NEGATIVE_INFINITY;
-    let searchMaxLat = Number.POSITIVE_INFINITY;
-    let searchMinLng = Number.NEGATIVE_INFINITY;
-    let searchMaxLng = Number.POSITIVE_INFINITY;
-
-    if (useBboxFilter) {
-        searchMinLat = Math.min(...validCorners.map((c) => c.lat));
-        searchMaxLat = Math.max(...validCorners.map((c) => c.lat));
-        searchMinLng = Math.min(...validCorners.map((c) => c.lng));
-        searchMaxLng = Math.max(...validCorners.map((c) => c.lng));
-    }
-
-    const matched: DecodedHeatmapTrack[] = [];
-
-    for (const item of indexedTracks.value) {
-        if (
-            useBboxFilter &&
-            (item.maxLat < searchMinLat ||
-                item.minLat > searchMaxLat ||
-                item.maxLng < searchMinLng ||
-                item.minLng > searchMaxLng)
-        ) {
-            continue;
-        }
-
-        if (isTrackWithinClickRadius(item.track, clickPoint, map)) {
-            matched.push(item.track);
-        }
-    }
+    const hitIds = renderedTrackIdsNearPoint(map, event.point);
+    const matched: DecodedHeatmapTrack[] = indexedTracks.value
+        .filter((item) => hitIds.has(item.track.activity_id))
+        .map((item) => item.track);
 
     if (matched.length === 0) {
         closeInspector();

@@ -652,6 +652,12 @@ it('resolves sport-scoped top-3 power effort ranks and date-matched athlete weig
         'power_curve' => ['5' => 690, '300' => 300, '1200' => 300],
     ]);
 
+    // Excluded rides never count towards all-time ranks
+    Activity::factory()->roadBiking()->excluded()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-12 07:00:00'),
+        'power_curve' => ['5' => 999, '300' => 450, '1200' => 400],
+    ]);
+
     $targetRide = Activity::factory()->roadBiking()->create([
         'started_at_local' => CarbonImmutable::parse('2026-11-19 07:00:00'),
         'power_curve' => ['5' => 810, '300' => 340, '1200' => 280],

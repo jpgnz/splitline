@@ -63,7 +63,7 @@ class ActivityExclusionService
 
         if ($stream !== null) {
             try {
-                $this->routeMatchingService->matchActivity($activity, $stream);
+                $this->routeMatchingService->restoreActivity($activity, $stream);
             } catch (Throwable $exception) {
                 report($exception);
             }

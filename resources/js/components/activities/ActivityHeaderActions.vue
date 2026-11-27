@@ -197,7 +197,7 @@ function updateGear(): void {
 }
 
 function syncStreams(): void {
-    if (isSyncingStreams.value) {
+    if (isSyncingStreams.value || props.activity.is_excluded) {
         return;
     }
 
@@ -292,9 +292,11 @@ defineExpose({
 
             <!-- Data Sync Actions -->
             <div
+                v-if="!activity.is_excluded || canSyncWeather"
                 class="space-y-1 border-t border-zinc-200/80 pt-2.5 dark:border-zinc-800/80"
             >
                 <button
+                    v-if="!activity.is_excluded"
                     type="button"
                     :disabled="isSyncingStreams"
                     class="flex w-full cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-100 hover:text-zinc-950 disabled:cursor-not-allowed disabled:opacity-60 dark:text-zinc-300 dark:hover:bg-zinc-800/80 dark:hover:text-zinc-100"

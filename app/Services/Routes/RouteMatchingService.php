@@ -132,14 +132,18 @@ class RouteMatchingService
      * Compute or update an activity's route fingerprint and match it into an existing or new RouteCluster.
      *
      * Activities whose polyline cannot be fingerprinted are flagged with `route_match_skipped_at`
-     * so background scans stop revisiting them until their stream changes.
+     * so background scans stop revisiting them until their stream changes. Excluded activities are never matched.
      */
     public function matchActivity(
         Activity $activity,
         ?ActivityStream $stream = null,
         bool $forceRecompute = false,
     ): ?ActivityRouteFingerprint {
-        if ($activity->is_indoor || $activity->distance_meters < self::MIN_DISTANCE_METERS) {
+        if (
+            $activity->isExcluded()
+            || $activity->is_indoor
+            || $activity->distance_meters < self::MIN_DISTANCE_METERS
+        ) {
             return null;
         }
 
@@ -318,7 +322,10 @@ class RouteMatchingService
     }
 
     /**
-     * Remove an activity's route fingerprint and refresh its former cluster when excluding an activity.
+     * Detach an excluded activity's fingerprint from its route cluster and refresh the former cluster.
+     *
+     * The fingerprint row is kept so a manual unlink survives a restore, and the cluster's custom name is
+     * stashed in `preserved_name_override` so it can be reapplied if the cluster is deleted in the meantime.
      */
     public function removeActivity(Activity $activity): void
     {
@@ -326,23 +333,34 @@ class RouteMatchingService
             ->where('activity_id', $activity->id)
             ->first();
 
-        if ($fingerprint === null) {
+        if ($fingerprint === null || $fingerprint->is_unlinked || $fingerprint->route_cluster_id === null) {
             return;
         }
 
         $clusterId = $fingerprint->route_cluster_id;
 
         DB::transaction(function () use ($fingerprint, $clusterId): void {
-            $fingerprint->delete();
+            $nameOverride = trim((string) RouteCluster::query()->whereKey($clusterId)->value('name_override'));
 
-            if ($clusterId !== null) {
-                $cluster = RouteCluster::query()->find($clusterId);
+            $fingerprint->update([
+                'route_cluster_id' => null,
+                'preserved_name_override' => $nameOverride !== '' ? $nameOverride : null,
+            ]);
 
-                if ($cluster !== null) {
-                    $this->refreshCluster($cluster);
-                }
-            }
+            $this->refreshClustersById([$clusterId]);
         });
+    }
+
+    /**
+     * Re-match a restored activity into a route cluster and reapply any custom route name stashed on exclusion.
+     */
+    public function restoreActivity(Activity $activity, ?ActivityStream $stream = null): ?ActivityRouteFingerprint
+    {
+        $fingerprint = $this->matchActivity($activity, $stream);
+
+        $this->restorePreservedOverrides();
+
+        return $fingerprint;
     }
 
     /**
@@ -435,6 +453,7 @@ class RouteMatchingService
         ActivityRouteFingerprint::query()
             ->whereNull('route_cluster_id')
             ->where('is_unlinked', false)
+            ->whereHas('activity')
             ->delete();
 
         return [

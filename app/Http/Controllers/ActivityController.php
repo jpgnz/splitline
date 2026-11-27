@@ -77,6 +77,10 @@ class ActivityController extends Controller
 
     public function syncStreams(Activity $activity, ActivityStreamSyncService $streamSync): RedirectResponse
     {
+        if ($activity->isExcluded()) {
+            return back()->with('status', 'Restore this activity before syncing its streams.');
+        }
+
         try {
             $streamSync->sync($activity);
         } catch (Throwable $exception) {
