@@ -173,8 +173,10 @@ interface CyclingBestEffortItem {
         activity_name: string;
         achieved_at: string;
         effective_seconds: number;
+        override_seconds?: number | null;
         avg_speed: number;
     } | null;
+    excluded?: BestEffortBoardEntry[];
 }
 
 interface PowerModule {
@@ -485,6 +487,7 @@ const accentHex = computed<string>(
     () => props.sport.accent_hex || sportMeta.value.accent_hex,
 );
 const isPaceSport = computed<boolean>(() => props.sport.metric_mode === 'pace');
+const cadenceUnit = computed<string>(() => props.sport.cadence_unit ?? 'spm');
 
 const goalAccent = computed<'amber' | 'sky' | 'emerald' | 'indigo'>(() => {
     const token = props.sport.color_token || sportMeta.value.color_token;
@@ -531,6 +534,54 @@ const editTimeInput = ref<string>('');
 const editTimeError = ref<string | null>(null);
 const busyEffortId = ref<number | null>(null);
 const offroadTab = ref<OffroadLeaderboardTab>('hardest');
+const overriddenCyclingIds = ref<number[]>([]);
+const locallyExcludedCycling = ref<
+    Array<{
+        id: number;
+        activity_id: number;
+        activity_name: string;
+        achieved_at: string;
+        effective_seconds: number;
+        distanceLabel: string;
+    }>
+>([]);
+
+const excludedCyclingEfforts = computed(() => {
+    const seen = new Set<number>();
+    const combined: Array<{
+        id: number;
+        activity_id: number;
+        activity_name: string;
+        achieved_at: string;
+        effective_seconds: number;
+        distanceLabel: string;
+    }> = [];
+
+    for (const effort of props.modules.power?.bestEfforts ?? []) {
+        for (const ex of effort.excluded ?? []) {
+            if (!seen.has(ex.id)) {
+                seen.add(ex.id);
+                combined.push({
+                    id: ex.id,
+                    activity_id: ex.activity_id,
+                    activity_name: ex.activity_name,
+                    achieved_at: ex.achieved_at,
+                    effective_seconds: ex.effective_seconds,
+                    distanceLabel: effort.label,
+                });
+            }
+        }
+    }
+
+    for (const ex of locallyExcludedCycling.value) {
+        if (!seen.has(ex.id)) {
+            seen.add(ex.id);
+            combined.push(ex);
+        }
+    }
+
+    return combined;
+});
 
 // Initialize default selected distance tab for running best efforts
 function resolveDefaultDistanceKey(
@@ -867,6 +918,23 @@ function formatEffortDate(dateStr: string): string {
     return formatShortDate(trimmed);
 }
 
+function formatRecentDate(dateStr: string): string {
+    if (!dateStr) {
+        return '—';
+    }
+
+    const short = formatShortDate(dateStr);
+    const match = /^(\d{4})-/.exec(dateStr.trim());
+
+    if (!match) {
+        return short;
+    }
+
+    const year = Number(match[1]);
+
+    return year !== new Date().getFullYear() ? `${short} ${year}` : short;
+}
+
 function formatPaceFromSecPerKm(secPerKm: number | null | undefined): string {
     if (
         secPerKm === null ||
@@ -1080,7 +1148,7 @@ function cancelEditEffort(): void {
     editTimeError.value = null;
 }
 
-function saveEffortOverride(effortId: number): void {
+function saveEffortOverride(effortId: number, isCycling = false): void {
     const parsedSeconds = parseTimeToSeconds(editTimeInput.value);
 
     if (parsedSeconds === null) {
@@ -1096,8 +1164,19 @@ function saveEffortOverride(effortId: number): void {
         updateBestEffort.url(effortId),
         { override_seconds: parsedSeconds },
         {
+            preserveState: true,
             preserveScroll: true,
             onSuccess: () => {
+                if (
+                    isCycling &&
+                    !overriddenCyclingIds.value.includes(effortId)
+                ) {
+                    overriddenCyclingIds.value = [
+                        ...overriddenCyclingIds.value,
+                        effortId,
+                    ];
+                }
+
                 cancelEditEffort();
             },
             onFinish: () => {
@@ -1114,8 +1193,12 @@ function resetEffortOverride(effortId: number): void {
         updateBestEffort.url(effortId),
         { override_seconds: null },
         {
+            preserveState: true,
             preserveScroll: true,
             onSuccess: () => {
+                overriddenCyclingIds.value = overriddenCyclingIds.value.filter(
+                    (id) => id !== effortId,
+                );
                 cancelEditEffort();
             },
             onFinish: () => {
@@ -1125,15 +1208,34 @@ function resetEffortOverride(effortId: number): void {
     );
 }
 
-function excludeEffort(effortId: number): void {
+function excludeEffort(
+    effortId: number,
+    cyclingMeta?: {
+        activity_id: number;
+        activity_name: string;
+        achieved_at: string;
+        effective_seconds: number;
+        distanceLabel: string;
+    },
+): void {
     busyEffortId.value = effortId;
 
     router.patch(
         updateBestEffort.url(effortId),
         { is_excluded: true },
         {
+            preserveState: true,
             preserveScroll: true,
             onSuccess: () => {
+                if (cyclingMeta) {
+                    locallyExcludedCycling.value = [
+                        ...locallyExcludedCycling.value.filter(
+                            (item) => item.id !== effortId,
+                        ),
+                        { id: effortId, ...cyclingMeta },
+                    ];
+                }
+
                 if (editingEffortId.value === effortId) {
                     cancelEditEffort();
                 }
@@ -1152,7 +1254,14 @@ function restoreEffort(effortId: number): void {
         updateBestEffort.url(effortId),
         { is_excluded: false },
         {
+            preserveState: true,
             preserveScroll: true,
+            onSuccess: () => {
+                locallyExcludedCycling.value =
+                    locallyExcludedCycling.value.filter(
+                        (item) => item.id !== effortId,
+                    );
+            },
             onFinish: () => {
                 busyEffortId.value = null;
             },
@@ -1193,7 +1302,7 @@ const weeklyVolumeChartOption = computed<EChartsOption>(() => {
     const axisLabelStyle = {
         color: theme.mutedColor.value,
         fontFamily: monoFont,
-        fontSize: 10,
+        fontSize: 11,
     };
 
     const primaryName =
@@ -1263,7 +1372,7 @@ const weeklyVolumeChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: showElevLine ? 16 : 12,
-            top: 44,
+            top: 58,
             bottom: 12,
             containLabel: true,
         },
@@ -1383,9 +1492,28 @@ const hasAerobicDrift = computed<boolean>(
     () => aerobicDriftPoints.value.length > 0,
 );
 
-const aerobicEfUnit = computed<string>(() =>
-    props.aerobicDrift?.primary_metric === 'power' ? 'W/bpm' : 'm/min/bpm',
-);
+const aerobicEfUnit = computed<string>(() => {
+    if (props.aerobicDrift?.primary_metric === 'power') {
+        return 'W/bpm';
+    }
+
+    return units.isImperial.value ? 'ft/min/bpm' : 'm/min/bpm';
+});
+
+function convertEfValue(
+    value: number | null | undefined,
+    metric: 'power' | 'gap' | 'speed' | null | undefined,
+): number | null {
+    if (value === null || value === undefined || !Number.isFinite(value)) {
+        return null;
+    }
+
+    if (metric === 'power' || !units.isImperial.value) {
+        return value;
+    }
+
+    return value * M_TO_FT;
+}
 
 const aerobicMetricCode = computed<string>(() => {
     const metric = props.aerobicDrift?.primary_metric;
@@ -1463,11 +1591,18 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
 
     // Only plot EF for the primary metric: W/bpm (power) and m/min/bpm (speed/GAP) are not comparable.
     const primaryMetric = props.aerobicDrift?.primary_metric ?? null;
-    const efValues = points.map((p) =>
-        primaryMetric === null || p.decoupling_metric === primaryMetric
-            ? p.efficiency_factor
-            : null,
-    );
+    const efValues = points.map((p) => {
+        if (primaryMetric !== null && p.decoupling_metric !== primaryMetric) {
+            return null;
+        }
+
+        const converted = convertEfValue(
+            p.efficiency_factor,
+            p.decoupling_metric ?? primaryMetric,
+        );
+
+        return converted !== null ? Number(converted.toFixed(3)) : null;
+    });
     const recentEf: number[] = [];
     const rollingEf: Array<number | null> = efValues.map((value) => {
         if (value === null || !Number.isFinite(value)) {
@@ -1491,15 +1626,17 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
     const axisLabelStyle = {
         color: theme.mutedColor.value,
         fontFamily: monoFont,
-        fontSize: 10,
+        fontSize: 11,
     };
+
+    const efSeriesName = `Efficiency Factor (${aerobicEfUnit.value})`;
 
     return {
         animation: false,
         grid: {
             left: 12,
             right: 16,
-            top: 46,
+            top: 58,
             bottom: 12,
             containLabel: true,
         },
@@ -1507,6 +1644,7 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
             top: 0,
             left: 0,
             padding: [0, 0, 0, 0],
+            data: [efSeriesName, '5-Session Trend'],
             icon: 'roundRect',
             itemWidth: 10,
             itemHeight: 6,
@@ -1534,8 +1672,15 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
                     return '';
                 }
 
+                const metric =
+                    item.decoupling_metric ??
+                    props.aerobicDrift?.primary_metric;
                 const unitLabel =
-                    item.decoupling_metric === 'power' ? 'W/bpm' : 'm/min/bpm';
+                    metric === 'power'
+                        ? 'W/bpm'
+                        : units.isImperial.value
+                          ? 'ft/min/bpm'
+                          : 'm/min/bpm';
                 const metricCode = formatDecouplingMetricLabel(
                     item.decoupling_metric,
                 );
@@ -1544,14 +1689,20 @@ const aerobicDriftChartOption = computed<EChartsOption>(() => {
                     `<div style="font-weight:600;margin-top:2px;">${escapeHtml(item.name)}</div>`,
                 ];
 
-                if (item.efficiency_factor !== null) {
+                const efVal = convertEfValue(item.efficiency_factor, metric);
+                const firstHalfEf = convertEfValue(item.first_half_ef, metric);
+                const secondHalfEf = convertEfValue(
+                    item.second_half_ef,
+                    metric,
+                );
+
+                if (efVal !== null) {
                     const splitNote =
-                        item.first_half_ef !== null &&
-                        item.second_half_ef !== null
-                            ? ` <span style="opacity:0.7;">(${formatNumber(item.first_half_ef, 2)} → ${formatNumber(item.second_half_ef, 2)})</span>`
+                        firstHalfEf !== null && secondHalfEf !== null
+                            ? ` <span style="opacity:0.7;">(${formatNumber(firstHalfEf, 2)} → ${formatNumber(secondHalfEf, 2)})</span>`
                             : '';
                     lines.push(
-                        `<div style="margin-top:3px;"><span style="color:${accentHex.value};">●</span> EF: <strong>${formatNumber(item.efficiency_factor, 2)} ${unitLabel}</strong>${splitNote}</div>`,
+                        `<div style="margin-top:3px;"><span style="color:${accentHex.value};">●</span> EF: <strong>${formatNumber(efVal, 2)} ${unitLabel}</strong>${splitNote}</div>`,
                     );
                 }
 
@@ -1806,14 +1957,8 @@ const activeRunningEfforts = computed<BestEffortBoardEntry[]>(() => {
         : board.annualTop10;
 });
 
-const gapScatterOption = computed<EChartsOption>(() => {
+const efficiencyScatterSeries = computed(() => {
     const items = props.modules.pace?.efficiency ?? [];
-    const monoFont = theme.fontFamilyMono;
-
-    if (items.length === 0) {
-        return {};
-    }
-
     const gapPoints: Array<{
         value: [number, number];
         item: (typeof items)[number];
@@ -1842,10 +1987,21 @@ const gapScatterOption = computed<EChartsOption>(() => {
         }
     }
 
+    return { gapPoints, rawPoints };
+});
+
+const gapScatterOption = computed<EChartsOption>(() => {
+    const { gapPoints, rawPoints } = efficiencyScatterSeries.value;
+    const monoFont = theme.fontFamilyMono;
+
+    if (gapPoints.length === 0 && rawPoints.length === 0) {
+        return {};
+    }
+
     const axisLabelStyle = {
         color: theme.mutedColor.value,
         fontFamily: monoFont,
-        fontSize: 10,
+        fontSize: 11,
     };
 
     const series: SeriesOption[] = [];
@@ -1881,8 +2037,8 @@ const gapScatterOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 44,
-            bottom: 24,
+            top: 58,
+            bottom: 36,
             containLabel: true,
         },
         legend: {
@@ -1902,7 +2058,7 @@ const gapScatterOption = computed<EChartsOption>(() => {
             trigger: 'item',
             formatter: (params: unknown) => {
                 const entry = params as {
-                    data?: { item?: (typeof items)[number] };
+                    data?: { item?: PaceModule['efficiency'][number] };
                 };
                 const item = entry.data?.item;
 
@@ -1939,7 +2095,7 @@ const gapScatterOption = computed<EChartsOption>(() => {
             scale: true,
             name: 'Avg HR (bpm)',
             nameLocation: 'middle',
-            nameGap: 22,
+            nameGap: 24,
             nameTextStyle: axisLabelStyle,
             axisLine: { lineStyle: { color: theme.gridLineColor.value } },
             axisTick: { show: false },
@@ -1956,7 +2112,7 @@ const gapScatterOption = computed<EChartsOption>(() => {
             scale: true,
             inverse: true,
             name: `Pace (${units.paceUnit.value})`,
-            nameGap: 12,
+            nameGap: 14,
             nameTextStyle: { ...axisLabelStyle, align: 'left' },
             axisLine: { show: false },
             axisTick: { show: false },
@@ -1976,12 +2132,11 @@ const gapScatterOption = computed<EChartsOption>(() => {
 });
 
 function onEfficiencyScatterClick(payload: ChartPointClickPayload): void {
-    const items = props.modules.pace?.efficiency ?? [];
-    const seriesItems =
+    const points =
         payload.seriesName === 'GAP Pace'
-            ? items.filter((i) => i.gap_speed !== null)
-            : items.filter((i) => i.raw_speed !== null);
-    const clicked = seriesItems[payload.dataIndex];
+            ? efficiencyScatterSeries.value.gapPoints
+            : efficiencyScatterSeries.value.rawPoints;
+    const clicked = points[payload.dataIndex]?.item;
 
     if (clicked?.activity_id) {
         router.visit(showActivity.url(clicked.activity_id));
@@ -2041,16 +2196,16 @@ const cadenceStrideOption = computed<EChartsOption>(() => {
     const axisLabelStyle = {
         color: theme.mutedColor.value,
         fontFamily: monoFont,
-        fontSize: 10,
+        fontSize: 11,
     };
 
     return {
         animation: false,
         grid: {
-            left: 10,
-            right: 12,
-            top: 40,
-            bottom: 10,
+            left: 12,
+            right: 16,
+            top: 56,
+            bottom: 12,
             containLabel: true,
         },
         legend: {
@@ -2088,7 +2243,7 @@ const cadenceStrideOption = computed<EChartsOption>(() => {
                 return [
                     `<div style="font-size:11px;opacity:0.75;">${formatEffortDate(item.date)}</div>`,
                     `<div style="font-weight:500;margin-top:2px;">${escapeHtml(item.name)}</div>`,
-                    `<div style="margin-top:3px;"><span style="color:${accentHex.value};">●</span> Cadence: <strong>${Math.round(item.cadence)} spm</strong></div>`,
+                    `<div style="margin-top:3px;"><span style="color:${accentHex.value};">●</span> Cadence: <strong>${Math.round(item.cadence)} ${cadenceUnit.value}</strong></div>`,
                     strideLine,
                 ].join('');
             },
@@ -2118,7 +2273,8 @@ const cadenceStrideOption = computed<EChartsOption>(() => {
                 },
                 axisLabel: {
                     ...axisLabelStyle,
-                    formatter: (val: number) => `${Math.round(val)} spm`,
+                    formatter: (val: number) =>
+                        `${Math.round(val)} ${cadenceUnit.value}`,
                 },
             },
             {
@@ -2156,10 +2312,10 @@ const vo2TrendOption = computed<EChartsOption>(() => {
     return {
         animation: false,
         grid: {
-            left: 10,
-            right: 12,
-            top: 18,
-            bottom: 10,
+            left: 12,
+            right: 16,
+            top: 36,
+            bottom: 12,
             containLabel: true,
         },
         tooltip: {
@@ -2188,13 +2344,21 @@ const vo2TrendOption = computed<EChartsOption>(() => {
             axisLabel: {
                 color: theme.mutedColor.value,
                 fontFamily: monoFont,
-                fontSize: 10,
+                fontSize: 11,
                 formatter: (val: string) => formatShortDate(val),
             },
         },
         yAxis: {
             type: 'value',
             scale: true,
+            name: 'mL/kg/min',
+            nameGap: 12,
+            nameTextStyle: {
+                color: theme.mutedColor.value,
+                fontFamily: monoFont,
+                fontSize: 11,
+                align: 'left',
+            },
             axisLine: { show: false },
             axisTick: { show: false },
             splitLine: {
@@ -2206,7 +2370,7 @@ const vo2TrendOption = computed<EChartsOption>(() => {
             axisLabel: {
                 color: theme.mutedColor.value,
                 fontFamily: monoFont,
-                fontSize: 10,
+                fontSize: 11,
             },
         },
         series: [
@@ -2306,7 +2470,7 @@ const prProgressionOption = computed<EChartsOption>(() => {
             axisLabel: {
                 color: theme.mutedColor.value,
                 fontFamily: monoFont,
-                fontSize: 10,
+                fontSize: 11,
                 formatter: (val: string) => formatShortDate(val),
             },
         },
@@ -2327,7 +2491,7 @@ const prProgressionOption = computed<EChartsOption>(() => {
             axisLabel: {
                 color: theme.mutedColor.value,
                 fontFamily: monoFont,
-                fontSize: 10,
+                fontSize: 11,
                 formatter: (val: number) => formatDurationClock(val),
             },
         },
@@ -2363,6 +2527,14 @@ const prProgressionOption = computed<EChartsOption>(() => {
         ],
     };
 });
+
+function onPrProgressionClick(payload: ChartPointClickPayload): void {
+    const point = selectedDistanceBoard.value?.progression[payload.dataIndex];
+
+    if (point?.activity_id) {
+        router.visit(showActivity.url(point.activity_id));
+    }
+}
 
 // ========================
 // MODULE 2: SPEED & POWER
@@ -2471,7 +2643,7 @@ const powerCurveChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 52,
+            top: 60,
             bottom: 12,
             containLabel: true,
         },
@@ -2527,7 +2699,12 @@ const powerCurveChartOption = computed<EChartsOption>(() => {
             nameGap: 14,
             nameTextStyle: { ...axisLabelStyle, align: 'left' },
             axisLabel: axisLabelStyle,
-            splitLine: { lineStyle: { color: theme.gridLineColor.value } },
+            splitLine: {
+                lineStyle: {
+                    color: theme.gridLineColor.value,
+                    type: 'dashed',
+                },
+            },
         },
         series: [
             {
@@ -2591,7 +2768,7 @@ const fitnessLoadChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 52,
+            top: 60,
             bottom: 12,
             containLabel: true,
         },
@@ -2629,7 +2806,7 @@ const fitnessLoadChartOption = computed<EChartsOption>(() => {
                 const tsbPrefix = item.tsb > 0 ? '+' : '';
 
                 return [
-                    `<strong>${formatShortDate(item.date)}</strong>`,
+                    `<strong>${formatEffortDate(item.date)}</strong>`,
                     `Fitness (CTL): ${formatNumber(item.ctl, 1)}`,
                     `Fatigue (ATL): ${formatNumber(item.atl, 1)}`,
                     `Form (TSB): ${tsbPrefix}${formatNumber(item.tsb, 1)}`,
@@ -2651,7 +2828,12 @@ const fitnessLoadChartOption = computed<EChartsOption>(() => {
                 nameGap: 14,
                 nameTextStyle: { ...axisLabelStyle, align: 'left' },
                 axisLabel: axisLabelStyle,
-                splitLine: { lineStyle: { color: theme.gridLineColor.value } },
+                splitLine: {
+                    lineStyle: {
+                        color: theme.gridLineColor.value,
+                        type: 'dashed',
+                    },
+                },
             },
             {
                 type: 'value',
@@ -2718,7 +2900,7 @@ const weeklyTssChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 52,
+            top: 60,
             bottom: 12,
             containLabel: true,
         },
@@ -2772,7 +2954,12 @@ const weeklyTssChartOption = computed<EChartsOption>(() => {
                 nameGap: 14,
                 nameTextStyle: { ...axisLabelStyle, align: 'left' },
                 axisLabel: axisLabelStyle,
-                splitLine: { lineStyle: { color: theme.gridLineColor.value } },
+                splitLine: {
+                    lineStyle: {
+                        color: theme.gridLineColor.value,
+                        type: 'dashed',
+                    },
+                },
             },
             {
                 type: 'value',
@@ -2830,7 +3017,7 @@ const ftpHistoryChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 52,
+            top: 60,
             bottom: 12,
             containLabel: true,
         },
@@ -2866,7 +3053,7 @@ const ftpHistoryChartOption = computed<EChartsOption>(() => {
                 }
 
                 return [
-                    `<strong>${formatShortDate(item.date)}</strong>`,
+                    `<strong>${formatEffortDate(item.date)}</strong>`,
                     `FTP: ${item.ftp !== null ? `${Math.round(item.ftp)} W` : '—'}`,
                     `Max 20m: ${item.max_20min_power !== null ? `${Math.round(item.max_20min_power)} W` : '—'}`,
                 ].join('<br/>');
@@ -2886,7 +3073,12 @@ const ftpHistoryChartOption = computed<EChartsOption>(() => {
             nameGap: 14,
             nameTextStyle: { ...axisLabelStyle, align: 'left' },
             axisLabel: axisLabelStyle,
-            splitLine: { lineStyle: { color: theme.gridLineColor.value } },
+            splitLine: {
+                lineStyle: {
+                    color: theme.gridLineColor.value,
+                    type: 'dashed',
+                },
+            },
         },
         series: [
             {
@@ -3084,7 +3276,7 @@ const dynamicsTrendChartOption = computed<EChartsOption>(() => {
         grid: {
             left: 12,
             right: 16,
-            top: 52,
+            top: 60,
             bottom: 12,
             containLabel: true,
         },
@@ -3121,7 +3313,7 @@ const dynamicsTrendChartOption = computed<EChartsOption>(() => {
 
                 const lines = [
                     `<strong>${escapeHtml(item.name)}</strong>`,
-                    `<span style="opacity:0.7">${formatShortDate(item.date)}</span>`,
+                    `<span style="opacity:0.7">${formatEffortDate(item.date)}</span>`,
                     `Grit: ${item.grit !== null ? formatNumber(item.grit, 1) : '—'}`,
                     `Avg Flow: ${item.avg_flow !== null ? formatNumber(item.avg_flow, 1) : '—'}`,
                 ];
@@ -3153,7 +3345,12 @@ const dynamicsTrendChartOption = computed<EChartsOption>(() => {
                 nameGap: 14,
                 nameTextStyle: { ...axisLabelStyle, align: 'left' },
                 axisLabel: axisLabelStyle,
-                splitLine: { lineStyle: { color: theme.gridLineColor.value } },
+                splitLine: {
+                    lineStyle: {
+                        color: theme.gridLineColor.value,
+                        type: 'dashed',
+                    },
+                },
             },
             {
                 type: 'value',
@@ -3399,7 +3596,7 @@ const recentHasOffroad = computed<boolean>(() =>
                 <p
                     class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Sessions &amp; Time
+                    YTD Sessions &amp; Time
                 </p>
                 <div class="mt-1.5 flex items-baseline gap-1.5 tabular-nums">
                     <span
@@ -3468,7 +3665,7 @@ const recentHasOffroad = computed<boolean>(() =>
                 <p
                     class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    {{ isPaceSport ? 'Avg Pace' : 'Avg Speed' }}
+                    {{ isPaceSport ? 'YTD Avg Pace' : 'YTD Avg Speed' }}
                 </p>
                 <p
                     class="mt-1.5 text-2xl font-semibold tracking-tight text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -3501,7 +3698,7 @@ const recentHasOffroad = computed<boolean>(() =>
                     <p
                         class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Avg HR &amp; Load
+                        YTD Avg HR &amp; Load
                     </p>
                     <span
                         v-if="summary.latest_ftp !== null"
@@ -3510,7 +3707,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         {{ Math.round(summary.latest_ftp) }}W<template
                             v-if="summary.w_per_kg !== null"
                         >
-                            · {{ summary.w_per_kg.toFixed(2) }}
+                            · {{ summary.w_per_kg.toFixed(2) }} W/kg
                         </template>
                     </span>
                     <span
@@ -3598,7 +3795,7 @@ const recentHasOffroad = computed<boolean>(() =>
                     </div>
                 </div>
 
-                <div class="ml-auto flex flex-wrap items-center gap-2">
+                <div class="flex flex-wrap items-center gap-2 lg:ml-auto">
                     <!-- Elevation Overlay Toggle -->
                     <button
                         v-if="hasWeeklyElevation && volumeMetric !== 'vertical'"
@@ -3628,7 +3825,7 @@ const recentHasOffroad = computed<boolean>(() =>
                             class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                             :class="
                                 volumeMetric === opt.value
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                     : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                             "
                             @click="volumeMetric = opt.value"
@@ -3729,7 +3926,9 @@ const recentHasOffroad = computed<boolean>(() =>
                                 />
                             </div>
 
-                            <div class="mt-2.5 grid grid-cols-3 gap-2">
+                            <div
+                                class="mt-2.5 grid grid-cols-1 gap-2 sm:grid-cols-3"
+                            >
                                 <div
                                     class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/50"
                                 >
@@ -3805,7 +4004,7 @@ const recentHasOffroad = computed<boolean>(() =>
                             <div
                                 v-for="z in hrZones.zones"
                                 :key="z.zone"
-                                class="grid grid-cols-[6.25rem_1fr_3rem_3.5rem] items-center gap-2.5 text-xs tabular-nums"
+                                class="grid grid-cols-[5.5rem_1fr_2.75rem_3.25rem] items-center gap-2 text-xs tabular-nums sm:grid-cols-[6.25rem_1fr_3rem_3.5rem] sm:gap-2.5"
                             >
                                 <span
                                     class="truncate font-mono text-[11px] text-zinc-600 dark:text-zinc-400"
@@ -3886,9 +4085,9 @@ const recentHasOffroad = computed<boolean>(() =>
                                 {{ item.name }}
                             </p>
                             <p
-                                class="mt-0.5 font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                                class="mt-0.5 font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                             >
-                                {{ formatShortDate(item.date) }} ·
+                                {{ formatEffortDate(item.date) }} ·
                                 {{ item.meta }}
                             </p>
                         </div>
@@ -3933,7 +4132,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         <span
                             class="rounded bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
                         >
-                            {{ aerobicMetricCode }} · 12m
+                            {{ aerobicMetricCode }} · 1y
                         </span>
                     </div>
                     <p
@@ -3967,7 +4166,16 @@ const recentHasOffroad = computed<boolean>(() =>
                             <span
                                 class="font-semibold text-zinc-900 dark:text-zinc-100"
                             >
-                                {{ formatNumber(aerobicDrift.latest_ef, 2) }}
+                                {{
+                                    formatNumber(
+                                        convertEfValue(
+                                            aerobicDrift.latest_ef,
+                                            aerobicDrift.latest_metric ??
+                                                aerobicDrift.primary_metric,
+                                        ),
+                                        2,
+                                    )
+                                }}
                             </span>
                             <span
                                 class="text-[10px] text-zinc-500 dark:text-zinc-400"
@@ -3985,7 +4193,13 @@ const recentHasOffroad = computed<boolean>(() =>
                             >
                                 {{ aerobicDrift.ef_delta_90d >= 0 ? '+' : ''
                                 }}{{
-                                    formatNumber(aerobicDrift.ef_delta_90d, 2)
+                                    formatNumber(
+                                        convertEfValue(
+                                            aerobicDrift.ef_delta_90d,
+                                            aerobicDrift.primary_metric,
+                                        ),
+                                        2,
+                                    )
                                 }}
                                 90d
                             </span>
@@ -4223,7 +4437,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         <div
                             v-for="row in activeEddington.next_targets"
                             :key="row.target"
-                            class="grid grid-cols-[4.5rem_1fr_auto] items-center gap-3 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0"
+                            class="grid grid-cols-1 gap-1.5 py-2 font-mono text-xs tabular-nums first:pt-0 last:pb-0 sm:grid-cols-[4.5rem_1fr_auto] sm:items-center sm:gap-3"
                         >
                             <span
                                 class="font-semibold text-zinc-900 dark:text-zinc-100"
@@ -4251,11 +4465,11 @@ const recentHasOffroad = computed<boolean>(() =>
                             </div>
 
                             <span
-                                class="text-right text-[11px] font-medium text-zinc-700 dark:text-zinc-300"
+                                class="text-left text-[11px] font-medium text-zinc-700 sm:text-right dark:text-zinc-300"
                             >
                                 +{{ row.remaining_days }}
                                 {{ row.remaining_days === 1 ? 'day' : 'days' }}
-                                <span class="text-zinc-400 dark:text-zinc-500">
+                                <span class="text-zinc-500 dark:text-zinc-400">
                                     ≥ {{ row.target }}
                                     {{ activeEddington.unit }}
                                 </span>
@@ -4295,7 +4509,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         </h2>
                     </div>
 
-                    <div class="ml-auto flex flex-wrap items-center gap-2">
+                    <div class="flex flex-wrap items-center gap-2 sm:ml-auto">
                         <select
                             v-if="
                                 effortsTab === 'annual' &&
@@ -4329,7 +4543,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     effortsTab === 'allTime'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="effortsTab = 'allTime'"
@@ -4343,7 +4557,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                 class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     effortsTab === 'annual'
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="effortsTab = 'annual'"
@@ -4415,10 +4629,12 @@ const recentHasOffroad = computed<boolean>(() =>
                                     Timeline
                                 </h3>
                                 <span
-                                    class="font-mono text-[10px]"
-                                    :style="{ color: accentHex }"
+                                    class="font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                 >
-                                    Faster ↑
+                                    <span :style="{ color: accentHex }"
+                                        >Faster ↑</span
+                                    >
+                                    · Click any point to inspect
                                 </span>
                             </div>
 
@@ -4428,6 +4644,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                 "
                                 :option="prProgressionOption"
                                 :height="220"
+                                @point-click="onPrProgressionClick"
                             />
                             <div
                                 v-else
@@ -4934,12 +5151,17 @@ const recentHasOffroad = computed<boolean>(() =>
 
                         <div
                             v-if="summary.latest_vo2_max !== null"
-                            class="flex items-baseline gap-2"
+                            class="flex items-baseline gap-1.5"
                         >
                             <span
                                 class="font-mono text-lg font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
                             >
                                 {{ formatNumber(summary.latest_vo2_max, 1) }}
+                            </span>
+                            <span
+                                class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                            >
+                                mL/kg/min
                             </span>
                             <span
                                 v-if="vo2Delta !== null && vo2Delta !== 0"
@@ -4993,9 +5215,9 @@ const recentHasOffroad = computed<boolean>(() =>
                             </h2>
                         </div>
                         <span
-                            class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                            class="font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                         >
-                            Faster ↑
+                            Faster ↑ · Click any point to inspect
                         </span>
                     </div>
 
@@ -5025,9 +5247,9 @@ const recentHasOffroad = computed<boolean>(() =>
                             Cadence &amp; Stride Length
                         </h2>
                         <span
-                            class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                            class="font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                         >
-                            spm · {{ units.strideUnit.value }}
+                            {{ cadenceUnit }} · {{ units.strideUnit.value }}
                         </span>
                     </div>
 
@@ -5089,7 +5311,9 @@ const recentHasOffroad = computed<boolean>(() =>
                     />
                 </div>
 
-                <div class="mt-3 grid grid-cols-3 gap-3 tabular-nums">
+                <div
+                    class="mt-3 grid grid-cols-1 gap-3 tabular-nums sm:grid-cols-3"
+                >
                     <div
                         class="rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/70 px-3 py-2 dark:border-zinc-800/80 dark:bg-zinc-900/40"
                     >
@@ -5361,11 +5585,11 @@ const recentHasOffroad = computed<boolean>(() =>
                 >
                     <div class="flex items-center gap-2">
                         <Zap class="size-3.5 text-sky-500" />
-                        <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        <h2
+                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Mean Maximal Power Curve
-                        </span>
+                        </h2>
                     </div>
 
                     <div
@@ -5376,7 +5600,7 @@ const recentHasOffroad = computed<boolean>(() =>
                             class="cursor-pointer rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                             :class="
                                 powerUnit === 'watts'
-                                    ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                     : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                             "
                             @click="powerUnit = 'watts'"
@@ -5394,7 +5618,7 @@ const recentHasOffroad = computed<boolean>(() =>
                             class="rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40"
                             :class="
                                 powerUnit === 'wkg' && canShowWkg
-                                    ? 'cursor-pointer bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                    ? 'cursor-pointer bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                     : 'cursor-pointer text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                             "
                             @click="canShowWkg && (powerUnit = 'wkg')"
@@ -5451,11 +5675,11 @@ const recentHasOffroad = computed<boolean>(() =>
                 <div
                     class="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
                 >
-                    <span
-                        class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                    <h2
+                        class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
                         180-Day Fitness, Fatigue &amp; Form (CTL / ATL / TSB)
-                    </span>
+                    </h2>
                     <div
                         class="flex flex-wrap items-center gap-3 font-mono text-xs tabular-nums"
                     >
@@ -5481,15 +5705,20 @@ const recentHasOffroad = computed<boolean>(() =>
                     class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
                     <div class="mb-4 flex items-center justify-between gap-2">
-                        <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        <h2
+                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Weekly TSS &amp; Distance
-                        </span>
+                        </h2>
                         <span
-                            class="font-mono text-[11px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                            class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"
                         >
-                            {{ modules.power.weeklyTss.length }} weeks
+                            {{ modules.power.weeklyTss.length }}
+                            {{
+                                modules.power.weeklyTss.length === 1
+                                    ? 'week'
+                                    : 'weeks'
+                            }}
                         </span>
                     </div>
                     <BaseChart
@@ -5509,11 +5738,11 @@ const recentHasOffroad = computed<boolean>(() =>
                     class="rounded-xl border border-zinc-200/90 bg-white p-5 dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
                     <div class="mb-4 flex items-center justify-between gap-2">
-                        <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        <h2
+                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             FTP &amp; 20-Min Power History
-                        </span>
+                        </h2>
                         <span
                             v-if="modules.power.ftp !== null"
                             class="font-mono text-[11px] text-sky-600 tabular-nums dark:text-sky-400"
@@ -5551,13 +5780,13 @@ const recentHasOffroad = computed<boolean>(() =>
                     "
                 >
                     <div class="mb-4 flex items-center justify-between">
-                        <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        <h2
+                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Power Zones Distribution
-                        </span>
+                        </h2>
                         <span
-                            class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
+                            class="font-mono text-[10px] text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Z1 – Z7
                         </span>
@@ -5621,11 +5850,11 @@ const recentHasOffroad = computed<boolean>(() =>
                     >
                         <div class="flex items-center gap-2">
                             <Trophy class="size-3.5 text-sky-500" />
-                            <span
-                                class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            <h2
+                                class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Cycling Best Efforts
-                            </span>
+                            </h2>
                         </div>
                         <span
                             class="font-mono text-[10px] text-zinc-400 uppercase dark:text-zinc-500"
@@ -5710,6 +5939,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                                     @keydown.enter.prevent="
                                                         saveEffortOverride(
                                                             effort.best.id,
+                                                            true,
                                                         )
                                                     "
                                                     @keydown.escape.prevent="
@@ -5723,10 +5953,11 @@ const recentHasOffroad = computed<boolean>(() =>
                                                         effort.best.id
                                                     "
                                                     title="Save time"
-                                                    class="inline-flex size-6 cursor-pointer items-center justify-center rounded bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-50"
+                                                    class="inline-flex size-6 cursor-pointer items-center justify-center rounded bg-sky-500 text-white transition-colors hover:bg-sky-600 disabled:opacity-50"
                                                     @click="
                                                         saveEffortOverride(
                                                             effort.best.id,
+                                                            true,
                                                         )
                                                     "
                                                 >
@@ -5734,8 +5965,24 @@ const recentHasOffroad = computed<boolean>(() =>
                                                 </button>
                                                 <button
                                                     type="button"
+                                                    :disabled="
+                                                        busyEffortId ===
+                                                        effort.best.id
+                                                    "
+                                                    title="Reset to measured time"
+                                                    class="inline-flex size-6 cursor-pointer items-center justify-center rounded border border-amber-200/90 bg-amber-50/70 text-amber-800 transition-colors hover:border-amber-300 disabled:opacity-50 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:border-amber-500/50"
+                                                    @click="
+                                                        resetEffortOverride(
+                                                            effort.best.id,
+                                                        )
+                                                    "
+                                                >
+                                                    <RotateCcw class="size-3" />
+                                                </button>
+                                                <button
+                                                    type="button"
                                                     title="Cancel"
-                                                    class="inline-flex size-6 cursor-pointer items-center justify-center rounded border border-zinc-200 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
+                                                    class="inline-flex size-6 cursor-pointer items-center justify-center rounded border border-zinc-200 bg-white text-zinc-600 transition-colors hover:border-zinc-300 hover:text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:border-zinc-600 dark:hover:text-zinc-100"
                                                     @click="cancelEditEffort"
                                                 >
                                                     <X class="size-3.5" />
@@ -5780,23 +6027,23 @@ const recentHasOffroad = computed<boolean>(() =>
                                                     effort.best.activity_id,
                                                 )
                                             "
-                                            class="block truncate text-xs font-medium text-zinc-800 hover:text-sky-600 dark:text-zinc-200 dark:hover:text-sky-400"
+                                            class="block truncate text-xs font-medium text-zinc-800 transition-colors hover:text-sky-600 dark:text-zinc-200 dark:hover:text-sky-400"
                                         >
                                             {{ effort.best.activity_name }}
                                         </Link>
                                         <div
                                             v-if="effort.best"
-                                            class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                                            class="font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
                                         >
                                             {{
-                                                formatShortDate(
+                                                formatEffortDate(
                                                     effort.best.achieved_at,
                                                 )
                                             }}
                                         </div>
                                         <span
                                             v-else
-                                            class="font-mono text-xs text-zinc-400 dark:text-zinc-500"
+                                            class="font-mono text-xs text-zinc-500 dark:text-zinc-400"
                                         >
                                             No benchmark yet
                                         </span>
@@ -5819,7 +6066,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                                     busyEffortId ===
                                                     effort.best.id
                                                 "
-                                                class="inline-flex cursor-pointer items-center gap-1 rounded border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] text-zinc-700 hover:border-zinc-300 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+                                                class="inline-flex cursor-pointer items-center gap-1 rounded border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] text-zinc-700 transition-colors hover:border-zinc-300 hover:text-zinc-950 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:border-zinc-700 dark:hover:text-zinc-100"
                                                 @click="
                                                     startEditEffort(effort.best)
                                                 "
@@ -5828,16 +6075,60 @@ const recentHasOffroad = computed<boolean>(() =>
                                                 Edit
                                             </button>
                                             <button
+                                                v-if="
+                                                    (effort.best
+                                                        .override_seconds !==
+                                                        null &&
+                                                        effort.best
+                                                            .override_seconds !==
+                                                            undefined) ||
+                                                    overriddenCyclingIds.includes(
+                                                        effort.best.id,
+                                                    )
+                                                "
+                                                type="button"
+                                                :disabled="
+                                                    busyEffortId ===
+                                                    effort.best.id
+                                                "
+                                                title="Reset to measured time"
+                                                class="inline-flex cursor-pointer items-center gap-1 rounded border border-amber-200/90 bg-amber-50/70 px-2 py-1 font-mono text-[10px] text-amber-800 transition-colors hover:border-amber-300 disabled:opacity-50 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:border-amber-500/50"
+                                                @click="
+                                                    resetEffortOverride(
+                                                        effort.best.id,
+                                                    )
+                                                "
+                                            >
+                                                <RotateCcw class="size-2.5" />
+                                                Reset
+                                            </button>
+                                            <button
                                                 type="button"
                                                 :disabled="
                                                     busyEffortId ===
                                                     effort.best.id
                                                 "
                                                 title="Exclude this effort"
-                                                class="inline-flex cursor-pointer items-center gap-1 rounded border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] text-zinc-500 hover:border-rose-300 hover:text-rose-600 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-rose-500/40"
+                                                class="inline-flex cursor-pointer items-center gap-1 rounded border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] text-zinc-500 transition-colors hover:border-rose-300 hover:text-rose-600 disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-400 dark:hover:border-rose-500/40 dark:hover:text-rose-400"
                                                 @click="
                                                     excludeEffort(
                                                         effort.best.id,
+                                                        {
+                                                            activity_id:
+                                                                effort.best
+                                                                    .activity_id,
+                                                            activity_name:
+                                                                effort.best
+                                                                    .activity_name,
+                                                            achieved_at:
+                                                                effort.best
+                                                                    .achieved_at,
+                                                            effective_seconds:
+                                                                effort.best
+                                                                    .effective_seconds,
+                                                            distanceLabel:
+                                                                effort.label,
+                                                        },
                                                     )
                                                 "
                                             >
@@ -5847,7 +6138,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                         </div>
                                         <span
                                             v-else
-                                            class="font-mono text-xs text-zinc-400 dark:text-zinc-600"
+                                            class="font-mono text-xs text-zinc-500 dark:text-zinc-400"
                                         >
                                             —
                                         </span>
@@ -5855,6 +6146,76 @@ const recentHasOffroad = computed<boolean>(() =>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- Excluded Cycling Efforts -->
+                    <div
+                        v-if="excludedCyclingEfforts.length > 0"
+                        class="border-t border-zinc-200/80 bg-[#f7f7f5]/60 p-3.5 dark:border-zinc-800/80 dark:bg-zinc-900/30"
+                    >
+                        <p
+                            class="mb-2 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
+                        >
+                            Excluded Efforts ({{
+                                excludedCyclingEfforts.length
+                            }})
+                        </p>
+                        <div class="space-y-1.5">
+                            <div
+                                v-for="excludedEffort in excludedCyclingEfforts"
+                                :key="excludedEffort.id"
+                                class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200/70 bg-white px-3 py-2 text-xs dark:border-zinc-800/70 dark:bg-[#141417]"
+                            >
+                                <div
+                                    class="flex flex-wrap items-center gap-2.5 tabular-nums"
+                                >
+                                    <span
+                                        class="rounded border border-zinc-200/80 bg-[#f7f7f5] px-1.5 py-0.5 font-mono text-[10px] font-semibold text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+                                    >
+                                        {{ excludedEffort.distanceLabel }}
+                                    </span>
+                                    <span
+                                        class="font-mono font-medium text-zinc-500 line-through dark:text-zinc-400"
+                                    >
+                                        {{
+                                            formatDurationClock(
+                                                excludedEffort.effective_seconds,
+                                            )
+                                        }}
+                                    </span>
+                                    <span
+                                        class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        {{
+                                            formatEffortDate(
+                                                excludedEffort.achieved_at,
+                                            )
+                                        }}
+                                    </span>
+                                    <Link
+                                        :href="
+                                            showActivity.url(
+                                                excludedEffort.activity_id,
+                                            )
+                                        "
+                                        class="max-w-48 truncate text-zinc-600 transition-colors hover:text-zinc-950 dark:text-zinc-300 dark:hover:text-white"
+                                    >
+                                        {{ excludedEffort.activity_name }}
+                                    </Link>
+                                </div>
+                                <button
+                                    type="button"
+                                    :disabled="
+                                        busyEffortId === excludedEffort.id
+                                    "
+                                    class="inline-flex cursor-pointer items-center gap-1 rounded border border-zinc-200/90 bg-white px-2 py-1 font-mono text-[10px] font-medium text-zinc-700 transition-colors hover:border-emerald-300 hover:text-emerald-700 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-200 dark:hover:border-emerald-500/40 dark:hover:text-emerald-400"
+                                    @click="restoreEffort(excludedEffort.id)"
+                                >
+                                    <Undo2 class="size-2.5" />
+                                    Restore
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -5972,11 +6333,11 @@ const recentHasOffroad = computed<boolean>(() =>
                     <div class="mb-4 flex items-center justify-between gap-2">
                         <div class="flex items-center gap-1.5">
                             <MapPin class="size-3.5 text-emerald-500" />
-                            <span
-                                class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            <h2
+                                class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Trail &amp; Route Regions
-                            </span>
+                            </h2>
                         </div>
                         <span
                             class="font-mono text-[11px] text-zinc-400 tabular-nums dark:text-zinc-500"
@@ -6075,11 +6436,11 @@ const recentHasOffroad = computed<boolean>(() =>
                     <div class="mb-4 flex items-center justify-between">
                         <div class="flex items-center gap-1.5">
                             <Mountain class="size-3.5 text-emerald-500" />
-                            <span
-                                class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            <h2
+                                class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Stamina &amp; Feel / RPE
-                            </span>
+                            </h2>
                         </div>
                         <span
                             class="font-mono text-[10px] text-zinc-400 tabular-nums dark:text-zinc-500"
@@ -6289,15 +6650,21 @@ const recentHasOffroad = computed<boolean>(() =>
                     <div
                         class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between"
                     >
-                        <span
-                            class="font-mono text-[11px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                        <h2
+                            class="font-mono text-[11px] font-medium tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             Off-Road Dynamics · Grit &amp; Flow Trend
-                        </span>
+                        </h2>
                         <span
-                            class="font-mono text-[11px] text-zinc-400 tabular-nums dark:text-zinc-500"
+                            class="font-mono text-[11px] text-zinc-500 tabular-nums dark:text-zinc-400"
                         >
-                            {{ modules.offroad.dynamicsTrend.length }} sessions
+                            {{ modules.offroad.dynamicsTrend.length }}
+                            {{
+                                modules.offroad.dynamicsTrend.length === 1
+                                    ? 'session'
+                                    : 'sessions'
+                            }}
+                            · Click any point to inspect
                         </span>
                     </div>
 
@@ -6333,7 +6700,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                 class="inline-flex cursor-pointer items-center gap-1 rounded-md px-2.5 py-1 font-mono text-[11px] font-medium transition-colors"
                                 :class="
                                     offroadTab === tab.key
-                                        ? 'bg-white text-zinc-950 dark:bg-zinc-800 dark:text-zinc-100'
+                                        ? 'bg-white text-zinc-950 shadow-xs dark:bg-zinc-800 dark:text-zinc-100'
                                         : 'text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
                                 "
                                 @click="offroadTab = tab.key"
@@ -6363,7 +6730,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         >
                             <div class="flex min-w-0 items-start gap-2.5">
                                 <span
-                                    class="mt-0.5 font-mono text-[11px] font-semibold text-zinc-400 tabular-nums"
+                                    class="mt-0.5 font-mono text-[11px] font-semibold text-zinc-500 tabular-nums dark:text-zinc-400"
                                 >
                                     {{ idx + 1 }}
                                 </span>
@@ -6376,7 +6743,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                     <p
                                         class="mt-0.5 truncate font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                                     >
-                                        {{ formatShortDate(session.date) }}
+                                        {{ formatEffortDate(session.date) }}
                                         ·
                                         {{
                                             units.formatElevation(
@@ -6396,7 +6763,7 @@ const recentHasOffroad = computed<boolean>(() =>
                             <span
                                 class="shrink-0 rounded-md bg-emerald-500/12 px-2 py-0.5 font-mono text-xs font-semibold text-emerald-700 tabular-nums dark:text-emerald-300"
                             >
-                                {{ formatNumber(session.grit, 1) }}
+                                {{ formatNumber(session.grit, 1) }} Grit
                             </span>
                         </Link>
                     </div>
@@ -6415,7 +6782,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         >
                             <div class="flex min-w-0 items-start gap-2.5">
                                 <span
-                                    class="mt-0.5 font-mono text-[11px] font-semibold text-zinc-400 tabular-nums"
+                                    class="mt-0.5 font-mono text-[11px] font-semibold text-zinc-500 tabular-nums dark:text-zinc-400"
                                 >
                                     {{ idx + 1 }}
                                 </span>
@@ -6428,7 +6795,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                     <p
                                         class="mt-0.5 truncate font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                                     >
-                                        {{ formatShortDate(session.date) }}
+                                        {{ formatEffortDate(session.date) }}
                                         ·
                                         {{
                                             units.formatElevation(
@@ -6448,7 +6815,7 @@ const recentHasOffroad = computed<boolean>(() =>
                             <span
                                 class="shrink-0 rounded-md bg-sky-500/12 px-2 py-0.5 font-mono text-xs font-semibold text-sky-700 tabular-nums dark:text-sky-300"
                             >
-                                {{ formatNumber(session.avg_flow, 1) }}
+                                {{ formatNumber(session.avg_flow, 1) }} Flow
                             </span>
                         </Link>
                     </div>
@@ -6464,7 +6831,7 @@ const recentHasOffroad = computed<boolean>(() =>
                         >
                             <div class="flex min-w-0 items-start gap-2.5">
                                 <span
-                                    class="mt-0.5 font-mono text-[11px] font-semibold text-zinc-400 tabular-nums"
+                                    class="mt-0.5 font-mono text-[11px] font-semibold text-zinc-500 tabular-nums dark:text-zinc-400"
                                 >
                                     {{ idx + 1 }}
                                 </span>
@@ -6477,7 +6844,7 @@ const recentHasOffroad = computed<boolean>(() =>
                                     <p
                                         class="mt-0.5 truncate font-mono text-[10px] text-zinc-500 tabular-nums dark:text-zinc-400"
                                     >
-                                        {{ formatShortDate(session.date) }}
+                                        {{ formatEffortDate(session.date) }}
                                         ·
                                         {{
                                             units.formatElevation(
@@ -6495,6 +6862,9 @@ const recentHasOffroad = computed<boolean>(() =>
                                 class="shrink-0 rounded-md bg-amber-500/12 px-2 py-0.5 font-mono text-xs font-semibold text-amber-700 tabular-nums dark:text-amber-300"
                             >
                                 {{ formatNumber(session.jump_count, 0) }}
+                                {{
+                                    session.jump_count === 1 ? 'jump' : 'jumps'
+                                }}
                             </span>
                         </Link>
                     </div>
@@ -6514,7 +6884,7 @@ const recentHasOffroad = computed<boolean>(() =>
                 <h2
                     class="text-base font-semibold tracking-tight text-zinc-900 dark:text-zinc-100"
                 >
-                    Recent {{ sport.label }}
+                    Recent Activities
                 </h2>
 
                 <Link
@@ -6598,7 +6968,9 @@ const recentHasOffroad = computed<boolean>(() =>
                                 <div
                                     class="font-mono text-xs text-zinc-800 dark:text-zinc-200"
                                 >
-                                    {{ formatShortDate(item.started_at_local) }}
+                                    {{
+                                        formatRecentDate(item.started_at_local)
+                                    }}
                                 </div>
                                 <div
                                     class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"

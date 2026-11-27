@@ -168,8 +168,59 @@ class FamilyOverviewService
                 $today,
             ),
             'goals' => $this->collectFamilyGoals($normalizedFamily, $enabledDisciplines),
+            'latestActivity' => $this->buildLatestActivity($normalizedFamily, $today),
             'reclassifyInbox' => $reclassifyInbox,
             'reclassifyInboxTotal' => $reclassifyInboxTotal,
+        ];
+    }
+
+    /**
+     * @return ?array{
+     *     id: int,
+     *     name: string,
+     *     sport_category: string,
+     *     effective_discipline: ?string,
+     *     started_at_local: string,
+     *     is_today: bool,
+     *     distance_meters: float,
+     *     duration_seconds: float,
+     *     avg_speed: ?float,
+     *     avg_hr: ?int
+     * }
+     */
+    private function buildLatestActivity(string $familyKey, CarbonImmutable $today): ?array
+    {
+        $latest = $this->sports->applyScope(Activity::query(), $familyKey)
+            ->select([
+                'id',
+                'name',
+                'sport_category',
+                'effective_discipline',
+                'started_at_local',
+                'distance_meters',
+                'duration_seconds',
+                'avg_speed',
+                'avg_hr',
+            ])
+            ->orderByDesc('started_at_local')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($latest === null) {
+            return null;
+        }
+
+        return [
+            'id' => $latest->id,
+            'name' => $latest->name,
+            'sport_category' => $latest->sport_category,
+            'effective_discipline' => $latest->effective_discipline,
+            'started_at_local' => $latest->started_at_local->toIso8601String(),
+            'is_today' => $latest->started_at_local->format('Y-m-d') === $today->format('Y-m-d'),
+            'distance_meters' => (float) ($latest->distance_meters ?? 0.0),
+            'duration_seconds' => (float) ($latest->duration_seconds ?? 0.0),
+            'avg_speed' => $latest->avg_speed !== null ? (float) $latest->avg_speed : null,
+            'avg_hr' => $latest->avg_hr !== null ? (int) round((float) $latest->avg_hr) : null,
         ];
     }
 
