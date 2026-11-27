@@ -11,18 +11,13 @@ use Illuminate\Database\Eloquent\Builder;
  *     completed_days: int,
  *     remaining_days: int
  * }
- * @phpstan-type EddingtonDistributionBucket array{
- *     threshold: int,
- *     days: int
- * }
  * @phpstan-type EddingtonUnitSummary array{
  *     unit: 'km'|'mi',
  *     number: int,
  *     next_target: int,
  *     completed_for_next: int,
  *     days_needed_for_next: int,
- *     next_targets: list<EddingtonTarget>,
- *     distribution: list<EddingtonDistributionBucket>
+ *     next_targets: list<EddingtonTarget>
  * }
  * @phpstan-type EddingtonPayload array{
  *     active_days: int,
@@ -43,7 +38,8 @@ class EddingtonService
 
     /**
      * Compute metric (km) and imperial (mi) Eddington numbers from a scoped Activity query,
-     * aggregating multiple activities performed on the same local calendar day.
+     * aggregating multiple activities performed on the same local calendar day. An activity that
+     * crosses midnight is credited in full to the local day it started on.
      *
      * @param  Builder<Activity>  $baseQuery
      * @return EddingtonPayload
@@ -105,7 +101,7 @@ class EddingtonService
     }
 
     /**
-     * Compute the Eddington number, upcoming targets, and threshold distribution for one unit system.
+     * Compute the Eddington number and upcoming targets for one unit system.
      *
      * @param  list<float>  $dailyMeters
      * @param  'km'|'mi'  $unit
@@ -149,17 +145,6 @@ class EddingtonService
 
         $nextTarget = $nextTargets[0];
 
-        $distribution = [];
-        $startThreshold = max(1, $number - 3);
-        $endThreshold = max($startThreshold + 4, $number + 4);
-
-        for ($threshold = $startThreshold; $threshold <= $endThreshold; $threshold++) {
-            $distribution[] = [
-                'threshold' => $threshold,
-                'days' => $this->countDaysAtLeast($distances, $threshold),
-            ];
-        }
-
         return [
             'unit' => $unit,
             'number' => $number,
@@ -167,7 +152,6 @@ class EddingtonService
             'completed_for_next' => $nextTarget['completed_days'],
             'days_needed_for_next' => $nextTarget['remaining_days'],
             'next_targets' => $nextTargets,
-            'distribution' => $distribution,
         ];
     }
 

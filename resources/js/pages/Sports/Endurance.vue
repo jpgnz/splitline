@@ -318,11 +318,6 @@ interface EddingtonTarget {
     remaining_days: number;
 }
 
-interface EddingtonDistributionBucket {
-    threshold: number;
-    days: number;
-}
-
 interface EddingtonUnitSummary {
     unit: 'km' | 'mi';
     number: number;
@@ -330,7 +325,6 @@ interface EddingtonUnitSummary {
     completed_for_next: number;
     days_needed_for_next: number;
     next_targets: EddingtonTarget[];
-    distribution: EddingtonDistributionBucket[];
 }
 
 interface EddingtonPayload {
@@ -394,7 +388,7 @@ interface SportsEnduranceProps {
     };
     weeklyVolume: WeeklyVolumePoint[];
     annualSummary: AnnualActivitySummaryPayload | null;
-    eddington?: EddingtonPayload | null;
+    eddington: EddingtonPayload | null;
     hrZones: {
         range: string;
         total_seconds: number;

@@ -9,8 +9,6 @@ use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
 
 /**
- * @phpstan-import-type ExplorerSummary from ExplorerTileService
- *
  * @phpstan-type HeatmapTrack array{
  *     activity_id: int,
  *     name: string,
@@ -50,7 +48,6 @@ use Illuminate\Database\Eloquent\Builder;
  *     },
  *     available_sports: list<array{key: string, label: string, short_label: string, accent_hex: string}>,
  *     summary: HeatmapSummary,
- *     explorer: ExplorerSummary,
  *     tracks: list<HeatmapTrack>
  * }
  */
@@ -67,7 +64,6 @@ class HeatmapService
     public function __construct(
         private readonly ?SportRegistry $sports = null,
         private readonly ?DateWindowResolver $dateWindows = null,
-        private readonly ?ExplorerTileService $explorerTiles = null,
     ) {}
 
     private function sportRegistry(): SportRegistry
@@ -78,11 +74,6 @@ class HeatmapService
     private function dateWindowResolver(): DateWindowResolver
     {
         return $this->dateWindows ?? app(DateWindowResolver::class);
-    }
-
-    private function explorerTileService(): ExplorerTileService
-    {
-        return $this->explorerTiles ?? app(ExplorerTileService::class);
     }
 
     /**
@@ -149,9 +140,6 @@ class HeatmapService
 
         $registry = $this->sportRegistry();
         $catalog = $registry->catalog();
-        $explorerService = $this->explorerTileService();
-        /** @var array<int, int> $tileVisits */
-        $tileVisits = [];
         $tracks = [];
         $totalDistanceMeters = 0.0;
         $totalElevationGain = 0.0;
@@ -161,13 +149,11 @@ class HeatmapService
                 ? json_decode($row->polyline, true)
                 : $row->polyline;
 
-            $polyline = $this->normalizePolyline($rawPolyline);
+            $polyline = self::normalizePolyline($rawPolyline);
 
             if (count($polyline) < 2) {
                 continue;
             }
-
-            $explorerService->recordPolyline($polyline, $tileVisits);
 
             $distance = is_numeric($row->distance_meters) ? (float) $row->distance_meters : 0.0;
             $duration = is_numeric($row->duration_seconds) ? (float) $row->duration_seconds : 0.0;
@@ -227,7 +213,6 @@ class HeatmapService
                 'total_elevation_gain' => round($totalElevationGain, 1),
                 'unsynced_gnss_count' => $unsyncedGnssCount,
             ],
-            'explorer' => $explorerService->summarizeTileVisits($tileVisits),
             'tracks' => $tracks,
         ];
     }
@@ -389,9 +374,11 @@ class HeatmapService
     }
 
     /**
+     * Normalize a stored polyline into valid, finite [lat, lng] pairs rounded to 1e-5 degrees.
+     *
      * @return list<array{0: float, 1: float}>
      */
-    private function normalizePolyline(mixed $rawPolyline): array
+    public static function normalizePolyline(mixed $rawPolyline): array
     {
         if (! is_array($rawPolyline)) {
             return [];

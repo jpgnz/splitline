@@ -3,8 +3,8 @@
 use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Services\Heatmap\ExplorerTileService;
-use App\Services\Heatmap\HeatmapService;
 use Carbon\CarbonImmutable;
+use Illuminate\Support\Facades\DB;
 
 beforeEach(function () {
     config(['app.display_timezone' => 'Pacific/Auckland']);
@@ -12,18 +12,63 @@ beforeEach(function () {
 });
 
 /**
- * Helper to resolve the geographic center (lat, lng) of an OSM Slippy Tile.
+ * Inverse Web Mercator: resolve the (lat, lng) of continuous z14 tile coordinates.
  *
  * @return array{0: float, 1: float}
  */
-function tileCenter(ExplorerTileService $service, int $x, int $y, int $zoom = 14): array
+function explorerTilePoint(float $fx, float $fy, int $zoom = 14): array
 {
-    $bounds = $service->tileBounds($x, $y, $zoom);
+    $n = (float) (1 << $zoom);
 
     return [
-        ($bounds['north'] + $bounds['south']) / 2.0,
-        ($bounds['west'] + $bounds['east']) / 2.0,
+        rad2deg(atan(sinh(M_PI * (1.0 - (2.0 * $fy) / $n)))),
+        ($fx / $n) * 360.0 - 180.0,
     ];
+}
+
+/**
+ * @return array{0: float, 1: float}
+ */
+function explorerTileCenter(int $x, int $y): array
+{
+    return explorerTilePoint($x + 0.5, $y + 0.5);
+}
+
+/**
+ * @param  array{tiles: list<array{0: int, 1: int, 2: int, 3: int}>}  $summary
+ * @return array<string, int>
+ */
+function explorerVisitsByTile(array $summary): array
+{
+    $visits = [];
+
+    foreach ($summary['tiles'] as [$x, $y, $count]) {
+        $visits["{$x}:{$y}"] = $count;
+    }
+
+    ksort($visits);
+
+    return $visits;
+}
+
+/**
+ * @param  list<array{0: float, 1: float}>  $polyline
+ */
+function createOutdoorTrack(array $polyline, array $attributes = []): Activity
+{
+    $activity = Activity::factory()->create([
+        'sport_category' => 'running',
+        'is_indoor' => false,
+        'streams_synced_at' => CarbonImmutable::parse('2026-11-20 08:00:00'),
+        ...$attributes,
+    ]);
+
+    ActivityStream::factory()->create([
+        'activity_id' => $activity->id,
+        'polyline' => $polyline,
+    ]);
+
+    return $activity;
 }
 
 it('projects coordinates to standard z14 OSM slippy tiles and computes bounding boxes', function () {
@@ -41,6 +86,15 @@ it('projects coordinates to standard z14 OSM slippy tiles and computes bounding 
         ->and($bounds['east'])->toBeGreaterThan(174.7633);
 });
 
+it('clamps polar latitudes and the antimeridian to the edge tiles of the Mercator grid', function () {
+    $service = app(ExplorerTileService::class);
+
+    expect($service->latLngToTile(90.0, 180.0))->toBe([16383, 0])
+        ->and($service->latLngToTile(89.9, -180.0))->toBe([0, 0])
+        ->and($service->latLngToTile(-90.0, 0.0))->toBe([8192, 16383])
+        ->and($service->latLngToTile(-85.2, 179.9999))->toBe([16383, 16383]);
+});
+
 it('returns an empty explorer summary when no polylines are recorded', function () {
     $summary = app(ExplorerTileService::class)->fromPolylines([]);
 
@@ -54,39 +108,57 @@ it('returns an empty explorer summary when no polylines are recorded', function 
         ],
         'max_cluster' => [
             'size' => 0,
-            'tiles' => [],
         ],
         'tiles' => [],
     ]);
 });
 
-it('interpolates intermediate tiles across tile boundaries and counts distinct track visits', function () {
-    $service = app(ExplorerTileService::class);
-
-    $start = tileCenter($service, 8200, 8200);
-    $end = tileCenter($service, 8204, 8200);
-
-    $summary = $service->fromPolylines([
-        [$start, $end],
-        [$start, tileCenter($service, 8201, 8200)],
+it('fills skipped tiles between nearby samples and counts each track once per tile', function () {
+    // ~837 m wide tiles near 70°N, so a 2-tile hop stays under the 2 km gap limit.
+    $summary = app(ExplorerTileService::class)->fromPolylines([
+        [explorerTilePoint(8700.5, 3667.5), explorerTilePoint(8702.5, 3667.5)],
+        [explorerTilePoint(8700.5, 3667.5), explorerTilePoint(8701.5, 3667.5), explorerTilePoint(8700.6, 3667.5)],
     ]);
 
-    $visitsByCoord = [];
+    expect($summary['total_tiles'])->toBe(3)
+        ->and(explorerVisitsByTile($summary))->toBe([
+            '8700:3667' => 2,
+            '8701:3667' => 2,
+            '8702:3667' => 1,
+        ]);
+});
 
-    foreach ($summary['tiles'] as [$x, $y, $visits]) {
-        $visitsByCoord["{$x}:{$y}"] = $visits;
-    }
+it('credits a tile whose corner is clipped by a sparse diagonal segment', function () {
+    // The segment enters tile (8701, 3667) for only ~0.1 tile before crossing into (8701, 3666).
+    $summary = app(ExplorerTileService::class)->fromPolylines([
+        [explorerTilePoint(8700.5, 3667.6), explorerTilePoint(8701.6, 3666.5)],
+    ]);
 
-    expect($summary['total_tiles'])->toBe(5)
-        ->and($visitsByCoord)->toBe([
-            '8200:8200' => 2,
-            '8201:8200' => 2,
-            '8202:8200' => 1,
-            '8203:8200' => 1,
-            '8204:8200' => 1,
-        ])
-        ->and($summary['max_square']['size'])->toBe(1)
-        ->and($summary['max_cluster']['size'])->toBe(0);
+    expect(explorerVisitsByTile($summary))->toBe([
+        '8700:3667' => 1,
+        '8701:3666' => 1,
+        '8701:3667' => 1,
+    ]);
+});
+
+it('does not credit tiles across GPS gaps longer than the interpolation limit', function () {
+    // 5 tiles at ~837 m each is ~4.2 km between consecutive samples.
+    $summary = app(ExplorerTileService::class)->fromPolylines([
+        [explorerTilePoint(8700.5, 3667.5), explorerTilePoint(8705.5, 3667.5)],
+    ]);
+
+    expect(explorerVisitsByTile($summary))->toBe([
+        '8700:3667' => 1,
+        '8705:3667' => 1,
+    ]);
+});
+
+it('does not fill the whole grid when a track crosses the antimeridian', function () {
+    $summary = app(ExplorerTileService::class)->fromPolylines([
+        [[-16.5, 179.999], [-16.5, -179.999]],
+    ]);
+
+    expect($summary['total_tiles'])->toBe(2);
 });
 
 it('detects 2x2 and 3x3 max squares accurately', function () {
@@ -96,7 +168,7 @@ it('detects 2x2 and 3x3 max squares accurately', function () {
 
     for ($x = 500; $x <= 501; $x++) {
         for ($y = 600; $y <= 601; $y++) {
-            $twoByTwoPoints[] = tileCenter($service, $x, $y);
+            $twoByTwoPoints[] = explorerTileCenter($x, $y);
         }
     }
 
@@ -114,7 +186,7 @@ it('detects 2x2 and 3x3 max squares accurately', function () {
 
     for ($x = 700; $x <= 702; $x++) {
         for ($y = 800; $y <= 802; $y++) {
-            $threeByThreePoints[] = tileCenter($service, $x, $y);
+            $threeByThreePoints[] = explorerTileCenter($x, $y);
         }
     }
 
@@ -123,99 +195,153 @@ it('detects 2x2 and 3x3 max squares accurately', function () {
         $threeByThreePoints,
     ]);
 
+    $clusterTiles = array_values(array_filter(
+        $threeByThreeSummary['tiles'],
+        fn (array $tile): bool => $tile[3] === 1,
+    ));
+
     expect($threeByThreeSummary['total_tiles'])->toBe(13)
         ->and($threeByThreeSummary['max_square'])->toBe([
             'size' => 3,
             'min_x' => 700,
             'min_y' => 800,
         ])
-        ->and($threeByThreeSummary['max_cluster'])->toBe([
-            'size' => 1,
-            'tiles' => [[701, 801]],
-        ]);
+        ->and($threeByThreeSummary['max_cluster'])->toBe(['size' => 1])
+        ->and($clusterTiles)->toBe([[701, 801, 1, 1]]);
 });
 
 it('computes the largest 4-connected cluster of interior cluster tiles', function () {
     $service = app(ExplorerTileService::class);
 
-    // Smaller disconnected cluster: 3x3 block -> 1 interior tile at (101, 101)
+    // 3x3 block: a single interior tile at (101, 101).
     $smallBlock = [];
 
     for ($x = 100; $x <= 102; $x++) {
         for ($y = 100; $y <= 102; $y++) {
-            $smallBlock[] = tileCenter($service, $x, $y);
+            $smallBlock[] = explorerTileCenter($x, $y);
         }
     }
 
-    // Larger cluster: 4x3 block (200..203, 200..202) -> 2 connected interior tiles at (201, 201) and (202, 201)
-    // plus an L-extension at (202, 203), (201, 203), (203, 203), (202, 204) -> adds interior tile (202, 202) and (202, 203)?
-    // Keep it exact: a 5x3 block (200..204, 200..202) has exactly 3 connected interior tiles: (201, 201), (202, 201), (203, 201)
+    // 5x3 block: three connected interior tiles at (201..203, 201).
     $largeBlock = [];
 
     for ($x = 200; $x <= 204; $x++) {
         for ($y = 200; $y <= 202; $y++) {
-            $largeBlock[] = tileCenter($service, $x, $y);
+            $largeBlock[] = explorerTileCenter($x, $y);
         }
     }
 
     $summary = $service->fromPolylines([$smallBlock, $largeBlock]);
 
-    expect($summary['max_cluster'])->toBe([
-        'size' => 3,
-        'tiles' => [
-            [201, 201],
-            [202, 201],
-            [203, 201],
+    $clusterCoords = array_map(
+        fn (array $tile): string => "{$tile[0]}:{$tile[1]}",
+        array_values(array_filter($summary['tiles'], fn (array $tile): bool => $tile[3] === 1)),
+    );
+    sort($clusterCoords);
+
+    expect($summary['max_cluster'])->toBe(['size' => 3])
+        ->and($clusterCoords)->toBe(['201:201', '202:201', '203:201']);
+});
+
+it('keeps every max square and max cluster tile when the returned tile list is capped', function () {
+    $pack = fn (int $x, int $y): int => ($x << 20) | $y;
+
+    /** @var array<int, int> $tileVisits */
+    $tileVisits = [];
+
+    // A visited-once 5x5 block: max square 5, max cluster 3x3 = 9.
+    for ($x = 1000; $x < 1005; $x++) {
+        for ($y = 1000; $y < 1005; $y++) {
+            $tileVisits[$pack($x, $y)] = 1;
+        }
+    }
+
+    // More isolated, more-visited tiles than the cap, which would otherwise crowd the block out.
+    $isolatedCount = ExplorerTileService::MAX_RETURNED_TILES;
+
+    for ($i = 0; $i < $isolatedCount; $i++) {
+        $tileVisits[$pack(4000 + 2 * ($i % 500), 4000 + 2 * intdiv($i, 500))] = 2;
+    }
+
+    $summary = app(ExplorerTileService::class)->summarizeTileVisits($tileVisits);
+
+    $returnedBlockTiles = array_values(array_filter(
+        $summary['tiles'],
+        fn (array $tile): bool => $tile[0] >= 1000 && $tile[0] < 1005 && $tile[1] >= 1000 && $tile[1] < 1005,
+    ));
+
+    expect($summary['total_tiles'])->toBe(25 + $isolatedCount)
+        ->and($summary['tiles'])->toHaveCount(ExplorerTileService::MAX_RETURNED_TILES)
+        ->and($summary['max_square'])->toBe(['size' => 5, 'min_x' => 1000, 'min_y' => 1000])
+        ->and($summary['max_cluster'])->toBe(['size' => 9])
+        ->and($returnedBlockTiles)->toHaveCount(25)
+        ->and(array_sum(array_column($returnedBlockTiles, 3)))->toBe(9);
+});
+
+it('builds lifetime explorer tiles from every outdoor track regardless of age or sport', function () {
+    createOutdoorTrack(
+        [explorerTileCenter(16140, 9990), explorerTileCenter(16141, 9990)],
+        ['started_at_local' => CarbonImmutable::parse('2026-11-20 07:00:00')],
+    );
+    createOutdoorTrack(
+        [explorerTileCenter(16150, 9995), explorerTileCenter(16150, 9996)],
+        [
+            'sport_category' => 'biking',
+            'started_at_local' => CarbonImmutable::parse('2015-01-10 08:00:00'),
         ],
+    );
+
+    $summary = app(ExplorerTileService::class)->lifetimeSummary();
+
+    expect(explorerVisitsByTile($summary))->toBe([
+        '16140:9990' => 1,
+        '16141:9990' => 1,
+        '16150:9995' => 1,
+        '16150:9996' => 1,
     ]);
 });
 
-it('populates dynamically filtered explorer tile summaries inside HeatmapService tracks', function () {
-    $tileService = app(ExplorerTileService::class);
+it('excludes indoor activities and activities without a polyline from lifetime explorer tiles', function () {
+    createOutdoorTrack([explorerTileCenter(16140, 9990), explorerTileCenter(16141, 9990)]);
+    createOutdoorTrack(
+        [explorerTileCenter(16200, 9900), explorerTileCenter(16201, 9900)],
+        ['is_indoor' => true],
+    );
 
-    $runPolyline = [
-        tileCenter($tileService, 16140, 9990),
-        tileCenter($tileService, 16141, 9990),
-        tileCenter($tileService, 16141, 9991),
-        tileCenter($tileService, 16140, 9991),
-    ];
-
-    $run = Activity::factory()->create([
-        'name' => 'Square Loop Run',
-        'sport_category' => 'running',
-        'started_at_local' => CarbonImmutable::parse('2026-11-20 07:00:00'),
-        'streams_synced_at' => CarbonImmutable::parse('2026-11-20 08:00:00'),
-    ]);
+    $withoutPolyline = Activity::factory()->create(['is_indoor' => false]);
     ActivityStream::factory()->create([
-        'activity_id' => $run->id,
-        'polyline' => $runPolyline,
+        'activity_id' => $withoutPolyline->id,
+        'polyline' => null,
     ]);
 
-    $ride = Activity::factory()->roadBiking()->create([
-        'name' => 'Coastal Bike Ride',
-        'started_at_local' => CarbonImmutable::parse('2026-01-10 08:00:00'),
-        'streams_synced_at' => CarbonImmutable::parse('2026-01-10 10:00:00'),
+    $summary = app(ExplorerTileService::class)->lifetimeSummary();
+
+    expect(explorerVisitsByTile($summary))->toBe([
+        '16140:9990' => 1,
+        '16141:9990' => 1,
     ]);
-    ActivityStream::factory()->create([
-        'activity_id' => $ride->id,
-        'polyline' => [
-            tileCenter($tileService, 16150, 9995),
-            tileCenter($tileService, 16152, 9995),
-        ],
-    ]);
+});
 
-    $heatmap = app(HeatmapService::class);
+it('reuses the cached lifetime summary until the outdoor stream set changes', function () {
+    $service = app(ExplorerTileService::class);
 
-    $all = $heatmap->tracks('all', 'all');
-    $runningOnly = $heatmap->tracks('running', '30d');
+    $first = createOutdoorTrack([explorerTileCenter(16140, 9990), explorerTileCenter(16141, 9990)]);
 
-    expect($all['explorer']['total_tiles'])->toBe(7)
-        ->and($all['explorer']['max_square'])->toBe([
-            'size' => 2,
-            'min_x' => 16140,
-            'min_y' => 9990,
-        ])
-        ->and($runningOnly['explorer']['total_tiles'])->toBe(4)
-        ->and($runningOnly['explorer']['max_square']['size'])->toBe(2)
-        ->and($runningOnly['explorer']['tiles'])->toHaveCount(4);
+    expect($service->lifetimeSummary()['total_tiles'])->toBe(2);
+
+    DB::enableQueryLog();
+    $cached = $service->lifetimeSummary();
+    $queriesWhileCached = count(DB::getQueryLog());
+    DB::disableQueryLog();
+
+    expect($cached['total_tiles'])->toBe(2)
+        ->and($queriesWhileCached)->toBe(1);
+
+    createOutdoorTrack([explorerTileCenter(16150, 9995)]);
+
+    expect($service->lifetimeSummary()['total_tiles'])->toBe(3);
+
+    $first->update(['is_indoor' => true]);
+
+    expect($service->lifetimeSummary()['total_tiles'])->toBe(1);
 });
