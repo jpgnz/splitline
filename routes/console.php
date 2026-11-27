@@ -23,10 +23,10 @@ Schedule::command('geocode:sync --queue')
     ->hourly()
     ->withoutOverlapping();
 
-Schedule::command('import:watch')
+Schedule::command('import:scan')
     ->everyFiveMinutes()
     ->withoutOverlapping()
-    ->when(fn (): bool => trim((string) config('services.import_watch.dir', '')) !== '');
+    ->when(fn (): bool => trim((string) config('services.auto_import.dir', '')) !== '');
 
 Schedule::call(fn (DataExportService $exports): int => $exports->pruneStaleBackupSnapshots())
     ->name('exports:prune-backup-snapshots')

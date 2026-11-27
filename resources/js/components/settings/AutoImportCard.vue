@@ -10,16 +10,16 @@ import { computed, ref } from 'vue';
 import { toast } from 'vue-sonner';
 import { formatNumber, formatRelativeTime } from '@/lib/format';
 import { show as showActivity } from '@/routes/activities';
-import { scan as scanImportWatch } from '@/routes/settings/import-watch';
+import { scan as scanAutoImport } from '@/routes/settings/auto-import';
 
-export interface ImportWatchRecentItem {
+export interface AutoImportRecentItem {
     activity_id: number;
     name: string;
     filename: string;
     imported_at: string;
 }
 
-export interface ImportWatchLastRun {
+export interface AutoImportLastRun {
     ran_at: string;
     directory: string;
     mode: 'keep' | 'archive';
@@ -28,10 +28,10 @@ export interface ImportWatchLastRun {
     failed: number;
     deferred_recent: number;
     last_error: string | null;
-    recent_imports: ImportWatchRecentItem[];
+    recent_imports: AutoImportRecentItem[];
 }
 
-export interface ImportWatchStatus {
+export interface AutoImportStatus {
     configured: boolean;
     directory: string | null;
     directory_exists: boolean;
@@ -39,11 +39,11 @@ export interface ImportWatchStatus {
     mode: 'keep' | 'archive';
     pending_files: number;
     imported_total: number;
-    last_run: ImportWatchLastRun | null;
+    last_run: AutoImportLastRun | null;
 }
 
 const props = defineProps<{
-    importWatch: ImportWatchStatus;
+    autoImport: AutoImportStatus;
 }>();
 
 const page = usePage();
@@ -51,9 +51,9 @@ const isScanning = ref(false);
 
 const canScan = computed<boolean>(
     () =>
-        props.importWatch.configured &&
-        props.importWatch.directory_exists &&
-        props.importWatch.directory_readable,
+        props.autoImport.configured &&
+        props.autoImport.directory_exists &&
+        props.autoImport.directory_readable,
 );
 
 const statusBadge = computed<{
@@ -61,7 +61,7 @@ const statusBadge = computed<{
     classes: string;
     dotClass: string | null;
 }>(() => {
-    if (!props.importWatch.configured) {
+    if (!props.autoImport.configured) {
         return {
             label: 'Not Configured',
             classes:
@@ -71,11 +71,11 @@ const statusBadge = computed<{
     }
 
     if (
-        !props.importWatch.directory_exists ||
-        !props.importWatch.directory_readable
+        !props.autoImport.directory_exists ||
+        !props.autoImport.directory_readable
     ) {
         return {
-            label: props.importWatch.directory_exists
+            label: props.autoImport.directory_exists
                 ? 'Not Readable'
                 : 'Directory Missing',
             classes: 'bg-rose-500/12 text-rose-700 dark:text-rose-400',
@@ -84,46 +84,46 @@ const statusBadge = computed<{
     }
 
     return {
-        label: 'Watching',
+        label: 'Active',
         classes: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-400',
         dotClass: 'bg-emerald-500',
     };
 });
 
 const modeLabel = computed<string>(() =>
-    props.importWatch.mode === 'archive'
+    props.autoImport.mode === 'archive'
         ? 'Archive to processed/'
         : 'Keep files (read-only safe)',
 );
 
 const lastScannedLabel = computed<string>(() =>
-    props.importWatch.last_run?.ran_at
-        ? formatRelativeTime(props.importWatch.last_run.ran_at)
+    props.autoImport.last_run?.ran_at
+        ? formatRelativeTime(props.autoImport.last_run.ran_at)
         : 'Never',
 );
 
-const recentImports = computed<ImportWatchRecentItem[]>(
-    () => props.importWatch.last_run?.recent_imports ?? [],
+const recentImports = computed<AutoImportRecentItem[]>(
+    () => props.autoImport.last_run?.recent_imports ?? [],
 );
 
 const errorMessage = computed<string | null>(() => {
     if (
-        props.importWatch.configured &&
-        !props.importWatch.directory_exists &&
-        props.importWatch.directory
+        props.autoImport.configured &&
+        !props.autoImport.directory_exists &&
+        props.autoImport.directory
     ) {
-        return `Import folder not found: ${props.importWatch.directory}`;
+        return `Import folder not found: ${props.autoImport.directory}`;
     }
 
     if (
-        props.importWatch.configured &&
-        !props.importWatch.directory_readable &&
-        props.importWatch.directory
+        props.autoImport.configured &&
+        !props.autoImport.directory_readable &&
+        props.autoImport.directory
     ) {
-        return `Import folder cannot be read by Splitline: ${props.importWatch.directory}`;
+        return `Import folder cannot be read by Splitline: ${props.autoImport.directory}`;
     }
 
-    return props.importWatch.last_run?.last_error ?? null;
+    return props.autoImport.last_run?.last_error ?? null;
 });
 
 function triggerScan(): void {
@@ -132,7 +132,7 @@ function triggerScan(): void {
     }
 
     router.post(
-        scanImportWatch.url(),
+        scanAutoImport.url(),
         {},
         {
             preserveScroll: true,
@@ -201,7 +201,7 @@ function triggerScan(): void {
                 </span>
 
                 <button
-                    v-if="importWatch.configured"
+                    v-if="autoImport.configured"
                     type="button"
                     :disabled="!canScan || isScanning"
                     :title="
@@ -222,7 +222,7 @@ function triggerScan(): void {
 
         <!-- Unconfigured Self-Hosting Tip -->
         <div
-            v-if="!importWatch.configured"
+            v-if="!autoImport.configured"
             class="mt-5 rounded-xl border border-zinc-200/80 bg-[#f7f7f5]/60 p-4 text-xs text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/40 dark:text-zinc-400"
         >
             <p
@@ -234,13 +234,13 @@ function triggerScan(): void {
                 Set
                 <code
                     class="rounded bg-zinc-200/70 px-1.5 py-0.5 font-mono text-[11px] font-medium text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
-                    >IMPORT_WATCH_DIR</code
+                    >AUTO_IMPORT_DIR</code
                 >
                 on the server to auto-import workouts synced from Syncthing,
                 HealthFit, RunGap, or shared folders. Optional:
                 <code
                     class="rounded bg-zinc-200/70 px-1 py-0.5 font-mono text-[11px] text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200"
-                    >IMPORT_WATCH_MODE=archive</code
+                    >AUTO_IMPORT_MODE=archive</code
                 >
                 moves completed files into
                 <span class="font-mono">processed/</span>.
@@ -257,12 +257,12 @@ function triggerScan(): void {
                     <p
                         class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                     >
-                        Watch Directory
+                        Auto-Import Directory
                     </p>
                     <p
                         class="mt-1.5 font-mono text-xs font-medium break-all text-zinc-900 dark:text-zinc-100"
                     >
-                        {{ importWatch.directory }}
+                        {{ autoImport.directory }}
                     </p>
                     <p class="mt-1.5 text-xs text-zinc-500 dark:text-zinc-400">
                         Mode:
@@ -286,7 +286,7 @@ function triggerScan(): void {
                         <span
                             class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
                         >
-                            {{ formatNumber(importWatch.imported_total) }}
+                            {{ formatNumber(autoImport.imported_total) }}
                         </span>
                     </div>
 
@@ -301,12 +301,12 @@ function triggerScan(): void {
                         <span
                             class="font-mono text-sm font-semibold tabular-nums"
                             :class="
-                                importWatch.pending_files > 0
+                                autoImport.pending_files > 0
                                     ? 'text-emerald-700 dark:text-emerald-400'
                                     : 'text-zinc-900 dark:text-zinc-100'
                             "
                         >
-                            {{ formatNumber(importWatch.pending_files) }}
+                            {{ formatNumber(autoImport.pending_files) }}
                         </span>
                     </div>
                 </div>
@@ -337,29 +337,29 @@ function triggerScan(): void {
                 </span>
 
                 <div
-                    v-if="importWatch.last_run"
+                    v-if="autoImport.last_run"
                     class="flex flex-wrap items-center gap-2 font-mono text-[11px] tabular-nums"
                 >
                     <span class="text-emerald-700 dark:text-emerald-400">
-                        {{ formatNumber(importWatch.last_run.created) }}
+                        {{ formatNumber(autoImport.last_run.created) }}
                         imported
                     </span>
                     <span class="text-zinc-300 dark:text-zinc-700">·</span>
                     <span class="text-zinc-600 dark:text-zinc-400">
-                        {{ formatNumber(importWatch.last_run.skipped) }}
+                        {{ formatNumber(autoImport.last_run.skipped) }}
                         skipped
                     </span>
                     <span class="text-zinc-300 dark:text-zinc-700">·</span>
                     <span
                         :class="
-                            importWatch.last_run.failed > 0
+                            autoImport.last_run.failed > 0
                                 ? 'text-rose-700 dark:text-rose-400'
                                 : 'text-zinc-600 dark:text-zinc-400'
                         "
                     >
-                        {{ formatNumber(importWatch.last_run.failed) }} failed
+                        {{ formatNumber(autoImport.last_run.failed) }} failed
                     </span>
-                    <template v-if="importWatch.last_run.deferred_recent > 0">
+                    <template v-if="autoImport.last_run.deferred_recent > 0">
                         <span class="text-zinc-300 dark:text-zinc-700">·</span>
                         <span
                             title="Waiting for file transfer to finish"
@@ -367,7 +367,7 @@ function triggerScan(): void {
                         >
                             {{
                                 formatNumber(
-                                    importWatch.last_run.deferred_recent,
+                                    autoImport.last_run.deferred_recent,
                                 )
                             }}
                             deferred
@@ -419,15 +419,15 @@ function triggerScan(): void {
                 </div>
             </div>
 
-            <!-- Subtle Empty State when Watching with 0 Recent Imports -->
+            <!-- Subtle Empty State when Active with 0 Recent Imports -->
             <div
                 v-else-if="canScan"
                 class="rounded-xl border border-dashed border-zinc-200/80 bg-[#f7f7f5]/40 px-4 py-3 text-xs text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900/25 dark:text-zinc-400"
             >
-                Watching folder — no recent imports yet. Drop
+                Auto-import active — no recent imports yet. Drop
                 <code class="font-mono text-[11px]">.fit</code> or
                 <code class="font-mono text-[11px]">.zip</code> files into the
-                watched folder to import them automatically.
+                import folder to import them automatically.
             </div>
         </div>
     </section>

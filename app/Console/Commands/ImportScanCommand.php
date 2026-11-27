@@ -2,19 +2,19 @@
 
 namespace App\Console\Commands;
 
-use App\Services\Ingestion\ImportWatchService;
+use App\Services\Ingestion\AutoImportService;
 use Illuminate\Console\Command;
 
-class ImportWatchCommand extends Command
+class ImportScanCommand extends Command
 {
     /**
      * The name and signature of the console command.
      *
      * @var string
      */
-    protected $signature = 'import:watch
-        {--dir= : Override IMPORT_WATCH_DIR}
-        {--mode= : Override IMPORT_WATCH_MODE (keep|archive)}
+    protected $signature = 'import:scan
+        {--dir= : Override AUTO_IMPORT_DIR}
+        {--mode= : Override AUTO_IMPORT_MODE (keep|archive)}
         {--no-age-check : Skip file stability checks (minimum age and unchanged since the previous scan)}';
 
     /**
@@ -22,12 +22,12 @@ class ImportWatchCommand extends Command
      *
      * @var string
      */
-    protected $description = 'Scan the configured drop folder for new .fit and .zip activity files';
+    protected $description = 'Scan the configured auto-import folder for new .fit and .zip activity files';
 
     /**
      * Execute the console command.
      */
-    public function handle(ImportWatchService $watcher): int
+    public function handle(AutoImportService $autoImport): int
     {
         $rawDir = $this->option('dir');
         $dirOverride = is_string($rawDir) && trim($rawDir) !== '' ? trim($rawDir) : null;
@@ -38,7 +38,7 @@ class ImportWatchCommand extends Command
         if (is_string($rawMode) && trim($rawMode) !== '') {
             $normalizedMode = strtolower(trim($rawMode));
 
-            if ($normalizedMode !== ImportWatchService::MODE_KEEP && $normalizedMode !== ImportWatchService::MODE_ARCHIVE) {
+            if ($normalizedMode !== AutoImportService::MODE_KEEP && $normalizedMode !== AutoImportService::MODE_ARCHIVE) {
                 $this->components->error("Invalid --mode value '{$rawMode}'. Expected 'keep' or 'archive'.");
 
                 return self::FAILURE;
@@ -49,7 +49,7 @@ class ImportWatchCommand extends Command
 
         $skipStabilityChecks = (bool) $this->option('no-age-check');
 
-        $result = $watcher->scan(
+        $result = $autoImport->scan(
             directoryOverride: $dirOverride,
             modeOverride: $modeOverride,
             minFileAgeSeconds: $skipStabilityChecks ? 0 : null,
@@ -57,19 +57,19 @@ class ImportWatchCommand extends Command
         );
 
         if (! $result['configured']) {
-            $this->components->info('Import watch directory is not configured (IMPORT_WATCH_DIR is empty). Nothing to do.');
+            $this->components->info('Auto-import directory is not configured (AUTO_IMPORT_DIR is empty). Nothing to do.');
 
             return self::SUCCESS;
         }
 
         if (! $result['directory_exists'] || ! $result['directory_readable']) {
-            $this->components->error($result['last_error'] ?? "Import watch directory is not accessible: {$result['directory']}");
+            $this->components->error($result['last_error'] ?? "Auto-import directory is not accessible: {$result['directory']}");
 
             return self::FAILURE;
         }
 
         if ($result['busy']) {
-            $this->components->warn('Another import watch scan is already running. Skipping this run.');
+            $this->components->warn('Another auto-import scan is already running. Skipping this run.');
 
             return self::SUCCESS;
         }
@@ -83,7 +83,7 @@ class ImportWatchCommand extends Command
         }
 
         $summary = sprintf(
-            'Import watch scan complete (%s): Created: %d, Skipped: %d, Failed: %d, Deferred: %d',
+            'Auto-import scan complete (%s): Created: %d, Skipped: %d, Failed: %d, Deferred: %d',
             $result['mode'],
             $result['created'],
             $result['skipped'],

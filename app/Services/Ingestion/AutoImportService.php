@@ -22,7 +22,7 @@ use Splitline\ProviderFileImport\FitFileImportProvider;
 use Throwable;
 
 /**
- * Automated drop-folder watcher for standalone .fit and .zip activity files.
+ * Automated drop-folder importer for standalone .fit and .zip activity files.
  *
  * @phpstan-type RecentImportItem array{
  *     activity_id: int,
@@ -72,23 +72,23 @@ use Throwable;
  *     entries: list<ScanEntry>
  * }
  */
-class ImportWatchService
+class AutoImportService
 {
     public const string MODE_KEEP = 'keep';
 
     public const string MODE_ARCHIVE = 'archive';
 
-    public const string LAST_RUN_SETTING_KEY = 'import_watch.last_run';
+    public const string LAST_RUN_SETTING_KEY = 'auto_import.last_run';
 
     /**
      * Local-disk path of the per-file fingerprint index (kept out of app_settings so it never bloats shared props).
      */
-    public const string FILE_INDEX_PATH = 'import-watch/file-index.json';
+    public const string FILE_INDEX_PATH = 'auto-import/file-index.json';
 
     /**
      * Cache lock shared by the scheduled command and the Settings "Scan now" button.
      */
-    public const string SCAN_LOCK_KEY = 'import-watch:scan';
+    public const string SCAN_LOCK_KEY = 'auto-import:scan';
 
     private const int SCAN_LOCK_SECONDS = 1800;
 
@@ -117,7 +117,7 @@ class ImportWatchService
      */
     public function configuredDirectory(?string $override = null): ?string
     {
-        $raw = $override !== null ? $override : config('services.import_watch.dir');
+        $raw = $override !== null ? $override : config('services.auto_import.dir');
 
         if (! is_string($raw)) {
             return null;
@@ -143,7 +143,7 @@ class ImportWatchService
      */
     public function resolveMode(?string $override = null): string
     {
-        $raw = $override !== null ? $override : config('services.import_watch.mode', self::MODE_KEEP);
+        $raw = $override !== null ? $override : config('services.auto_import.mode', self::MODE_KEEP);
         $normalized = is_string($raw) ? strtolower(trim($raw)) : self::MODE_KEEP;
 
         return $normalized === self::MODE_ARCHIVE ? self::MODE_ARCHIVE : self::MODE_KEEP;
@@ -158,7 +158,7 @@ class ImportWatchService
             return max(0, $override);
         }
 
-        return max(0, (int) config('services.import_watch.min_file_age_seconds', 5));
+        return max(0, (int) config('services.auto_import.min_file_age_seconds', 5));
     }
 
     /**
@@ -188,8 +188,8 @@ class ImportWatchService
 
         if (! $directoryExists || ! $directoryReadable) {
             $error = ! $directoryExists
-                ? "Import watch directory does not exist: {$directory}"
-                : "Import watch directory is not readable: {$directory}";
+                ? "Auto-import directory does not exist: {$directory}"
+                : "Auto-import directory is not readable: {$directory}";
             $previousRecent = $this->lastRunSummary()['recent_imports'] ?? [];
 
             $this->settings->set(self::LAST_RUN_SETTING_KEY, [
@@ -657,13 +657,13 @@ class ImportWatchService
     /**
      * Move a file into the target archive subdirectory (processed/ or failed/), resolving filename collisions.
      */
-    private function moveToSubdirectory(string $watchDir, string $sourceFile, string $subdirectory): bool
+    private function moveToSubdirectory(string $importDir, string $sourceFile, string $subdirectory): bool
     {
-        if (is_link($sourceFile) || ! is_writable($watchDir) || ! is_writable(dirname($sourceFile))) {
+        if (is_link($sourceFile) || ! is_writable($importDir) || ! is_writable(dirname($sourceFile))) {
             return false;
         }
 
-        $targetDir = $watchDir.DIRECTORY_SEPARATOR.$subdirectory;
+        $targetDir = $importDir.DIRECTORY_SEPARATOR.$subdirectory;
 
         if (! is_dir($targetDir)) {
             if (! @mkdir($targetDir, 0775, true) && ! is_dir($targetDir)) {
@@ -793,7 +793,7 @@ class ImportWatchService
     }
 
     /**
-     * Load the persisted per-file fingerprint index for a watch directory.
+     * Load the persisted per-file fingerprint index for an auto-import directory.
      *
      * @return array<string, FileIndexEntry>
      */
@@ -849,7 +849,7 @@ class ImportWatchService
     }
 
     /**
-     * Persist the per-file fingerprint index (only files still present in the watch directory are kept).
+     * Persist the per-file fingerprint index (only files still present in the auto-import directory are kept).
      *
      * @param  array<string, FileIndexEntry>  $entries
      */
