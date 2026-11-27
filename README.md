@@ -102,33 +102,46 @@ Back up `splitline_fits` as well to keep cached FIT archives without re-download
 
 Prefix commands with `docker exec -it splitline` when running in Docker.
 
-| Command                                                                                          | Description                                                                  |
-| :----------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------- |
-| `php artisan garmin:check [--refresh]`                                                           | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.            |
-| `php artisan garmin:sync [--days=7]`                                                             | Incremental sync of health summaries and activities (runs every 30 minutes). |
-| `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                         | Resumable all-time history backfill from Garmin.                             |
-| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]` | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.       |
-| `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`      | Fetch and store historical Open-Meteo weather for outdoor activities.        |
+| Command                                                                                          | Description                                                                    |
+| :----------------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| `php artisan garmin:check [--refresh]`                                                           | Verify `GARMIN_KEY` and Garmin Connect Personal API connectivity.              |
+| `php artisan garmin:sync [--days=7]`                                                             | Incremental sync of health summaries and activities (runs every 30 minutes).   |
+| `php artisan garmin:sync --backfill [--from=YYYY-MM-DD]`                                         | Resumable all-time history backfill from Garmin.                               |
+| `php artisan garmin:sync-streams [--limit=N] [--activity=ID] [--force] [--redownload] [--queue]` | Download, cache, and parse FIT streams, GNSS routes, and Best Efforts.         |
+| `php artisan weather:sync [--limit=N] [--activity=ID] [--force] [--upgrade-only] [--queue]`      | Fetch and store historical Open-Meteo weather for outdoor activities.          |
+| `php artisan routes:match [--rebuild] [--queue] [--chunk=100]`                                   | Fingerprint outdoor GNSS polylines and cluster repeated matched routes.        |
+| `php artisan geocode:sync [--queue] [--limit=50] [--force]`                                      | Reverse-geocode matched routes and activities missing place names (Nominatim). |
 
 ## Configuration
 
-| Variable                   | Default                               | Description                                                                                                                                                             |
-| :------------------------- | :------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `APP_URL`                  | `http://localhost:8080`               | Public URL of your instance (`https://...` behind TLS termination).                                                                                                     |
-| `APP_KEY`                  | _(auto-generated)_                    | Laravel encryption key; auto-generated at `/data/.app_key` if omitted.                                                                                                  |
-| `TIMEZONE`                 | `UTC`                                 | IANA timezone for dates, streaks, and daily rollups (falls back to `TZ`).                                                                                               |
-| `DEFAULT_UNITS`            | `metric`                              | Initial unit system (`metric` or `imperial`); overridable in Settings.                                                                                                  |
-| `DEFAULT_SPORTS_MODE`      | `auto`                                | Initial Sports & Disciplines navigation mode (`auto` or `custom`).                                                                                                      |
-| `GARMIN_KEY`               | _(empty)_                             | Garmin Connect Personal API key.                                                                                                                                        |
-| `GARMIN_AUTO_SYNC_STREAMS` | `true`                                | Automatically queue FIT stream & GNSS route downloads for newly synced activities (caches FIT ZIPs in `splitline_fits`; set to `false` to opt out on initial backfill). |
-| `TRUSTED_PROXIES`          | _(empty)_                             | Reverse proxy IP/CIDR list or `*` for forwarded HTTPS headers.                                                                                                          |
-| `SESSION_SECURE_COOKIE`    | `false`                               | Set to `true` when serving over HTTPS.                                                                                                                                  |
-| `LOG_CHANNEL`              | `stderr` _(Docker)_ / `stack` _(dev)_ | Log destination (`stderr` for `docker logs`).                                                                                                                           |
-| `DB_DATABASE`              | `/data/database.sqlite` _(Docker)_    | Path to the SQLite database file.                                                                                                                                       |
-| `DB_SQLITE_JOURNAL_MODE`   | `WAL` _(Docker)_                      | SQLite journal mode for concurrent web, queue, and scheduler access.                                                                                                    |
-| `DB_SQLITE_BUSY_TIMEOUT`   | `5000` _(Docker)_                     | SQLite busy timeout in milliseconds.                                                                                                                                    |
-| `OPEN_METEO_ENABLED`       | `true`                                | Enable historical activity weather lookups.                                                                                                                             |
-| `OPEN_METEO_AUTO_SYNC`     | `true`                                | Automatically queue weather lookups for newly synced outdoor activities.                                                                                                |
+| Variable                        | Default                               | Description                                                                                                                                                             |
+| :------------------------------ | :------------------------------------ | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `APP_URL`                       | `http://localhost:8080`               | Public URL of your instance (`https://...` behind TLS termination).                                                                                                     |
+| `APP_KEY`                       | _(auto-generated)_                    | Laravel encryption key; auto-generated at `/data/.app_key` if omitted.                                                                                                  |
+| `TIMEZONE`                      | `UTC`                                 | IANA timezone for dates, streaks, and daily rollups (falls back to `TZ`).                                                                                               |
+| `DEFAULT_UNITS`                 | `metric`                              | Initial unit system (`metric` or `imperial`); overridable in Settings.                                                                                                  |
+| `DEFAULT_SPORTS_MODE`           | `auto`                                | Initial Sports & Disciplines navigation mode (`auto` or `custom`).                                                                                                      |
+| `GARMIN_KEY`                    | _(empty)_                             | Garmin Connect Personal API key.                                                                                                                                        |
+| `GARMIN_AUTO_SYNC_STREAMS`      | `true`                                | Automatically queue FIT stream & GNSS route downloads for newly synced activities (caches FIT ZIPs in `splitline_fits`; set to `false` to opt out on initial backfill). |
+| `TRUSTED_PROXIES`               | _(empty)_                             | Reverse proxy IP/CIDR list or `*` for forwarded HTTPS headers.                                                                                                          |
+| `SESSION_SECURE_COOKIE`         | `false`                               | Set to `true` when serving over HTTPS.                                                                                                                                  |
+| `LOG_CHANNEL`                   | `stderr` _(Docker)_ / `stack` _(dev)_ | Log destination (`stderr` for `docker logs`).                                                                                                                           |
+| `DB_DATABASE`                   | `/data/database.sqlite` _(Docker)_    | Path to the SQLite database file.                                                                                                                                       |
+| `DB_SQLITE_JOURNAL_MODE`        | `WAL` _(Docker)_                      | SQLite journal mode for concurrent web, queue, and scheduler access.                                                                                                    |
+| `DB_SQLITE_BUSY_TIMEOUT`        | `5000` _(Docker)_                     | SQLite busy timeout in milliseconds.                                                                                                                                    |
+| `OPEN_METEO_ENABLED`            | `true`                                | Enable historical activity weather lookups.                                                                                                                             |
+| `OPEN_METEO_AUTO_SYNC`          | `true`                                | Automatically queue weather lookups for newly synced outdoor activities.                                                                                                |
+| `NOMINATIM_ENABLED`             | `true`                                | Enable reverse geocoding for Matched Routes and outdoor activities missing `location_name`.                                                                             |
+| `NOMINATIM_AUTO_SYNC`           | `true`                                | Automatically queue background reverse geocoding for matched routes and outdoor activities missing location names.                                                      |
+| `NOMINATIM_BASE_URL`            | `https://nominatim.openstreetmap.org` | Nominatim endpoint URL (point to a self-hosted Nominatim instance to remove public rate limits).                                                                        |
+| `NOMINATIM_RATE_LIMIT_MS`       | `1100`                                | Minimum spacing in milliseconds between Nominatim requests (enforces ≥1000ms on the public OSMF host; set to `0` for self-hosted instances).                            |
+| `NOMINATIM_USER_AGENT`          | _(Splitline/version)_                 | Custom HTTP `User-Agent` header (defaults to `Splitline/{version} (+https://github.com/splitline-php/splitline)`).                                                      |
+| `NOMINATIM_REFERER`             | _(empty)_                             | Optional HTTP `Referer` header sent to Nominatim (only sent when explicitly configured).                                                                                |
+| `NOMINATIM_EMAIL`               | _(empty)_                             | Optional contact email passed per the OSMF Nominatim Usage Policy.                                                                                                      |
+| `NOMINATIM_TIMEOUT`             | `15`                                  | HTTP request timeout in seconds for Nominatim reverse lookups.                                                                                                          |
+| `NOMINATIM_MAX_RETRIES`         | `2`                                   | Maximum retry attempts for transient connection/5xx errors.                                                                                                             |
+| `NOMINATIM_NEGATIVE_CACHE_DAYS` | `30`                                  | Days to remember coordinates Nominatim could not resolve before asking again.                                                                                           |
+| `NOMINATIM_RETRY_FAILED_DAYS`   | `7`                                   | Days before a route or activity whose lookup found no usable place name is retried.                                                                                     |
 
 ## Development
 
@@ -138,6 +151,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, CI checks, and contribut
 
 - **Weather**: [Open-Meteo.com](https://open-meteo.com/), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 - **Maps**: OpenFreeMap vector tiles and OpenStreetMap data.
+- **Place Naming (Geocoding)**: [OpenStreetMap Nominatim](https://nominatim.openstreetmap.org/) — place names © OpenStreetMap contributors, licensed under [ODbL](https://www.openstreetmap.org/copyright).
 - **Disclaimer**: Splitline is an independent open-source project and is not affiliated with, endorsed by, or sponsored by Garmin Ltd. or its subsidiaries. Garmin and Garmin Connect are trademarks of Garmin Ltd. or its subsidiaries.
 
 ## License

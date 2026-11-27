@@ -9,3 +9,7 @@ Schedule::command('garmin:sync')
 Schedule::command('routes:match --queue')
     ->hourly()
     ->withoutOverlapping();
+
+Schedule::command('geocode:sync --queue')
+    ->hourly()
+    ->withoutOverlapping();

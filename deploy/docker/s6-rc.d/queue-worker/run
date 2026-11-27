@@ -16,6 +16,10 @@ case ",${QUEUES}," in
     *,weather,*) ;;
     *) QUEUES="${QUEUES},weather" ;;
 esac
+case ",${QUEUES}," in
+    *,geocode,*) ;;
+    *) QUEUES="${QUEUES},geocode" ;;
+esac
 
 if [ "$(id -u)" -eq 0 ]; then
     exec s6-setuidgid www-data php /var/www/html/artisan queue:work --queue="${QUEUES}" --sleep=3 --tries=5 --timeout=600

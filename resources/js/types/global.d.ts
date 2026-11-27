@@ -18,6 +18,7 @@ export type EnrichmentQueueJobs = {
         default: number;
         streams: number;
         weather: number;
+        geocode: number;
         total: number;
     };
     has_active_work: boolean;
@@ -28,6 +29,7 @@ export type EnrichmentQueueSummary = EnrichmentQueueJobs & {
         streams: number;
         weather: number;
         routes: number;
+        geocoding: number;
     };
 };
 

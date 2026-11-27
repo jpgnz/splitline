@@ -34,5 +34,6 @@
         <env name="NIGHTWATCH_ENABLED" value="false"/>
         <env name="GARMIN_AUTO_SYNC_STREAMS" value="false"/>
         <env name="OPEN_METEO_AUTO_SYNC" value="false"/>
+        <env name="NOMINATIM_AUTO_SYNC" value="false"/>
     </php>
 </phpunit>

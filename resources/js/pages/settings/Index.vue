@@ -12,6 +12,7 @@ import {
     HeartPulse,
     History,
     Layers,
+    MapPin,
     RefreshCw,
     Sparkles,
     Tag,
@@ -99,6 +100,14 @@ interface HealthSourcesPayload {
     has_multiple_providers: boolean;
 }
 
+interface GeocodingConfigSummary {
+    enabled: boolean;
+    auto_sync: boolean;
+    host: string;
+    is_public_endpoint: boolean;
+    rate_limit_ms: number;
+}
+
 interface SettingsProps {
     unit_system: UnitSystem;
     timezone: string;
@@ -108,6 +117,7 @@ interface SettingsProps {
     };
     backfill: BackfillSummary;
     enrichment_queue: EnrichmentQueueSummary;
+    geocoding: GeocodingConfigSummary;
     sports_settings: {
         config: SportsConfig;
         counts: Record<string, number>;
@@ -2034,7 +2044,8 @@ function submitHealthSources(): void {
                             </div>
                             <p class="text-xs text-zinc-500 dark:text-zinc-400">
                                 Queued worker jobs and remaining activities
-                                awaiting stream, weather, or route matching.
+                                awaiting stream, weather, route matching, or
+                                place naming.
                             </p>
                         </div>
 
@@ -2069,7 +2080,7 @@ function submitHealthSources(): void {
                                 Queued Jobs
                             </p>
                             <div
-                                class="mt-2.5 grid grid-cols-3 gap-2 text-center"
+                                class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-4"
                             >
                                 <div
                                     class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
@@ -2118,6 +2129,25 @@ function submitHealthSources(): void {
                                         {{
                                             formatNumber(
                                                 liveEnrichmentQueue.jobs
+                                                    .geocode,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Geocode
+                                    </p>
+                                </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.jobs
                                                     .default,
                                             )
                                         }}
@@ -2141,7 +2171,7 @@ function submitHealthSources(): void {
                                 Pending Enrichments
                             </p>
                             <div
-                                class="mt-2.5 grid grid-cols-3 gap-2 text-center"
+                                class="mt-2.5 grid grid-cols-2 gap-2 text-center sm:grid-cols-4"
                             >
                                 <div
                                     class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
@@ -2200,8 +2230,75 @@ function submitHealthSources(): void {
                                         Routes
                                     </p>
                                 </div>
+                                <div
+                                    class="rounded-md bg-[#f7f7f5] px-2 py-1.5 dark:bg-zinc-900/70"
+                                >
+                                    <p
+                                        class="font-mono text-sm font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
+                                    >
+                                        {{
+                                            formatNumber(
+                                                liveEnrichmentQueue.pending
+                                                    .geocoding,
+                                            )
+                                        }}
+                                    </p>
+                                    <p
+                                        class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                                    >
+                                        Place Names
+                                    </p>
+                                </div>
                             </div>
                         </div>
+                    </div>
+
+                    <!-- Reverse Geocoding Provider & ODbL Attribution -->
+                    <div
+                        class="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-zinc-200/80 bg-white px-3 py-2.5 text-xs dark:border-zinc-800 dark:bg-[#141417]"
+                    >
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span
+                                class="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                            >
+                                <MapPin class="size-3" />
+                                Nominatim
+                            </span>
+                            <span
+                                class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
+                            >
+                                {{ geocoding.host }}
+                            </span>
+                            <span
+                                class="inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[10px] font-medium"
+                                :class="
+                                    geocoding.enabled
+                                        ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-400'
+                                        : 'bg-zinc-200/70 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                                "
+                            >
+                                {{
+                                    geocoding.enabled
+                                        ? geocoding.is_public_endpoint
+                                            ? 'Enabled · Public OSMF'
+                                            : 'Enabled · Self-hosted'
+                                        : 'Disabled'
+                                }}
+                            </span>
+                        </div>
+                        <span
+                            class="font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                        >
+                            Place names &copy;
+                            <a
+                                href="https://www.openstreetmap.org/copyright"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-600 dark:decoration-zinc-700 dark:hover:text-zinc-300"
+                            >
+                                OpenStreetMap contributors (ODbL)
+                            </a>
+                        </span>
                     </div>
                 </div>
             </section>

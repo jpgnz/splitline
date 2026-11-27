@@ -1,11 +1,13 @@
 <?php
 
+use App\Jobs\GeocodeRouteClusterJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
 use App\Models\ActivityRouteFingerprint;
 use App\Models\ActivityStream;
 use App\Models\ActivityWeather;
+use App\Models\RouteCluster;
 use App\Services\Sync\QueueStatusService;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\DB;
@@ -22,12 +24,14 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         ['queue' => SyncActivityStreamJob::QUEUE, 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null, 'available_at' => $now, 'created_at' => $now],
         ['queue' => SyncActivityStreamJob::QUEUE, 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null, 'available_at' => $now, 'created_at' => $now],
         ['queue' => SyncActivityWeatherJob::QUEUE, 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null, 'available_at' => $now, 'created_at' => $now],
+        ['queue' => GeocodeRouteClusterJob::QUEUE, 'payload' => '{}', 'attempts' => 0, 'reserved_at' => null, 'available_at' => $now, 'created_at' => $now],
     ]);
 
-    // 1. Outdoor non-manual activity awaiting streams AND missing weather
+    // 1. Outdoor non-manual activity awaiting streams, missing weather, AND missing location_name
     Activity::factory()->create([
         'is_manual' => false,
         'is_indoor' => false,
+        'location_name' => null,
         'start_lat' => -36.85,
         'start_lng' => 174.76,
         'streams_synced_at' => null,
@@ -89,8 +93,20 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
         'sampling_mode' => 'route',
     ]);
 
+    $geocodedCluster = RouteCluster::factory()->create([
+        'activity_count' => 2,
+        'geocoded_at' => CarbonImmutable::now('UTC'),
+    ]);
+
     ActivityRouteFingerprint::factory()->create([
         'activity_id' => $fullyEnriched->id,
+        'route_cluster_id' => $geocodedCluster->id,
+    ]);
+
+    // 5. Matched route cluster awaiting geocoding
+    RouteCluster::factory()->create([
+        'activity_count' => 2,
+        'geocoded_at' => null,
     ]);
 
     $summary = app(QueueStatusService::class)->summary();
@@ -100,12 +116,14 @@ it('summarizes queued database jobs by queue and pending activity enrichments', 
             'default' => 1,
             'streams' => 2,
             'weather' => 1,
-            'total' => 4,
+            'geocode' => 1,
+            'total' => 5,
         ],
         'pending' => [
             'streams' => 1,
             'weather' => 2,
             'routes' => 1,
+            'geocoding' => 2,
         ],
         'has_active_work' => true,
     ]);
@@ -125,6 +143,7 @@ it('returns zero queued job counts gracefully when queue driver is not database'
         'default' => 0,
         'streams' => 0,
         'weather' => 0,
+        'geocode' => 0,
         'total' => 0,
     ])->and($summary['has_active_work'])->toBeFalse();
 });
@@ -151,6 +170,7 @@ it('exposes only cheap queued-job counts on the sync status endpoint and shared 
         ->assertOk()
         ->assertJsonPath('enrichments.jobs.streams', 1)
         ->assertJsonPath('enrichments.jobs.weather', 1)
+        ->assertJsonPath('enrichments.jobs.geocode', 0)
         ->assertJsonPath('enrichments.jobs.default', 0)
         ->assertJsonPath('enrichments.jobs.total', 2)
         ->assertJsonPath('enrichments.has_active_work', true)
@@ -162,10 +182,13 @@ it('exposes only cheap queued-job counts on the sync status endpoint and shared 
             ->component('settings/Index')
             ->where('enrichment_queue.jobs.streams', 1)
             ->where('enrichment_queue.jobs.weather', 1)
+            ->where('enrichment_queue.jobs.geocode', 0)
             ->where('enrichment_queue.jobs.total', 2)
             ->where('enrichment_queue.pending.streams', 1)
             ->where('enrichment_queue.pending.weather', 1)
+            ->where('enrichment_queue.pending.geocoding', 0)
             ->where('enrichment_queue.has_active_work', true)
+            ->where('geocoding.host', 'nominatim.openstreetmap.org')
             ->where('sync.enrichments.jobs.total', 2)
             ->where('sync.enrichments.has_active_work', true)
             ->missing('sync.enrichments.pending'),

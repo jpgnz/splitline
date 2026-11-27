@@ -165,6 +165,7 @@ class MatchedRouteService
                 $sub
                     ->whereRaw("LOWER(COALESCE(name_override, name)) LIKE ? ESCAPE '\\'", [$pattern])
                     ->orWhereRaw("LOWER(name) LIKE ? ESCAPE '\\'", [$pattern])
+                    ->orWhereRaw("LOWER(COALESCE(place_label, '')) LIKE ? ESCAPE '\\'", [$pattern])
                     ->orWhereHas('representativeActivity', function (Builder $activityQuery) use ($pattern): void {
                         $activityQuery->whereRaw("LOWER(COALESCE(location_name, '')) LIKE ? ESCAPE '\\'", [$pattern]);
                     });
@@ -231,6 +232,7 @@ class MatchedRouteService
                 'name' => $cluster->displayName(),
                 'auto_name' => $cluster->name,
                 'name_override' => $cluster->name_override,
+                'place_label' => $cluster->place_label,
                 'sport_category' => $cluster->sport_category,
                 'effective_discipline' => $cluster->representativeActivity?->effectiveDiscipline(),
                 'sport_key' => $sportMeta['sport_key'],
@@ -296,6 +298,7 @@ class MatchedRouteService
                 'name' => $cluster->displayName(),
                 'auto_name' => $cluster->name,
                 'name_override' => $cluster->name_override,
+                'place_label' => $cluster->place_label,
                 'sport_category' => $cluster->sport_category,
                 'effective_discipline' => $cluster->representativeActivity?->effectiveDiscipline(),
                 'sport_key' => $sportMeta['sport_key'],
@@ -370,6 +373,7 @@ class MatchedRouteService
             'route' => [
                 'id' => $cluster->id,
                 'name' => $cluster->displayName(),
+                'place_label' => $cluster->place_label,
                 'sport_category' => $cluster->sport_category,
                 'effective_discipline' => $cluster->representativeActivity?->effectiveDiscipline(),
                 'sport_key' => $sportMeta['sport_key'],
