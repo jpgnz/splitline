@@ -68,6 +68,8 @@ class HeatmapController extends Controller
             }
         });
 
-        return back()->with('status', "Requested GPS stream sync for {$count} outdoor activity(ies).");
+        $noun = $count === 1 ? 'activity' : 'activities';
+
+        return back()->with('status', "Requested GPS stream sync for {$count} outdoor {$noun}.");
     }
 }
