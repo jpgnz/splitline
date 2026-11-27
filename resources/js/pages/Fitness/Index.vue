@@ -295,6 +295,10 @@ const activeProjectionPoints = computed(() => {
         : props.projections.rest;
 });
 
+const isViewingToday = computed<boolean>(
+    () => props.dateWindow.end === props.today,
+);
+
 const activeProjectedPeakDate = computed<string | null>(() => {
     if (projectionMode.value === 'off') {
         return props.summary.projected_peak_date;
@@ -303,6 +307,19 @@ const activeProjectedPeakDate = computed<string | null>(() => {
     return projectionMode.value === 'maintenance'
         ? props.summary.projected_peak_dates.maintenance
         : props.summary.projected_peak_dates.rest;
+});
+
+const activeProjectedPeakTsb = computed<number | null>(() => {
+    const peakDate = activeProjectedPeakDate.value;
+
+    if (!peakDate) {
+        return null;
+    }
+
+    return (
+        activeProjectionPoints.value.find((point) => point.date === peakDate)
+            ?.tsb ?? null
+    );
 });
 
 function overlayHasData(key: HealthOverlayKey): boolean {
@@ -696,7 +713,7 @@ const pmcChartOption = computed<EChartsOption>(() => {
                         `<strong>${formatShortDate(day.date)}</strong>`,
                         `<span style="color:#10b981">●</span> Fitness (CTL): ${formatNumber(day.ctl, 1)}`,
                         `<span style="color:#f59e0b">●</span> Fatigue (ATL): ${formatNumber(day.atl, 1)}`,
-                        `<span style="color:#0ea5e9">●</span> Form (TSB): ${formatSigned(day.tsb, 1)}`,
+                        `<span style="color:#0ea5e9">●</span> Form (TSB, entering day): ${formatSigned(day.tsb, 1)}`,
                         `Daily Load: ${formatNumber(day.load, 1)}${day.activity_count > 0 ? ` (${day.activity_count} ${day.activity_count === 1 ? 'session' : 'sessions'})` : ''}`,
                     ];
 
@@ -721,6 +738,10 @@ const pmcChartOption = computed<EChartsOption>(() => {
                         }
                     }
 
+                    lines.push(
+                        `<span style="opacity:0.7">TSB = previous day's CTL − ATL</span>`,
+                    );
+
                     return lines.join('<br/>');
                 }
 
@@ -739,7 +760,7 @@ const pmcChartOption = computed<EChartsOption>(() => {
                     `<strong>${formatShortDate(proj.date)}</strong> <span style="opacity:0.7">(${modeLabel})</span>`,
                     `<span style="color:#10b981">●</span> Projected CTL: ${formatNumber(proj.ctl, 1)}`,
                     `<span style="color:#f59e0b">●</span> Projected ATL: ${formatNumber(proj.atl, 1)}`,
-                    `<span style="color:#0ea5e9">●</span> Projected TSB: ${formatSigned(proj.tsb, 1)}`,
+                    `<span style="color:#0ea5e9">●</span> Projected TSB (entering day): ${formatSigned(proj.tsb, 1)}`,
                     `Assumed Load: ${formatNumber(proj.load, 1)} / day`,
                 ].join('<br/>');
             },
@@ -1307,12 +1328,17 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     >
                         {{ formatSigned(summary.tsb, 1) }}
                     </p>
-                    <div class="mt-1.5 flex items-center gap-1.5">
+                    <div class="mt-1.5 flex flex-wrap items-center gap-1.5">
                         <span
                             class="inline-flex items-center rounded-md border px-1.5 py-0.5 font-mono text-[10px] font-medium"
                             :class="toneBadgeClasses(summary.form_zone.tone)"
                         >
                             {{ summary.form_zone.label }}
+                        </span>
+                        <span
+                            class="font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
+                        >
+                            Yesterday's CTL − ATL
                         </span>
                     </div>
                 </div>
@@ -1402,21 +1428,37 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                                     projectionMode !== 'off' &&
                                     activeProjectedPeakDate
                                 "
+                                :title="`Highest projected TSB within the next ${filters.projection_days} days`"
                                 class="inline-flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-sky-700 dark:text-sky-300"
                             >
                                 <CalendarClock class="size-3" />
                                 <span>
-                                    Peak Form (TSB ≥ +5):
+                                    Peak form:
                                     {{
                                         formatShortDate(activeProjectedPeakDate)
                                     }}
+                                    <template
+                                        v-if="activeProjectedPeakTsb !== null"
+                                    >
+                                        (TSB
+                                        {{
+                                            formatSigned(
+                                                activeProjectedPeakTsb,
+                                                1,
+                                            )
+                                        }})
+                                    </template>
                                 </span>
                             </span>
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
                             42-day fitness (CTL), 7-day fatigue (ATL), and form
                             (TSB) balance.
-                            <span v-if="projectionMode === 'maintenance'">
+                            <span v-if="!isViewingToday">
+                                Projections are shown only when the window ends
+                                today.
+                            </span>
+                            <span v-else-if="projectionMode === 'maintenance'">
                                 Taper assumes
                                 {{
                                     formatNumber(
@@ -1431,7 +1473,10 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
 
                     <div class="flex flex-wrap items-center gap-2.5">
                         <!-- Projection Mode Toggle -->
-                        <div class="flex items-center gap-1.5">
+                        <div
+                            v-if="isViewingToday"
+                            class="flex items-center gap-1.5"
+                        >
                             <span
                                 class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
                             >
@@ -1528,7 +1573,12 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     <span
                         class="font-mono text-[10px] font-semibold tracking-wider uppercase"
                     >
-                        Current Form · {{ summary.form_zone.label }}
+                        {{
+                            isViewingToday
+                                ? 'Current Form'
+                                : `Form on ${formatShortDate(dateWindow.end)}`
+                        }}
+                        · {{ summary.form_zone.label }}
                     </span>
                     <span class="opacity-40">—</span>
                     <span>{{ summary.form_zone.description }}</span>
@@ -1648,7 +1698,7 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                         <div
                             v-if="summary.load_source_mix.total > 0"
                             class="inline-flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200/90 bg-[#f7f7f5] px-2.5 py-1 font-mono text-[10px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300"
-                            title="Share of sessions in window by load calculation source"
+                            title="Share of sessions in window by load calculation source. Garmin Load is used 1:1 as TSS; HR-only sessions are converted to TSS-equivalent points (1 h at threshold ≈ 100)."
                         >
                             <span class="inline-flex items-center gap-1">
                                 <span

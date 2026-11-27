@@ -66,7 +66,7 @@ it('resolves activity load with strict TSS > Garmin Load > HR-zone/Banister TRIM
         'hr_zone_3_seconds' => 3600.0,
     ]);
 
-    // 3. No TSS, no Garmin Load, has HR zones (60 min in Z3 = 60 * 2.4 = 144 raw TRIMP * 0.55 = 79.2)
+    // 3. No TSS, no Garmin Load, has HR zones -> per-zone hrTSS rate (1 h in Z3 = 71.0)
     $hrZoneRun = Activity::factory()->create([
         'name' => 'HR Zone Run',
         'started_at_local' => CarbonImmutable::parse('2026-11-24 07:00:00'),
@@ -81,7 +81,7 @@ it('resolves activity load with strict TSS > Garmin Load > HR-zone/Banister TRIM
 
     // 4. No TSS, no Garmin Load, no HR zones -> Banister fallback from duration + avg_hr
     //    60 min, avg_hr = 155, HRR = (155 - 50) / (190 - 50) = 0.75
-    //    Banister = 60 * 0.75 * 0.64 * exp(1.92 * 0.75) = 121.55 -> round(121.6 * 0.55, 1) = 66.9
+    //    Banister = 60 * 0.75 * 0.64 * exp(1.92 * 0.75) = 121.55 -> round(121.6 * 0.6, 1) = 73.0
     $banisterHike = Activity::factory()->hiking()->create([
         'name' => 'HR-Only Hike',
         'started_at_local' => CarbonImmutable::parse('2026-11-23 07:00:00'),
@@ -104,9 +104,9 @@ it('resolves activity load with strict TSS > Garmin Load > HR-zone/Banister TRIM
         ->and($sessionsById[$tssRide->id]['load_source'])->toBe('tss')
         ->and($sessionsById[$garminRun->id]['load'])->toBe(88.5)
         ->and($sessionsById[$garminRun->id]['load_source'])->toBe('garmin_load')
-        ->and($sessionsById[$hrZoneRun->id]['load'])->toBe(79.2)
+        ->and($sessionsById[$hrZoneRun->id]['load'])->toBe(71.0)
         ->and($sessionsById[$hrZoneRun->id]['load_source'])->toBe('trimp')
-        ->and($sessionsById[$banisterHike->id]['load'])->toBe(66.9)
+        ->and($sessionsById[$banisterHike->id]['load'])->toBe(73.0)
         ->and($sessionsById[$banisterHike->id]['load_source'])->toBe('trimp');
 
     expect($payload['summary']['load_source_mix'])->toBe([
@@ -120,9 +120,9 @@ it('resolves activity load with strict TSS > Garmin Load > HR-zone/Banister TRIM
     ]);
 });
 
-it('warms up EWMA for 84 days prior to the window and computes CTL, ATL, TSB, ACWR, and 7-day ramp rate accurately', function () {
-    // 10-day custom window: 2026-11-17 to 2026-11-26.
-    // Seed constant 100 daily load for all 84 warmup days (2026-08-25 .. 2026-11-16)
+it('computes CTL, ATL, TSB, ACWR, and 7-day ramp rate from history that starts before the window', function () {
+    // 10-day custom window: 2026-11-17 to 2026-11-26, with training history starting 84 days earlier.
+    // Seed constant 100 daily load for the 84 days before the window (2026-08-25 .. 2026-11-16)
     // plus the first 3 visible days (2026-11-17 .. 2026-11-19), then 160/day for the last 7 visible days (2026-11-20 .. 2026-11-26).
     $warmupStart = CarbonImmutable::parse('2026-08-25', 'Pacific/Auckland');
     $end = CarbonImmutable::parse('2026-11-26', 'Pacific/Auckland');
@@ -151,7 +151,7 @@ it('warms up EWMA for 84 days prior to the window and computes CTL, ATL, TSB, AC
 
     expect($payload['daily'])->toHaveCount(10);
 
-    // After 84 days of 100/day warmup, CTL is already ~86.8 and ATL is ~100.0 on day 1 of the visible window!
+    // After 84 days of 100/day, CTL is ~86.8 and ATL is ~100.0 on day 1 of the visible window.
     // Exact check: 100 * (1 - (41/42)^84) = 86.79 -> after day 1 (85th day) CTL = 87.1, ATL = 100.0, TSB entering day 1 = 86.79 - 100.0 = -13.2
     $day1 = $payload['daily'][0];
     $lastDay = $payload['daily'][9];
@@ -295,6 +295,14 @@ it('isolates health overlays strictly through HealthSourceRegistry primary provi
         'sleep_score' => 71,
     ]);
 
+    // A weekly average must not stand in for a missing nightly reading
+    HrvRecord::factory()->create([
+        'provider' => 'apple_health',
+        'calendar_date' => '2026-11-25',
+        'last_night_avg' => null,
+        'weekly_avg' => 44,
+    ]);
+
     app(HealthSourceRegistry::class)->saveConfig([
         'hrv' => 'apple_health',
         'daily_metrics' => 'garmin_personal',
@@ -303,8 +311,10 @@ it('isolates health overlays strictly through HealthSourceRegistry primary provi
 
     $payload = app(TrainingLoadService::class)->build(range: '90d');
     $today = $payload['daily'][count($payload['daily']) - 1];
+    $yesterday = $payload['daily'][count($payload['daily']) - 2];
 
-    expect($today['hrv'])->toBe(41)
+    expect($yesterday['hrv'])->toBeNull()
+        ->and($today['hrv'])->toBe(41)
         ->and($today['resting_hr'])->toBe(48)
         ->and($today['sleep_score'])->toBe(71)
         ->and($payload['health_availability'])->toBe([
@@ -364,4 +374,122 @@ it('projects rest and maintenance taper curves with clamped horizon and finds pr
         ->and($clampedLow['projections']['rest'])->toHaveCount(7)
         ->and($clampedHigh['filters']['projection_days'])->toBe(21)
         ->and($clampedHigh['projections']['rest'])->toHaveCount(21);
+
+    // Peak form is the highest projected TSB, not the first day it crosses +5
+    $restPoints = collect($clampedHigh['projections']['rest']);
+    $firstFreshDate = $restPoints->first(fn (array $point) => $point['tsb'] >= 5.0)['date'];
+    $highestTsbDate = $restPoints->sortByDesc('tsb')->first()['date'];
+
+    expect($clampedHigh['summary']['projected_peak_dates']['rest'])->toBe($highestTsbDate)
+        ->and($highestTsbDate)->toBeGreaterThan($firstFreshDate)
+        ->and($highestTsbDate)->not->toBe($restPoints->last()['date']);
+});
+
+it('reports the same CTL and TSB for a date regardless of the selected range when history predates the window', function () {
+    // 400 days of steady 100/day: true CTL ≈ ATL ≈ 100 and TSB ≈ 0 well before the visible windows.
+    $cursor = CarbonImmutable::parse('2025-10-23', 'Pacific/Auckland');
+    $end = CarbonImmutable::parse('2026-11-26', 'Pacific/Auckland');
+
+    while ($cursor->lessThanOrEqualTo($end)) {
+        Activity::factory()->create([
+            'started_at_local' => $cursor->setTime(8, 0),
+            'tss' => 100.0,
+            'training_load' => null,
+        ]);
+
+        $cursor = $cursor->addDay();
+    }
+
+    $service = app(TrainingLoadService::class);
+    $dayIn = fn (array $payload) => collect($payload['daily'])->firstWhere('date', '2026-09-01');
+
+    $quarter = $dayIn($service->build(range: '90d'));
+    $halfYear = $dayIn($service->build(range: '180d'));
+    $year = $dayIn($service->build(range: '1y'));
+
+    expect($quarter['ctl'])->toBeGreaterThan(99.5)
+        ->and($quarter['ctl'])->toEqualWithDelta($year['ctl'], 0.3)
+        ->and($halfYear['ctl'])->toEqualWithDelta($year['ctl'], 0.3)
+        ->and($quarter['tsb'])->toEqualWithDelta(0.0, 0.5)
+        ->and($quarter['tsb'])->toEqualWithDelta($year['tsb'], 0.3);
+});
+
+it('decays CTL and ATL across rest days after a single session', function () {
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-16 08:00:00'),
+        'tss' => 100.0,
+        'training_load' => null,
+    ]);
+
+    $payload = app(TrainingLoadService::class)->build(range: '90d');
+    $restDays = collect($payload['daily'])->filter(fn (array $day) => $day['date'] > '2026-11-16')->values();
+    $today = $restDays->last();
+
+    // Session day: CTL = 100/42 = 2.38, ATL = 100/7 = 14.29; then 10 rest days of pure decay.
+    // CTL = 2.381 × (41/42)^10 = 1.9, ATL = 14.286 × (6/7)^10 = 3.1, TSB = CTL(11-25) − ATL(11-25) = 1.917 − 3.568 = −1.7
+    expect($restDays)->toHaveCount(10)
+        ->and($restDays->pluck('load')->unique()->all())->toBe([0.0])
+        ->and($restDays->pluck('atl')->all())->toBe($restDays->pluck('atl')->sortDesc()->values()->all())
+        ->and($today['ctl'])->toBe(1.9)
+        ->and($today['atl'])->toBe(3.1)
+        ->and($today['tsb'])->toBe(-1.7);
+});
+
+it('clamps a custom range that extends past today', function () {
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-20 08:00:00'),
+        'tss' => 80.0,
+        'training_load' => null,
+    ]);
+
+    $service = app(TrainingLoadService::class);
+    $payload = $service->build(range: 'custom', from: '2026-11-01', to: '2027-01-15');
+
+    expect($payload['dateWindow']['to'])->toBe('2026-11-26')
+        ->and($payload['dateWindow']['end'])->toBe('2026-11-26')
+        ->and($payload['daily'])->toHaveCount(26)
+        ->and($payload['daily'][25]['date'])->toBe('2026-11-26')
+        ->and($payload['projections']['rest'][0]['date'])->toBe('2026-11-27');
+
+    $futureOnly = $service->build(range: 'custom', from: '2027-01-01', to: '2027-02-01');
+
+    expect($futureOnly['daily'])->toHaveCount(1)
+        ->and($futureOnly['daily'][0]['date'])->toBe('2026-11-26');
+});
+
+it('omits projections when the window ends before today', function () {
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-08-20 08:00:00'),
+        'tss' => 120.0,
+        'training_load' => null,
+    ]);
+
+    $service = app(TrainingLoadService::class);
+    $steppedBack = $service->build(range: '90d', end: '2026-09-01');
+    $pastCustom = $service->build(range: 'custom', from: '2026-08-01', to: '2026-09-01');
+
+    expect($steppedBack['dateWindow']['isLatest'])->toBeFalse()
+        ->and($steppedBack['daily'][count($steppedBack['daily']) - 1]['date'])->toBe('2026-09-01')
+        ->and($steppedBack['projections'])->toBe(['rest' => [], 'maintenance' => []])
+        ->and($steppedBack['summary']['projected_peak_date'])->toBeNull()
+        ->and($pastCustom['projections'])->toBe(['rest' => [], 'maintenance' => []]);
+});
+
+it('caps the all-time range to five years and says so in the label', function () {
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2019-06-01 08:00:00'),
+        'tss' => 50.0,
+        'training_load' => null,
+    ]);
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-11-20 08:00:00'),
+        'tss' => 50.0,
+        'training_load' => null,
+    ]);
+
+    $payload = app(TrainingLoadService::class)->build(range: 'all');
+
+    expect($payload['daily'])->toHaveCount(1826)
+        ->and($payload['daily'][0]['date'])->toBe('2021-11-27')
+        ->and($payload['dateWindow']['label'])->toBe('All time · last 5 years');
 });

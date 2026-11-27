@@ -18,8 +18,11 @@ use Illuminate\Database\Eloquent\Builder;
 /**
  * Computes unified cross-sport Performance Management Chart (PMC) metrics — CTL, ATL, TSB,
  * ACWR, 7-day ramp rate — with transparent load source priority (TSS > Garmin Load > TRIMP),
- * 84-day EWMA warmup, health overlays, 12-week cross-sport load breakdown, and 7–21 day
+ * a 6×τ(CTL) EWMA seed period, health overlays, 12-week cross-sport load breakdown, and 7–21 day
  * taper / race-form projections.
+ *
+ * Form (TSB) follows the TrainingPeaks convention: the TSB reported for a day is the form
+ * entering that day, i.e. the previous day's CTL minus the previous day's ATL.
  *
  * @phpstan-type DateWindow array{
  *     range: string,
@@ -129,7 +132,11 @@ use Illuminate\Database\Eloquent\Builder;
  */
 class TrainingLoadService
 {
-    private const int WARMUP_DAYS = 84;
+    /**
+     * EWMA seed period before the first visible day: 6 × τ(CTL). Any load older than this
+     * contributes < 0.3% to CTL, so values for a given date don't depend on the selected range.
+     */
+    private const int WARMUP_DAYS = 252;
 
     private const float CTL_TIME_CONSTANT = 42.0;
 
@@ -137,7 +144,28 @@ class TrainingLoadService
 
     private const float ACWR_MIN_CTL = 5.0;
 
-    private const float TRIMP_TO_TSS_SCALE = 0.55;
+    /**
+     * hrTSS-equivalent points per hour spent in each HR zone: 100 × IF², with IF taken as the
+     * zone-midpoint heart rate over lactate threshold HR (assumed ≈ 89% of max HR, Garmin
+     * %max zones). One hour at threshold ≈ 100, matching the TSS scale.
+     *
+     * @var array<int, float>
+     */
+    private const array ZONE_TSS_PER_HOUR = [
+        1 => 38.0,
+        2 => 53.0,
+        3 => 71.0,
+        4 => 91.0,
+        5 => 114.0,
+    ];
+
+    /**
+     * Scales Banister TRIMP (avg-HR fallback) to TSS-equivalent points. Anchored so one hour at
+     * lactate threshold (≈ 0.85 heart-rate reserve) — Banister ≈ 167 — scores ≈ 100.
+     */
+    private const float BANISTER_TRIMP_TO_TSS_SCALE = 0.6;
+
+    private const float FRESH_TSB_THRESHOLD = 5.0;
 
     private const int WEEKLY_BREAKDOWN_WEEKS = 12;
 
@@ -182,8 +210,12 @@ class TrainingLoadService
         $window = $this->resolveWindow($range, $end, $from, $to, $today);
         $baseQuery = $this->sports->applyScope(Activity::query(), $normalizedSport);
 
-        [$outputStart, $outputEnd] = $this->resolveOutputBounds($window, $baseQuery, $today, $timezone);
+        [$outputStart, $outputEnd, $isStartCapped] = $this->resolveOutputBounds($window, $baseQuery, $today, $timezone);
         $availableSports = $this->sports->filterableSports();
+
+        if ($isStartCapped) {
+            $window['label'] .= ' · last 5 years';
+        }
 
         if ($outputStart === null) {
             return $this->emptyPayload(
@@ -373,10 +405,13 @@ class TrainingLoadService
         $currentAcwr = $latestDay['acwr'] ?? null;
         $currentRampRate = $latestDay['ramp_rate'] ?? 0.0;
 
-        $restProjection = $hasLoadedActivity
+        // Projections only make sense forward from today; a stepped-back window already has real data after its end.
+        $canProject = $hasLoadedActivity && $outputEnd->equalTo($today);
+
+        $restProjection = $canProject
             ? $this->buildProjection($outputEnd, $ctl, $atl, 0.0, $clampedProjectionDays)
             : [];
-        $maintenanceProjection = $hasLoadedActivity
+        $maintenanceProjection = $canProject
             ? $this->buildProjection($outputEnd, $ctl, $atl, $maintenanceDailyLoad, $clampedProjectionDays)
             : [];
 
@@ -446,8 +481,10 @@ class TrainingLoadService
     /**
      * Resolve normalized load for a single activity using strict priority:
      * 1. TSS (> 0) -> 'tss'
-     * 2. Garmin Exercise Load (> 0) -> 'garmin_load'
-     * 3. HR-zone / Banister TRIMP scaled to TSS-equivalent points -> 'trimp'
+     * 2. Garmin Exercise Load (> 0) -> 'garmin_load', used 1:1 as TSS-equivalent points (no
+     *    published conversion exists; Garmin's EPOC-based load tends to read higher for hard sessions)
+     * 3. HR-derived load -> 'trimp': per-zone hrTSS rates when HR-zone time exists
+     *    (see ZONE_TSS_PER_HOUR), otherwise Banister TRIMP from avg HR scaled by BANISTER_TRIMP_TO_TSS_SCALE
      *
      * @return array{load: float, source: 'tss'|'garmin_load'|'trimp'}|null
      */
@@ -467,16 +504,51 @@ class TrainingLoadService
             ];
         }
 
+        $zoneLoad = $this->zoneHeartRateLoad($activity);
+
+        if ($zoneLoad !== null) {
+            return [
+                'load' => round($zoneLoad, 1),
+                'source' => 'trimp',
+            ];
+        }
+
         $rawTrimp = $this->effortService->calculateTrimp($activity, $defaultMaxHr, $defaultRestingHr);
 
         if ($rawTrimp !== null && $rawTrimp > 0.0) {
             return [
-                'load' => round($rawTrimp * self::TRIMP_TO_TSS_SCALE, 1),
+                'load' => round($rawTrimp * self::BANISTER_TRIMP_TO_TSS_SCALE, 1),
                 'source' => 'trimp',
             ];
         }
 
         return null;
+    }
+
+    /**
+     * TSS-equivalent load from time in HR zones, or null when the activity has no zone data.
+     */
+    private function zoneHeartRateLoad(Activity $activity): ?float
+    {
+        $zoneSeconds = [
+            1 => $activity->hr_zone_1_seconds ?? 0.0,
+            2 => $activity->hr_zone_2_seconds ?? 0.0,
+            3 => $activity->hr_zone_3_seconds ?? 0.0,
+            4 => $activity->hr_zone_4_seconds ?? 0.0,
+            5 => $activity->hr_zone_5_seconds ?? 0.0,
+        ];
+
+        if (array_sum($zoneSeconds) <= 0.0) {
+            return null;
+        }
+
+        $load = 0.0;
+
+        foreach ($zoneSeconds as $zone => $seconds) {
+            $load += ($seconds / 3600.0) * self::ZONE_TSS_PER_HOUR[$zone];
+        }
+
+        return $load;
     }
 
     private function timezone(): string
@@ -514,67 +586,35 @@ class TrainingLoadService
         CarbonImmutable $today,
     ): array {
         $timezone = $today->getTimezone();
+        $todayStr = $today->format('Y-m-d');
         $parsedFrom = $this->dateWindows->parseDate($from, $timezone);
         $parsedTo = $this->dateWindows->parseDate($to, $timezone);
+
+        // Custom bounds can't reach past today: the "current" summary and projections are anchored on the window end.
+        $clampedFrom = $parsedFrom?->greaterThan($today) ? $todayStr : $parsedFrom?->format('Y-m-d');
+        $clampedTo = $parsedTo?->greaterThan($today) ? $todayStr : $parsedTo?->format('Y-m-d');
 
         $normalizedRange = $range !== null && in_array($range, self::VALID_RANGES, true)
             ? $range
             : (($parsedFrom !== null || $parsedTo !== null) ? 'custom' : '180d');
 
-        if ($normalizedRange === '180d') {
-            return $this->resolve180DayWindow($end, $today);
-        }
-
         return $this->dateWindows->resolveDayWindow(
             $normalizedRange,
             $end,
-            $from,
-            $to,
+            $clampedFrom,
+            $clampedTo,
             $today,
-            ['90d', '1y', 'all', 'custom'],
-            '90d',
+            self::VALID_RANGES,
+            '180d',
         );
     }
 
     /**
-     * @return DateWindow
-     */
-    private function resolve180DayWindow(?string $end, CarbonImmutable $today): array
-    {
-        $days = 180;
-        $todayDay = $today->startOfDay();
-        $parsedEnd = $this->dateWindows->parseDate($end, $todayDay->getTimezone());
-        $anchorEnd = $parsedEnd !== null && $parsedEnd->lessThan($todayDay) ? $parsedEnd : $todayDay;
-        $windowStart = $anchorEnd->subDays($days - 1);
-        $isLatest = $anchorEnd->greaterThanOrEqualTo($todayDay);
-
-        $prevEnd = $windowStart->subDay()->format('Y-m-d');
-        $nextCandidate = $anchorEnd->addDays($days);
-        $nextEnd = $isLatest
-            ? null
-            : ($nextCandidate->greaterThan($todayDay) ? $todayDay : $nextCandidate)->format('Y-m-d');
-
-        $label = $windowStart->year === $anchorEnd->year
-            ? $windowStart->format('M j').' – '.$anchorEnd->format('M j, Y')
-            : $windowStart->format('M j, Y').' – '.$anchorEnd->format('M j, Y');
-
-        return [
-            'range' => '180d',
-            'start' => $windowStart->format('Y-m-d'),
-            'end' => $anchorEnd->format('Y-m-d'),
-            'from' => null,
-            'to' => null,
-            'prevEnd' => $prevEnd,
-            'nextEnd' => $nextEnd,
-            'isLatest' => $isLatest,
-            'label' => $label,
-        ];
-    }
-
-    /**
+     * Resolve the first and last visible day; the start is capped to MAX_ALL_RANGE_DAYS before the end.
+     *
      * @param  DateWindow  $window
      * @param  Builder<Activity>  $baseQuery
-     * @return array{0: ?CarbonImmutable, 1: CarbonImmutable}
+     * @return array{0: ?CarbonImmutable, 1: CarbonImmutable, 2: bool}
      */
     private function resolveOutputBounds(
         array $window,
@@ -582,46 +622,36 @@ class TrainingLoadService
         CarbonImmutable $today,
         string $timezone,
     ): array {
-        $outputEnd = $this->dateWindows->parseDate($window['end'], $today->getTimezone()) ?? $today;
-
-        if ($window['start'] !== null) {
-            $parsedStart = $this->dateWindows->parseDate($window['start'], $today->getTimezone());
-
-            if ($parsedStart !== null) {
-                $minAllowed = $outputEnd->subDays(self::MAX_ALL_RANGE_DAYS);
-
-                if ($parsedStart->lessThan($minAllowed)) {
-                    $parsedStart = $minAllowed;
-                }
-
-                if ($parsedStart->greaterThan($outputEnd)) {
-                    $parsedStart = $outputEnd;
-                }
-
-                return [$parsedStart, $outputEnd];
-            }
-        }
-
-        $earliest = (clone $baseQuery)
-            ->where('started_at_local', '<=', $outputEnd->format('Y-m-d').' 23:59:59')
-            ->min('started_at_local');
-
-        if (! is_string($earliest) || trim($earliest) === '') {
-            return [null, $outputEnd];
-        }
-
-        $earliestDay = CarbonImmutable::parse($earliest, $timezone)->startOfDay();
+        $parsedEnd = $this->dateWindows->parseDate($window['end'], $today->getTimezone()) ?? $today;
+        $outputEnd = $parsedEnd->greaterThan($today) ? $today : $parsedEnd;
         $minAllowed = $outputEnd->subDays(self::MAX_ALL_RANGE_DAYS);
+        $parsedStart = $window['start'] !== null
+            ? $this->dateWindows->parseDate($window['start'], $today->getTimezone())
+            : null;
 
-        if ($earliestDay->lessThan($minAllowed)) {
-            $earliestDay = $minAllowed;
+        if ($parsedStart === null) {
+            $earliest = (clone $baseQuery)
+                ->where('started_at_local', '<=', $outputEnd->format('Y-m-d').' 23:59:59')
+                ->min('started_at_local');
+
+            if (! is_string($earliest) || trim($earliest) === '') {
+                return [null, $outputEnd, false];
+            }
+
+            $parsedStart = CarbonImmutable::parse($earliest, $timezone)->startOfDay();
         }
 
-        if ($earliestDay->greaterThan($outputEnd)) {
-            $earliestDay = $outputEnd;
+        $isCapped = $parsedStart->lessThan($minAllowed);
+
+        if ($isCapped) {
+            $parsedStart = $minAllowed;
         }
 
-        return [$earliestDay, $outputEnd];
+        if ($parsedStart->greaterThan($outputEnd)) {
+            $parsedStart = $outputEnd;
+        }
+
+        return [$parsedStart, $outputEnd, $isCapped];
     }
 
     /**
@@ -654,18 +684,17 @@ class TrainingLoadService
         $hrvRows = $this->healthSources
             ->applyScope(HrvRecord::query(), 'hrv')
             ->whereBetween('calendar_date', [$startDate, $endDate])
+            ->whereNotNull('last_night_avg')
             ->orderBy('calendar_date')
             ->orderBy('id')
-            ->get(['calendar_date', 'last_night_avg', 'weekly_avg']);
+            ->get(['calendar_date', 'last_night_avg']);
 
         /** @var array<string, int> $hrvByDate */
         $hrvByDate = [];
 
         foreach ($hrvRows as $row) {
-            $value = $row->last_night_avg ?? $row->weekly_avg;
-
-            if ($value !== null && $value > 0) {
-                $hrvByDate[$row->calendar_date] = $value;
+            if ($row->last_night_avg !== null && $row->last_night_avg > 0) {
+                $hrvByDate[$row->calendar_date] = $row->last_night_avg;
             }
         }
 
@@ -772,17 +801,22 @@ class TrainingLoadService
     }
 
     /**
+     * Date of the highest projected TSB within the horizon (earliest on ties), or null when form
+     * never reaches the fresh threshold.
+     *
      * @param  list<ProjectionPoint>  $projection
      */
     private function findProjectedPeakDate(array $projection): ?string
     {
+        $peak = null;
+
         foreach ($projection as $point) {
-            if ($point['tsb'] >= 5.0) {
-                return $point['date'];
+            if ($peak === null || $point['tsb'] > $peak['tsb']) {
+                $peak = $point;
             }
         }
 
-        return null;
+        return $peak !== null && $peak['tsb'] >= self::FRESH_TSB_THRESHOLD ? $peak['date'] : null;
     }
 
     /**
