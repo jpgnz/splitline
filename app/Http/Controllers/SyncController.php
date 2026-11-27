@@ -126,6 +126,63 @@ class SyncController extends Controller
         return back()->with('syncStatus', $message);
     }
 
+    public function queueEnrichments(Request $request): RedirectResponse|JsonResponse
+    {
+        $queued = $this->queueStatus->queuePendingEnrichments();
+
+        if ($queued['total'] === 0) {
+            $summary = $this->queueStatus->summary();
+            $remainingPending = array_sum($summary['pending']);
+            $message = match (true) {
+                $queued['already_queued'] > 0 => 'Pending enrichments are already queued in the background.',
+                $remainingPending > 0 => 'Remaining pending enrichments require a disabled or unconfigured provider.',
+                default => 'All activities are already enriched.',
+            };
+        } else {
+            $parts = [];
+
+            if ($queued['streams'] > 0) {
+                $parts[] = number_format($queued['streams']).' FIT '.($queued['streams'] === 1 ? 'stream' : 'streams');
+            }
+
+            if ($queued['weather'] > 0) {
+                $parts[] = number_format($queued['weather']).' weather';
+            }
+
+            if ($queued['routes'] > 0) {
+                $parts[] = number_format($queued['routes']).' '.($queued['routes'] === 1 ? 'route' : 'routes');
+            }
+
+            if ($queued['segments'] > 0) {
+                $parts[] = number_format($queued['segments']).' '.($queued['segments'] === 1 ? 'segment scan' : 'segment scans');
+            }
+
+            if ($queued['derived_metrics'] > 0) {
+                $parts[] = number_format($queued['derived_metrics']).' '.($queued['derived_metrics'] === 1 ? 'metric' : 'metrics');
+            }
+
+            if ($queued['geocoding'] > 0) {
+                $parts[] = number_format($queued['geocoding']).' '.($queued['geocoding'] === 1 ? 'place name' : 'place names');
+            }
+
+            $message = 'Queued pending enrichments: '.implode(', ', $parts).'.';
+
+            if ($queued['already_queued'] > 0) {
+                $message .= ' '.number_format($queued['already_queued']).' already queued.';
+            }
+        }
+
+        if ($request->expectsJson()) {
+            return response()->json([
+                'message' => $message,
+                'queued' => $queued,
+                'enrichment_queue' => $this->queueStatus->summary(),
+            ], $queued['total'] > 0 ? 202 : 200);
+        }
+
+        return back()->with('syncStatus', $message);
+    }
+
     public function status(Request $request): JsonResponse
     {
         $runId = $request->query('run_id');
