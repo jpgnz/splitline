@@ -16,6 +16,7 @@ import type {
     YAXisComponentOption,
 } from 'echarts';
 import { computed, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import DateRangeControl, {
     type DateRangePreset,
@@ -1121,16 +1122,6 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
         >
             <div class="space-y-1">
-                <div class="flex items-center gap-2">
-                    <span
-                        class="inline-flex size-2 rounded-full bg-emerald-500"
-                    />
-                    <span
-                        class="font-mono text-[10px] font-medium tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
-                    >
-                        Performance Management
-                    </span>
-                </div>
                 <h1
                     class="text-2xl font-semibold tracking-tight text-zinc-950 sm:text-3xl dark:text-zinc-50"
                 >
@@ -1250,7 +1241,7 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
                     <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-1.5">
                             <span
                                 class="size-1.5 rounded-full bg-emerald-500"
                             />
@@ -1259,6 +1250,7 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                             >
                                 Fitness (CTL)
                             </p>
+                            <InfoPopover topic="ctl" />
                         </div>
                         <TrendingUp
                             class="size-3.5 text-zinc-400 dark:text-zinc-500"
@@ -1270,10 +1262,14 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                         {{ formatNumber(summary.ctl, 1) }}
                     </p>
                     <p
-                        class="mt-1 font-mono text-[11px] tabular-nums"
+                        class="mt-1 flex items-center gap-1 font-mono text-[11px] tabular-nums"
                         :class="rampToneClass"
                     >
-                        {{ formatSigned(summary.ramp_rate_7d, 1) }} / 7d ramp
+                        <span>
+                            {{ formatSigned(summary.ramp_rate_7d, 1) }} / 7d
+                            ramp
+                        </span>
+                        <InfoPopover topic="ramp_rate" />
                     </p>
                 </div>
 
@@ -1282,13 +1278,14 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
                     <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-1.5">
                             <span class="size-1.5 rounded-full bg-amber-500" />
                             <p
                                 class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Fatigue (ATL)
                             </p>
+                            <InfoPopover topic="atl" />
                         </div>
                         <Activity
                             class="size-3.5 text-zinc-400 dark:text-zinc-500"
@@ -1311,13 +1308,14 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
                     <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-1.5">
                             <span class="size-1.5 rounded-full bg-sky-500" />
                             <p
                                 class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 Form (TSB)
                             </p>
+                            <InfoPopover topic="tsb" />
                         </div>
                         <Sparkles
                             class="size-3.5 text-zinc-400 dark:text-zinc-500"
@@ -1348,13 +1346,14 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     class="rounded-xl border border-zinc-200/90 bg-white p-4 dark:border-zinc-800/90 dark:bg-[#141417]"
                 >
                     <div class="flex items-center justify-between gap-2">
-                        <div class="flex items-center gap-2">
+                        <div class="flex items-center gap-1.5">
                             <span class="size-1.5 rounded-full bg-indigo-500" />
                             <p
                                 class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                             >
                                 ACWR
                             </p>
+                            <InfoPopover topic="acwr" />
                         </div>
                         <Gauge
                             class="size-3.5 text-zinc-400 dark:text-zinc-500"
@@ -1428,7 +1427,6 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                                     projectionMode !== 'off' &&
                                     activeProjectedPeakDate
                                 "
-                                :title="`Highest projected TSB within the next ${filters.projection_days} days`"
                                 class="inline-flex items-center gap-1.5 rounded-md border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 font-mono text-[10px] font-medium text-sky-700 dark:text-sky-300"
                             >
                                 <CalendarClock class="size-3" />
@@ -1449,6 +1447,17 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                                         }})
                                     </template>
                                 </span>
+                                <InfoPopover
+                                    topic="taper_projections"
+                                    label="More info about Taper Projections and Peak Form"
+                                >
+                                    <p
+                                        class="rounded-md border border-zinc-200/70 bg-zinc-50 px-2 py-1 font-mono text-[10.5px] text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/80 dark:text-zinc-300"
+                                    >
+                                        Highest projected TSB within the next
+                                        {{ filters.projection_days }} days.
+                                    </p>
+                                </InfoPopover>
                             </span>
                         </div>
                         <p class="text-xs text-zinc-500 dark:text-zinc-400">
@@ -1478,9 +1487,10 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                             class="flex items-center gap-1.5"
                         >
                             <span
-                                class="font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
+                                class="inline-flex items-center gap-1 font-mono text-[10px] tracking-wider text-zinc-400 uppercase dark:text-zinc-500"
                             >
-                                Taper
+                                <span>Taper</span>
+                                <InfoPopover topic="taper_projections" />
                             </span>
                             <div
                                 class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
@@ -1628,9 +1638,16 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                     >
                         <div class="space-y-0.5">
                             <h2
-                                class="text-sm font-semibold text-zinc-950 dark:text-zinc-50"
+                                class="flex items-center gap-1.5 text-sm font-semibold text-zinc-950 dark:text-zinc-50"
                             >
-                                ACWR &amp; Ramp Rate
+                                <span>ACWR &amp; Ramp Rate</span>
+                                <InfoPopover
+                                    :topic="
+                                        acwrView === 'acwr'
+                                            ? 'acwr'
+                                            : 'ramp_rate'
+                                    "
+                                />
                             </h2>
                             <p class="text-xs text-zinc-500 dark:text-zinc-400">
                                 Sweet spot 0.8–1.3 · Caution 1.3–1.5 · High risk
@@ -1698,7 +1715,6 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                         <div
                             v-if="summary.load_source_mix.total > 0"
                             class="inline-flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200/90 bg-[#f7f7f5] px-2.5 py-1 font-mono text-[10px] text-zinc-600 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300"
-                            title="Share of sessions in window by load calculation source. Garmin Load is used 1:1 as TSS; HR-only sessions are converted to TSS-equivalent points (1 h at threshold ≈ 100)."
                         >
                             <span class="inline-flex items-center gap-1">
                                 <span
@@ -1742,6 +1758,7 @@ const weeklySportChartOption = computed<EChartsOption>(() => {
                                     )
                                 }}%
                             </span>
+                            <InfoPopover topic="load_sources" />
                         </div>
                     </div>
 

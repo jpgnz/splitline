@@ -13,6 +13,7 @@ import {
 } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { toast } from 'vue-sonner';
+import InfoPopover from '@/components/InfoPopover.vue';
 import RouteMiniMap from '@/components/routes/RouteMiniMap.vue';
 import {
     formatDurationClock,
@@ -752,21 +753,27 @@ function formatDateWithYear(dateStr: string | null): string {
                             </span>
                             <span
                                 v-if="segment.fiets_score !== null"
-                                title="FIETS climb difficulty index (elevation gain, grade, and length)"
-                                class="cursor-help underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:decoration-zinc-600"
+                                class="inline-flex items-center gap-1"
                             >
-                                FIETS {{ segment.fiets_score.toFixed(1) }}
+                                <span>
+                                    FIETS {{ segment.fiets_score.toFixed(1) }}
+                                </span>
+                                <InfoPopover topic="fiets" />
                             </span>
                         </div>
                     </div>
                 </div>
 
                 <!-- PR Footer -->
-                <Link
-                    :href="showSegment.url(segment.id)"
-                    prefetch
-                    class="mt-4 flex items-center justify-between gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/80"
+                <div
+                    class="relative mt-4 flex items-center justify-between gap-2 border-t border-zinc-100 pt-3 dark:border-zinc-800/80"
                 >
+                    <Link
+                        :href="showSegment.url(segment.id)"
+                        prefetch
+                        :aria-label="`View ${segment.name} personal best`"
+                        class="absolute inset-0 rounded-md focus-visible:ring-2 focus-visible:ring-zinc-400/70 focus-visible:outline-none dark:focus-visible:ring-zinc-500/70"
+                    />
                     <div class="min-w-0">
                         <p
                             class="flex items-center gap-1 font-mono text-[10px] tracking-wider text-amber-600 uppercase dark:text-amber-400"
@@ -799,15 +806,23 @@ function formatDateWithYear(dateStr: string | null): string {
                     <div class="text-right">
                         <p
                             v-if="segment.best_vam !== null"
-                            class="font-mono text-xs font-medium text-zinc-700 tabular-nums dark:text-zinc-300"
+                            class="inline-flex items-center justify-end gap-1 font-mono text-xs font-medium text-zinc-700 tabular-nums dark:text-zinc-300"
                         >
-                            {{ formatVam(segment.best_vam) }}
+                            <span>{{ formatVam(segment.best_vam) }}</span>
+                            <span class="relative z-10 inline-flex">
+                                <InfoPopover topic="vam" />
+                            </span>
                         </p>
                         <p
                             v-else-if="segment.best_w_per_kg !== null"
-                            class="font-mono text-xs font-medium text-zinc-700 tabular-nums dark:text-zinc-300"
+                            class="inline-flex items-center justify-end gap-1 font-mono text-xs font-medium text-zinc-700 tabular-nums dark:text-zinc-300"
                         >
-                            {{ segment.best_w_per_kg.toFixed(2) }} W/kg
+                            <span>
+                                {{ segment.best_w_per_kg.toFixed(2) }} W/kg
+                            </span>
+                            <span class="relative z-10 inline-flex">
+                                <InfoPopover topic="w_per_kg" />
+                            </span>
                         </p>
                         <p
                             class="mt-0.5 font-mono text-[10px] text-zinc-500 dark:text-zinc-400"
@@ -819,7 +834,7 @@ function formatDateWithYear(dateStr: string | null): string {
                             }}
                         </p>
                     </div>
-                </Link>
+                </div>
             </article>
         </section>
 

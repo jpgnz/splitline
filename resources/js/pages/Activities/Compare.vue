@@ -19,6 +19,7 @@ import {
 } from '@lucide/vue';
 import type { EChartsOption } from 'echarts';
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import InfoPopover from '@/components/InfoPopover.vue';
 import BaseChart from '@/components/charts/BaseChart.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
@@ -1694,7 +1695,12 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                                 <td
                                     class="px-5 py-3 text-zinc-500 dark:text-zinc-400"
                                 >
-                                    Grade-Adjusted
+                                    <span
+                                        class="inline-flex items-center gap-1"
+                                    >
+                                        <span>Grade-Adjusted</span>
+                                        <InfoPopover topic="gap" />
+                                    </span>
                                 </td>
                                 <td
                                     v-for="(activity, index) in activities"
@@ -2129,11 +2135,14 @@ function formatSplitPaceOrSpeed(entry: AlignedSplitEntry): string {
                                 <ArrowLeftRight
                                     class="size-3.5 text-emerald-500"
                                 />
-                                {{
-                                    aligned.mode === 'distance'
-                                        ? 'Ghost Pacer — Elapsed Time Gap vs Baseline'
-                                        : 'Ghost Pacer — Distance Gap vs Baseline'
-                                }}
+                                <span>
+                                    {{
+                                        aligned.mode === 'distance'
+                                            ? 'Ghost Pacer — Elapsed Time Gap vs Baseline'
+                                            : 'Ghost Pacer — Distance Gap vs Baseline'
+                                    }}
+                                </span>
+                                <InfoPopover topic="ghost_pacer" />
                             </h2>
                             <p
                                 class="mt-0.5 font-mono text-[11px] text-zinc-500 dark:text-zinc-400"

@@ -653,10 +653,10 @@ async function downloadYearCardPng(): Promise<void> {
             />
 
             <div
-                class="relative flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between"
+                class="relative grid grid-cols-1 gap-5 lg:grid-cols-[24rem_minmax(0,1fr)] lg:items-start"
             >
-                <div class="space-y-2">
-                    <div class="flex flex-wrap items-center gap-2">
+                <div class="min-w-0 space-y-2">
+                    <div class="flex min-h-5 flex-wrap items-center gap-2">
                         <span
                             class="inline-flex items-center gap-1.5 font-mono text-[11px] font-medium tracking-widest text-emerald-600 uppercase dark:text-emerald-400"
                         >
@@ -690,7 +690,7 @@ async function downloadYearCardPng(): Promise<void> {
                 </div>
 
                 <!-- Year Pills + PNG Export -->
-                <div class="flex flex-wrap items-center gap-2.5">
+                <div class="flex flex-wrap items-center gap-2.5 lg:justify-end">
                     <div
                         class="inline-flex flex-wrap items-center gap-1 rounded-xl border border-zinc-200/90 bg-zinc-50/90 p-1 dark:border-zinc-800 dark:bg-zinc-900/70"
                         role="navigation"

@@ -35,6 +35,7 @@ import {
     watch,
 } from 'vue';
 import { toast } from 'vue-sonner';
+import InfoPopover from '@/components/InfoPopover.vue';
 import DateRangeControl, {
     type DateRangePreset,
     type DateWindowMeta,
@@ -1551,11 +1552,11 @@ onBeforeUnmount(() => {
                     <!-- Explorer z14 Grid Toggle -->
                     <div class="flex flex-wrap items-center gap-1.5">
                         <span
-                            title="Explorer Tiles (z14 ~2.4 km squares): map grid squares visited by your routes"
-                            class="inline-flex cursor-help items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
+                            class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                         >
                             <Grid2x2 class="size-3" />
                             <span>Explorer</span>
+                            <InfoPopover topic="explorer_tiles" />
                         </span>
                         <div
                             class="inline-flex rounded-lg border border-zinc-200/90 bg-[#f7f7f5] p-0.5 dark:border-zinc-800 dark:bg-zinc-900/60"
@@ -1577,7 +1578,6 @@ onBeforeUnmount(() => {
                             <button
                                 type="button"
                                 :disabled="isLoadingExplorer"
-                                title="Overlay lifetime z14 OSM Explorer tiles from all outdoor activities (ignores filters), with Max Cluster and Max Square"
                                 class="rounded-md px-2 py-1 font-mono text-[11px] font-medium transition-colors disabled:cursor-wait"
                                 :class="
                                     showExplorerTiles
@@ -1699,16 +1699,15 @@ onBeforeUnmount(() => {
                         <div
                             v-else-if="explorerSummary"
                             class="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-zinc-200/80 bg-[#f7f7f5]/80 px-2.5 py-1 dark:border-zinc-800/80 dark:bg-zinc-900/50"
-                            title="Lifetime totals across all outdoor activities, independent of the sport and date filters"
                         >
-                            <div
-                                class="flex cursor-help items-baseline gap-1.5"
-                                title="Explorer Tiles (z14 ~2.4 km squares): unique map squares crossed by your routes"
-                            >
+                            <div class="flex items-center gap-1.5">
                                 <span
-                                    class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:text-zinc-400 dark:decoration-zinc-600"
+                                    class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                                 >
-                                    Lifetime Tiles
+                                    <span>Lifetime Tiles</span>
+                                    <InfoPopover
+                                        topic="explorer_lifetime_tiles"
+                                    />
                                 </span>
                                 <span
                                     class="font-mono text-xs font-semibold text-emerald-700 tabular-nums dark:text-emerald-400"
@@ -1722,14 +1721,12 @@ onBeforeUnmount(() => {
                                 </span>
                             </div>
 
-                            <div
-                                class="flex cursor-help items-baseline gap-1.5"
-                                title="Max Square: largest solid N×N block of visited Explorer Tiles"
-                            >
+                            <div class="flex items-center gap-1.5">
                                 <span
-                                    class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:text-zinc-400 dark:decoration-zinc-600"
+                                    class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                                 >
-                                    Max Square
+                                    <span>Max Square</span>
+                                    <InfoPopover topic="explorer_max_square" />
                                 </span>
                                 <span
                                     class="font-mono text-xs font-semibold text-amber-700 tabular-nums dark:text-amber-400"
@@ -1740,14 +1737,12 @@ onBeforeUnmount(() => {
                                 </span>
                             </div>
 
-                            <div
-                                class="flex cursor-help items-baseline gap-1.5"
-                                title="Max Cluster: largest connected group of interior Explorer Tiles surrounded on all 4 sides"
-                            >
+                            <div class="flex items-center gap-1.5">
                                 <span
-                                    class="font-mono text-[10px] tracking-widest text-zinc-500 uppercase underline decoration-zinc-300 decoration-dotted underline-offset-2 dark:text-zinc-400 dark:decoration-zinc-600"
+                                    class="inline-flex items-center gap-1 font-mono text-[10px] tracking-widest text-zinc-500 uppercase dark:text-zinc-400"
                                 >
-                                    Max Cluster
+                                    <span>Max Cluster</span>
+                                    <InfoPopover topic="explorer_max_cluster" />
                                 </span>
                                 <span
                                     class="font-mono text-xs font-semibold text-sky-700 tabular-nums dark:text-sky-400"
