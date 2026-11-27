@@ -1101,6 +1101,7 @@ class AnnualRecapService
     private function buildBestEfforts(string $yearStart, string $yearEnd): array
     {
         $yearEfforts = BestEffort::query()
+            ->whereHas('activity')
             ->with(['activity:id,name,sport_category,sport_discipline,discipline_override,started_at_local'])
             ->where('is_excluded', false)
             ->where('achieved_at', '>=', $yearStart)
@@ -1116,11 +1117,13 @@ class AnnualRecapService
         // Fastest effective_seconds per (sport, distance_key) achieved before the selected year.
         $priorRows = BestEffort::query()
             ->toBase()
-            ->selectRaw('sport, distance_key, MIN(COALESCE(override_seconds, elapsed_seconds)) as min_seconds')
-            ->where('is_excluded', false)
-            ->where('achieved_at', '<', $yearStart)
-            ->whereRaw('COALESCE(override_seconds, elapsed_seconds) > 0')
-            ->groupBy('sport', 'distance_key')
+            ->join('activities', 'activities.id', '=', 'best_efforts.activity_id')
+            ->selectRaw('best_efforts.sport, best_efforts.distance_key, MIN(COALESCE(best_efforts.override_seconds, best_efforts.elapsed_seconds)) as min_seconds')
+            ->whereNull('activities.excluded_at')
+            ->where('best_efforts.is_excluded', false)
+            ->where('best_efforts.achieved_at', '<', $yearStart)
+            ->whereRaw('COALESCE(best_efforts.override_seconds, best_efforts.elapsed_seconds) > 0')
+            ->groupBy('best_efforts.sport', 'best_efforts.distance_key')
             ->get();
 
         /** @var array<string, float> $priorMinByPair */
@@ -1216,6 +1219,7 @@ class AnnualRecapService
             ->join('activities', 'activities.id', '=', 'activity_route_fingerprints.activity_id')
             ->join('route_clusters', 'route_clusters.id', '=', 'activity_route_fingerprints.route_cluster_id')
             ->selectRaw('activity_route_fingerprints.route_cluster_id as cluster_id, COUNT(*) as visits_in_year')
+            ->whereNull('activities.excluded_at')
             ->where('activity_route_fingerprints.is_unlinked', false)
             ->whereNotNull('activity_route_fingerprints.route_cluster_id')
             ->where('route_clusters.activity_count', '>=', 2)
@@ -1306,6 +1310,7 @@ class AnnualRecapService
     private function buildSegmentMilestones(string $yearStart, string $yearEnd): array
     {
         $yearEffortsQuery = SegmentEffort::query()
+            ->whereHas('activity')
             ->where('started_at_local', '>=', $yearStart)
             ->where('started_at_local', '<', $yearEnd);
 
@@ -1324,11 +1329,13 @@ class AnnualRecapService
         /** @var array<int, float> $bestSecondsBySegment */
         $bestSecondsBySegment = SegmentEffort::query()
             ->toBase()
-            ->selectRaw('segment_id, MIN(elapsed_seconds) as best_seconds')
-            ->where('started_at_local', '<', $yearStart)
-            ->where('elapsed_seconds', '>', 0)
-            ->whereIn('segment_id', (clone $yearEffortsQuery)->select('segment_id'))
-            ->groupBy('segment_id')
+            ->join('activities', 'activities.id', '=', 'segment_efforts.activity_id')
+            ->selectRaw('segment_efforts.segment_id, MIN(segment_efforts.elapsed_seconds) as best_seconds')
+            ->whereNull('activities.excluded_at')
+            ->where('segment_efforts.started_at_local', '<', $yearStart)
+            ->where('segment_efforts.elapsed_seconds', '>', 0)
+            ->whereIn('segment_efforts.segment_id', (clone $yearEffortsQuery)->select('segment_id'))
+            ->groupBy('segment_efforts.segment_id')
             ->pluck('best_seconds', 'segment_id')
             ->map(static fn (mixed $seconds): float => (float) $seconds)
             ->all();
@@ -1419,6 +1426,7 @@ class AnnualRecapService
                 'activities.sport_category',
                 'activities.started_at_local',
             ])
+            ->whereNull('activities.excluded_at')
             ->where('activities.started_at_local', '>=', $yearStart)
             ->where('activities.started_at_local', '<', $yearEnd)
             ->orderBy('activities.started_at_local')

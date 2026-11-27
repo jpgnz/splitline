@@ -5,6 +5,7 @@ namespace App\Services\Activities;
 use App\Models\Activity;
 use App\Models\BestEffort;
 use App\Models\HeartRateZone;
+use App\Models\WeightMeasurement;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Gear\GearService;
 use App\Services\Routes\MatchedRouteService;
@@ -223,11 +224,13 @@ class ActivityQueryService
      *         to: ?string,
      *         pr: bool,
      *         favorite: bool,
+     *         excluded: bool,
      *         view: string,
      *         month: string,
      *         sort: string,
      *         dir: string
-     *     }
+     *     },
+     *     excluded_count: int
      * }
      */
     public function list(array $filters = []): array
@@ -245,12 +248,13 @@ class ActivityQueryService
         $range = $dateWindow['range'];
         $from = $dateWindow['from'];
         $to = $dateWindow['to'];
+        $excluded = $this->normalizeBool($filters['excluded'] ?? false);
 
         $view = $this->normalizeChoice($filters['view'] ?? null, self::VALID_VIEWS, 'table');
         $sort = $this->normalizeChoice($filters['sort'] ?? null, self::VALID_SORTS, 'date');
         $dir = ($filters['dir'] ?? null) === 'asc' ? 'asc' : 'desc';
 
-        $filteredQuery = Activity::query();
+        $filteredQuery = $excluded ? Activity::onlyExcluded() : Activity::query();
         $this->applyFacetFilters($filteredQuery, $search, $sport, $pr, $favorite);
         $this->applyDateWindowFilter($filteredQuery, $dateWindow);
 
@@ -265,7 +269,7 @@ class ActivityQueryService
             ->through(fn (Activity $activity): array => $this->mapListItem($activity));
 
         $resolvedMonth = $this->resolveMonth($filters['month'] ?? null, $filteredQuery, $today, $timezone);
-        $calendar = $this->buildCalendar($resolvedMonth, $today, $search, $sport, $pr, $favorite);
+        $calendar = $this->buildCalendar($resolvedMonth, $today, $search, $sport, $pr, $favorite, $excluded);
 
         return [
             'summary' => $summary,
@@ -273,6 +277,7 @@ class ActivityQueryService
             'calendar' => $calendar,
             'dateWindow' => $dateWindow,
             'available_sports' => $this->sportRegistry()->filterableSports(),
+            'excluded_count' => Activity::onlyExcluded()->count(),
             'filters' => [
                 'search' => $search ?? '',
                 'sport' => $sport,
@@ -281,6 +286,7 @@ class ActivityQueryService
                 'to' => $range === 'custom' ? $to : null,
                 'pr' => $pr,
                 'favorite' => $favorite,
+                'excluded' => $excluded,
                 'view' => $view,
                 'month' => $resolvedMonth->format('Y-m'),
                 'sort' => $sort,
@@ -309,6 +315,8 @@ class ActivityQueryService
      *     weather: ?array<string, mixed>,
      *     derivedMetrics: ?array<string, mixed>,
      *     bestEfforts: list<array<string, mixed>>,
+     *     powerEffortRanks: array<int, int>,
+     *     athleteWeightKg: ?float,
      *     prevActivity: ?array{id: int, name: string},
      *     nextActivity: ?array{id: int, name: string},
      *     gear: array<string, mixed>,
@@ -323,20 +331,25 @@ class ActivityQueryService
         $activity->load(['stream', 'weather', 'derivedMetrics', 'bestEfforts', 'routeFingerprint.cluster.representativeActivity']);
 
         $startedAtLocal = $activity->started_at_local->format('Y-m-d H:i:s');
+        $isExcluded = $activity->isExcluded();
 
-        $prev = Activity::query()
-            ->select(['id', 'name'])
-            ->where('started_at_local', '<', $startedAtLocal)
-            ->orderByDesc('started_at_local')
-            ->orderByDesc('id')
-            ->first();
+        $prev = $isExcluded
+            ? null
+            : Activity::query()
+                ->select(['id', 'name'])
+                ->where('started_at_local', '<', $startedAtLocal)
+                ->orderByDesc('started_at_local')
+                ->orderByDesc('id')
+                ->first();
 
-        $next = Activity::query()
-            ->select(['id', 'name'])
-            ->where('started_at_local', '>', $startedAtLocal)
-            ->orderBy('started_at_local')
-            ->orderBy('id')
-            ->first();
+        $next = $isExcluded
+            ? null
+            : Activity::query()
+                ->select(['id', 'name'])
+                ->where('started_at_local', '>', $startedAtLocal)
+                ->orderBy('started_at_local')
+                ->orderBy('id')
+                ->first();
 
         $sortedEfforts = $activity->bestEfforts
             ->sortBy([
@@ -345,7 +358,9 @@ class ActivityQueryService
             ])
             ->values();
 
-        $allTimeRanks = $this->resolveBestEffortRanks(array_values($sortedEfforts->all()));
+        $allTimeRanks = $isExcluded
+            ? []
+            : $this->resolveBestEffortRanks(array_values($sortedEfforts->all()));
         $bestEfforts = [];
 
         foreach ($sortedEfforts as $effort) {
@@ -456,6 +471,8 @@ class ActivityQueryService
                 'favorite_override' => $activity->favorite_override,
                 'is_pr' => $activity->is_pr,
                 'is_manual' => $activity->is_manual,
+                'excluded_at' => $activity->excluded_at?->toIso8601String(),
+                'is_excluded' => $activity->isExcluded(),
                 'streams_synced_at' => $activity->streams_synced_at?->toIso8601String(),
             ],
             'hrZones' => $this->buildHrZones($activity, $zoneConfig),
@@ -513,6 +530,8 @@ class ActivityQueryService
                 'computed_at' => $derivedMetrics->computed_at->toIso8601String(),
             ] : null,
             'bestEfforts' => $bestEfforts,
+            'powerEffortRanks' => $this->resolvePowerEffortRanks($activity),
+            'athleteWeightKg' => $this->resolveAthleteWeightKg($activity),
             'prevActivity' => $prev !== null ? ['id' => $prev->id, 'name' => $prev->name] : null,
             'nextActivity' => $next !== null ? ['id' => $next->id, 'name' => $next->name] : null,
             'gear' => $this->gearService->forActivity($activity),
@@ -808,6 +827,8 @@ class ActivityQueryService
      *     calories: ?int,
      *     is_favorite: bool,
      *     is_pr: bool,
+     *     excluded_at: ?string,
+     *     is_excluded: bool,
      *     has_streams: bool
      * }
      */
@@ -844,6 +865,8 @@ class ActivityQueryService
             'calories' => $activity->calories,
             'is_favorite' => $activity->is_favorite,
             'is_pr' => $activity->is_pr,
+            'excluded_at' => $activity->excluded_at?->toIso8601String(),
+            'is_excluded' => $activity->isExcluded(),
             'has_streams' => $activity->streams_synced_at !== null || (bool) $activity->getAttribute('stream_exists'),
         ];
     }
@@ -925,12 +948,13 @@ class ActivityQueryService
         string $sport,
         bool $pr,
         bool $favorite,
+        bool $excluded = false,
     ): array {
         $gridStart = $monthStart->startOfWeek(CarbonInterface::MONDAY)->startOfDay();
         $gridEnd = $monthStart->endOfMonth()->endOfWeek(CarbonInterface::SUNDAY)->startOfDay();
         $todayStr = $today->format('Y-m-d');
 
-        $calendarQuery = Activity::query()
+        $calendarQuery = ($excluded ? Activity::onlyExcluded() : Activity::query())
             ->select([
                 'id',
                 'name',
@@ -1196,6 +1220,7 @@ class ActivityQueryService
         )));
 
         $allForDistances = BestEffort::query()
+            ->whereHas('activity')
             ->select(['id', 'distance_key', 'elapsed_seconds', 'override_seconds', 'achieved_at'])
             ->where('sport', $sport)
             ->where('is_excluded', false)
@@ -1236,6 +1261,104 @@ class ActivityQueryService
         }
 
         return $ranks;
+    }
+
+    /**
+     * Resolve all-time Top 3 ranks for each duration in the activity's power curve within its sport category.
+     *
+     * Ranks come from a single query that counts, per duration, the peers ahead of this activity
+     * (higher watts, ties broken by lower id) in SQL, so peer power curves are never loaded into PHP.
+     *
+     * @return array<int, int>
+     */
+    private function resolvePowerEffortRanks(Activity $activity): array
+    {
+        if ($activity->isExcluded()) {
+            return [];
+        }
+
+        $curve = $activity->power_curve;
+
+        if (! is_array($curve) || $curve === []) {
+            return [];
+        }
+
+        /** @var array<int, float> $targetDurations */
+        $targetDurations = [];
+
+        foreach ($curve as $rawSeconds => $rawWatts) {
+            if (! is_numeric($rawSeconds) || ! is_numeric($rawWatts)) {
+                continue;
+            }
+
+            $seconds = (int) $rawSeconds;
+            $watts = (float) $rawWatts;
+
+            if ($seconds > 0 && $watts > 0.0) {
+                $targetDurations[$seconds] = $watts;
+            }
+        }
+
+        if ($targetDurations === []) {
+            return [];
+        }
+
+        $rankQuery = null;
+
+        foreach ($targetDurations as $seconds => $watts) {
+            $wattsPath = '$."'.$seconds.'"';
+
+            $durationQuery = Activity::query()
+                ->where('sport_category', $activity->sport_category)
+                ->whereNotNull('power_curve')
+                ->selectRaw(
+                    'CAST(? AS INTEGER) AS seconds, SUM(CASE WHEN json_extract(power_curve, ?) > CAST(? AS REAL) OR (json_extract(power_curve, ?) = CAST(? AS REAL) AND id < ?) THEN 1 ELSE 0 END) AS ahead',
+                    [$seconds, $wattsPath, $watts, $wattsPath, $watts, $activity->id],
+                )
+                ->toBase();
+
+            $rankQuery = $rankQuery === null ? $durationQuery : $rankQuery->unionAll($durationQuery);
+        }
+
+        /** @var array<int, int> $ranks */
+        $ranks = [];
+
+        foreach ($rankQuery->get() as $row) {
+            if (! is_numeric($row->seconds) || ! is_numeric($row->ahead)) {
+                continue;
+            }
+
+            $rank = (int) $row->ahead + 1;
+
+            if ($rank <= 3) {
+                $ranks[(int) $row->seconds] = $rank;
+            }
+        }
+
+        return $ranks;
+    }
+
+    /**
+     * Resolve the athlete's latest weight in kg on or before the activity's local date.
+     */
+    private function resolveAthleteWeightKg(Activity $activity): ?float
+    {
+        $activityDate = $activity->started_at_local->format('Y-m-d');
+
+        /** @var WeightMeasurement|null $measurement */
+        $measurement = $this->healthSources()
+            ->applyScope(WeightMeasurement::query(), 'weight')
+            ->where('calendar_date', '<=', $activityDate)
+            ->orderByDesc('calendar_date')
+            ->orderByDesc('measured_at')
+            ->orderByDesc('id')
+            ->first();
+
+        if ($measurement === null || $measurement->weight_grams <= 0) {
+            return null;
+        }
+
+        return round($measurement->weight_grams / 1000.0, 2);
     }
 
     /**

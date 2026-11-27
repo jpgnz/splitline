@@ -89,7 +89,7 @@ class ImportFitCommand extends Command
 
                 $bundle = $provider->importBytes($bytes, basename($file), $timezone);
 
-                $exists = Activity::query()
+                $exists = Activity::withExcluded()
                     ->where('provider', $bundle->activity->provider)
                     ->where('external_id', $bundle->activity->externalId)
                     ->exists();
