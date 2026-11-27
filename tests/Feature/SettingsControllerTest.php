@@ -1,6 +1,7 @@
 <?php
 
 use App\Jobs\GeocodeSegmentJob;
+use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Models\Activity;
 use App\Models\Segment;
 use App\Models\SyncRun;
@@ -280,7 +281,7 @@ it('validates the sports settings update request', function () {
 });
 
 it('updates segments minimum efforts threshold, validates bounds, and queues geocoding for newly visible climbs', function () {
-    Queue::fake([GeocodeSegmentJob::class]);
+    Queue::fake([GeocodeSegmentJob::class, RefreshSubClimbFlagsJob::class]);
     config([
         'services.nominatim.enabled' => true,
         'services.nominatim.auto_sync' => true,
@@ -331,6 +332,8 @@ it('updates segments minimum efforts threshold, validates bounds, and queues geo
 
     Queue::assertPushed(GeocodeSegmentJob::class, 1);
     Queue::assertPushed(GeocodeSegmentJob::class, fn (GeocodeSegmentJob $job): bool => $job->segmentId === $threeEffortClimb->id);
+    Queue::assertPushed(RefreshSubClimbFlagsJob::class, 1);
+    Queue::assertPushed(RefreshSubClimbFlagsJob::class, fn (RefreshSubClimbFlagsJob $job): bool => $job->sportCategory === 'biking');
 
     $this->get(route('settings.index'))
         ->assertOk()

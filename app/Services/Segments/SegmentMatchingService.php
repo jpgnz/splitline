@@ -4,6 +4,7 @@ namespace App\Services\Segments;
 
 use App\Jobs\GeocodeSegmentJob;
 use App\Jobs\MatchSegmentBackfillJob;
+use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Models\Activity;
 use App\Models\ActivityStream;
 use App\Models\Segment;
@@ -95,7 +96,7 @@ class SegmentMatchingService
 
     public const float CUSTOM_MIN_DISTANCE_METERS = 100.0;
 
-    public const int SYNC_BACKFILL_LIMIT = 200;
+    public const int SYNC_BACKFILL_LIMIT = 25;
 
     public const float MOVING_SPEED_THRESHOLD_MPS = 0.5;
 
@@ -117,39 +118,32 @@ class SegmentMatchingService
 
     /**
      * Scan a single activity's stream for auto-detected climbs and passes over all overlapping segments.
-     * Always stamps `segments_scanned_at` so activities are never re-scanned infinitely.
+     * Idempotent: detections are stored once per activity, efforts for passes that no longer match are
+     * removed, and `segments_scanned_at` is always stamped so activities are never re-scanned infinitely.
+     * Newly created climbs are backfilled against earlier activities on the queue.
      *
      * @return ActivityScanSummary
      */
     public function scanActivity(Activity $activity, ?ActivityStream $stream = null): array
     {
         $now = CarbonImmutable::now('UTC');
-
-        if ($activity->is_indoor) {
-            $activity->update(['segments_scanned_at' => $now]);
-
-            return ['efforts_recorded' => 0, 'climbs_created' => 0];
-        }
-
-        $resolvedStream = $stream ?? $activity->stream()->first();
-
-        if ($resolvedStream === null || ! is_array($resolvedStream->series) || $resolvedStream->series === []) {
-            $activity->update(['segments_scanned_at' => $now]);
-
-            return ['efforts_recorded' => 0, 'climbs_created' => 0];
-        }
-
-        $rawSeries = $resolvedStream->series;
-        $points = $this->extractGnssPoints($rawSeries);
+        $resolvedStream = $activity->is_indoor ? null : ($stream ?? $activity->stream()->first());
+        $rawSeries = $resolvedStream !== null && is_array($resolvedStream->series) ? $resolvedStream->series : [];
+        $points = $rawSeries !== [] ? $this->extractGnssPoints($rawSeries) : [];
 
         if (count($points) < self::CUSTOM_MIN_GNSS_POINTS) {
+            $this->refreshDetectionCounts($this->syncActivityDetections($activity, []));
+            $this->refreshRankingsFor($this->pruneUnevaluatedEfforts($activity, []));
             $activity->update(['segments_scanned_at' => $now]);
 
             return ['efforts_recorded' => 0, 'climbs_created' => 0];
         }
 
         $climbsCreated = 0;
-        $climbsTouched = false;
+        /** @var list<int> $newClimbIds */
+        $newClimbIds = [];
+        /** @var array<int, true> $detectedSegmentIds */
+        $detectedSegmentIds = [];
         $detectedClimbs = $this->climbDetector->detect($activity, $rawSeries);
 
         foreach ($detectedClimbs as $climb) {
@@ -189,8 +183,7 @@ class SegmentMatchingService
             );
 
             if ($existingClimb !== null) {
-                $existingClimb->increment('detection_count');
-                $climbsTouched = true;
+                $detectedSegmentIds[$existingClimb->id] = true;
 
                 continue;
             }
@@ -198,7 +191,7 @@ class SegmentMatchingService
             $previewPoints = $this->simplifyForPreview($coords, self::PREVIEW_MAX_POINTS);
             $encodedPreview = HeatmapService::encodePolyline($previewPoints);
 
-            Segment::query()->create([
+            $created = Segment::query()->create([
                 'name' => $this->buildInitialClimbName($activity, $climb['distance_meters'], $climb['avg_grade_pct']),
                 'name_override' => null,
                 'place_label' => null,
@@ -224,7 +217,7 @@ class SegmentMatchingService
                 'encoded_polyline' => $encodedPreview,
                 'is_starred' => false,
                 'effort_count' => 0,
-                'detection_count' => 1,
+                'detection_count' => 0,
                 'is_sub_climb' => false,
                 'is_climb_verified' => true,
                 'best_elapsed_seconds' => null,
@@ -233,9 +226,13 @@ class SegmentMatchingService
                 'geocoded_at' => null,
             ]);
 
+            $detectedSegmentIds[$created->id] = true;
+            $newClimbIds[] = $created->id;
             $climbsCreated++;
-            $climbsTouched = true;
         }
+
+        $detectionChangedIds = $this->syncActivityDetections($activity, array_keys($detectedSegmentIds));
+        $this->refreshDetectionCounts($detectionChangedIds);
 
         $activityCoords = $this->pointsToLatLng($points);
         [$actMinLat, $actMaxLat, $actMinLng, $actMaxLng] = $this->computeBoundingBox($activityCoords);
@@ -253,45 +250,32 @@ class SegmentMatchingService
         $effortsRecorded = 0;
         /** @var array<int, true> $touchedSegmentIds */
         $touchedSegmentIds = [];
+        /** @var list<int> $evaluatedSegmentIds */
+        $evaluatedSegmentIds = [];
 
         foreach ($candidates as $segment) {
+            $evaluatedSegmentIds[] = $segment->id;
             $passes = $this->findPassesInStream($segment, $points);
+            $result = $this->persistPasses($segment, $activity, $points, $passes, $weightKg);
+            $effortsRecorded += $result['recorded'];
 
-            if ($passes === []) {
-                continue;
+            if ($result['changed']) {
+                $touchedSegmentIds[$segment->id] = true;
             }
-
-            /** @var list<int> $matchedStartIndices */
-            $matchedStartIndices = [];
-
-            foreach ($passes as $pass) {
-                $effortData = $this->computeEffortMetrics($activity, $points, $pass['entry_idx'], $pass['exit_idx'], $weightKg);
-                $matchedStartIndices[] = $effortData['start_index'];
-
-                SegmentEffort::query()->updateOrCreate(
-                    [
-                        'segment_id' => $segment->id,
-                        'activity_id' => $activity->id,
-                        'start_index' => $effortData['start_index'],
-                    ],
-                    $effortData,
-                );
-
-                $effortsRecorded++;
-            }
-
-            SegmentEffort::query()
-                ->where('segment_id', $segment->id)
-                ->where('activity_id', $activity->id)
-                ->whereNotIn('start_index', $matchedStartIndices)
-                ->delete();
-
-            $this->refreshSegmentRankings($segment, dispatchGeocode: false);
-            $touchedSegmentIds[$segment->id] = true;
         }
 
-        if ($climbsTouched) {
-            $this->refreshSubClimbFlagsForSport($activity->sport_category);
+        foreach ($this->pruneUnevaluatedEfforts($activity, $evaluatedSegmentIds) as $prunedSegmentId) {
+            $touchedSegmentIds[$prunedSegmentId] = true;
+        }
+
+        $this->refreshRankingsFor(array_keys($touchedSegmentIds));
+
+        if ($detectionChangedIds !== [] || $touchedSegmentIds !== []) {
+            RefreshSubClimbFlagsJob::dispatch($activity->sport_category);
+        }
+
+        foreach ($newClimbIds as $newClimbId) {
+            MatchSegmentBackfillJob::dispatch($newClimbId, excludeActivityId: $activity->id);
         }
 
         if ($touchedSegmentIds !== []) {
@@ -427,7 +411,7 @@ class SegmentMatchingService
             if ($historicalCandidateCount <= self::SYNC_BACKFILL_LIMIT) {
                 $this->matchSegmentAgainstHistory($segment, excludeActivityId: $activity->id);
             } else {
-                MatchSegmentBackfillJob::dispatch($segment->id);
+                MatchSegmentBackfillJob::dispatch($segment->id, excludeActivityId: $activity->id);
             }
         }
 
@@ -435,21 +419,41 @@ class SegmentMatchingService
     }
 
     /**
-     * Scan historical activities in the segment's sport_category to record all matching passes and refresh rankings.
+     * Scan historical activities in the segment's sport_category to record all matching passes, remove efforts
+     * whose passes no longer match, refresh rankings, and queue sub-climb flag / geocoding follow-ups.
+     * `$scannedBefore` limits the backfill to activities already scanned before a bulk scan run started.
      */
     public function matchSegmentAgainstHistory(
         Segment $segment,
         int $chunkSize = 100,
         ?int $excludeActivityId = null,
+        ?CarbonImmutable $scannedBefore = null,
     ): int {
         $chunkSize = max(1, $chunkSize);
-        $ids = $this->historicalCandidateQuery($segment, $excludeActivityId)
+        $query = $this->historicalCandidateQuery($segment, $excludeActivityId);
+
+        if ($scannedBefore !== null) {
+            $query->where('segments_scanned_at', '<', $scannedBefore);
+        }
+
+        $ids = $query
             ->orderBy('started_at_local')
             ->orderBy('id')
             ->pluck('id')
             ->all();
 
+        /** @var array<int, true> $activityIdsWithEfforts */
+        $activityIdsWithEfforts = array_fill_keys(
+            SegmentEffort::query()
+                ->where('segment_id', $segment->id)
+                ->distinct()
+                ->pluck('activity_id')
+                ->all(),
+            true,
+        );
+
         $effortsRecorded = 0;
+        $changed = false;
 
         foreach (array_chunk($ids, $chunkSize) as $idChunk) {
             $activities = Activity::query()
@@ -461,64 +465,48 @@ class SegmentMatchingService
 
             foreach ($activities as $activity) {
                 $stream = $activity->stream;
+                $points = $stream !== null && is_array($stream->series) && $stream->series !== []
+                    ? $this->extractGnssPoints($stream->series)
+                    : [];
+                $passes = [];
 
-                if ($stream === null || ! is_array($stream->series) || $stream->series === []) {
-                    continue;
-                }
+                if (count($points) >= self::CUSTOM_MIN_GNSS_POINTS) {
+                    $coords = $this->pointsToLatLng($points);
+                    [$actMinLat, $actMaxLat, $actMinLng, $actMaxLng] = $this->computeBoundingBox($coords);
 
-                $points = $this->extractGnssPoints($stream->series);
-
-                if (count($points) < self::CUSTOM_MIN_GNSS_POINTS) {
-                    continue;
-                }
-
-                $coords = $this->pointsToLatLng($points);
-                [$actMinLat, $actMaxLat, $actMinLng, $actMaxLng] = $this->computeBoundingBox($coords);
-
-                if (
-                    $segment->bbox_max_lat < $actMinLat - self::BBOX_PADDING_DEG
-                    || $segment->bbox_min_lat > $actMaxLat + self::BBOX_PADDING_DEG
-                    || $segment->bbox_max_lng < $actMinLng - self::BBOX_PADDING_DEG
-                    || $segment->bbox_min_lng > $actMaxLng + self::BBOX_PADDING_DEG
-                ) {
-                    continue;
-                }
-
-                $passes = $this->findPassesInStream($segment, $points);
-
-                if ($passes === []) {
-                    continue;
-                }
-
-                $weightKg = $this->resolveAthleteWeightKg($activity);
-                /** @var list<int> $matchedStartIndices */
-                $matchedStartIndices = [];
-
-                foreach ($passes as $pass) {
-                    $effortData = $this->computeEffortMetrics($activity, $points, $pass['entry_idx'], $pass['exit_idx'], $weightKg);
-                    $matchedStartIndices[] = $effortData['start_index'];
-
-                    SegmentEffort::query()->updateOrCreate(
-                        [
-                            'segment_id' => $segment->id,
-                            'activity_id' => $activity->id,
-                            'start_index' => $effortData['start_index'],
-                        ],
-                        $effortData,
+                    $overlaps = ! (
+                        $segment->bbox_max_lat < $actMinLat - self::BBOX_PADDING_DEG
+                        || $segment->bbox_min_lat > $actMaxLat + self::BBOX_PADDING_DEG
+                        || $segment->bbox_max_lng < $actMinLng - self::BBOX_PADDING_DEG
+                        || $segment->bbox_min_lng > $actMaxLng + self::BBOX_PADDING_DEG
                     );
 
-                    $effortsRecorded++;
+                    if ($overlaps) {
+                        $passes = $this->findPassesInStream($segment, $points);
+                    }
                 }
 
-                SegmentEffort::query()
-                    ->where('segment_id', $segment->id)
-                    ->where('activity_id', $activity->id)
-                    ->whereNotIn('start_index', $matchedStartIndices)
-                    ->delete();
+                if ($passes === [] && ! isset($activityIdsWithEfforts[$activity->id])) {
+                    continue;
+                }
+
+                $result = $this->persistPasses(
+                    $segment,
+                    $activity,
+                    $points,
+                    $passes,
+                    $passes !== [] ? $this->resolveAthleteWeightKg($activity) : null,
+                );
+                $effortsRecorded += $result['recorded'];
+                $changed = $changed || $result['changed'];
             }
         }
 
-        $this->refreshSegmentRankings($segment, dispatchGeocode: false);
+        $this->refreshSegmentRankings($segment);
+
+        if ($changed && $segment->kind === Segment::KIND_CLIMB) {
+            RefreshSubClimbFlagsJob::dispatch($segment->sport_category);
+        }
 
         return $effortsRecorded;
     }
@@ -688,13 +676,13 @@ class SegmentMatchingService
          *     bbox_min_lng: float,
          *     bbox_max_lng: float,
          *     dedup_poly: list<array{0: float, 1: float}>,
-         *     dedup_cum: list<float>,
-         *     new_detections: int
+         *     dedup_cum: list<float>
          * }>> $existingBySport
          */
         $existingBySport = [];
 
-        foreach (Segment::query()->climbs()->orderBy('id')->get() as $existingClimb) {
+        // Dismissed (soft-deleted) climbs still take part in dedup so they are never re-created.
+        foreach (Segment::withTrashed()->climbs()->orderBy('id')->get() as $existingClimb) {
             $dedup = $this->segmentDedupPolyline($existingClimb);
 
             $existingBySport[$existingClimb->sport_category][] = [
@@ -710,7 +698,6 @@ class SegmentMatchingService
                 'bbox_max_lng' => $existingClimb->bbox_max_lng,
                 'dedup_poly' => $dedup['points'],
                 'dedup_cum' => $dedup['cum_dist'],
-                'new_detections' => 0,
             ];
         }
 
@@ -757,6 +744,9 @@ class SegmentMatchingService
         $newClustersBySport = [];
         /** @var array<string, true> $sportsTouched */
         $sportsTouched = [];
+        /** @var array<int, array<int, true>> $activityDetections */
+        $activityDetections = [];
+        $hasPreviouslyScannedActivities = Activity::query()->whereNotNull('segments_scanned_at')->exists();
 
         // Pass 1: Detect and cluster climbs across all unscanned activities.
         foreach (array_chunk($ids, $chunkSize) as $idChunk) {
@@ -781,14 +771,14 @@ class SegmentMatchingService
                     continue;
                 }
 
+                $sport = $activity->sport_category;
+                $sportsTouched[$sport] = true;
+                $activityDetections[$activity->id] = [];
                 $detectedClimbs = $this->climbDetector->detect($activity, $rawSeries);
 
                 if ($detectedClimbs === []) {
                     continue;
                 }
-
-                $sport = $activity->sport_category;
-                $sportsTouched[$sport] = true;
 
                 foreach ($detectedClimbs as $climb) {
                     $slicePoints = $this->sliceGnssPointsByOrigIndex($points, $climb['start_index'], $climb['end_index']);
@@ -848,7 +838,7 @@ class SegmentMatchingService
                     }
 
                     if ($bestExistingIdx !== null) {
-                        $existingBySport[$sport][$bestExistingIdx]['new_detections']++;
+                        $activityDetections[$activity->id][$existingBySport[$sport][$bestExistingIdx]['segment']->id] = true;
 
                         continue;
                     }
@@ -942,15 +932,6 @@ class SegmentMatchingService
             }
         }
 
-        // Persist detection count increments on existing climbs.
-        foreach ($existingBySport as $entries) {
-            foreach ($entries as $entry) {
-                if ($entry['new_detections'] > 0) {
-                    $entry['segment']->increment('detection_count', $entry['new_detections']);
-                }
-            }
-        }
-
         // Consolidate newly discovered clusters after medoid selection so seed-order variance
         // never leaves two overlapping canonical climbs in the same sport.
         foreach ($newClustersBySport as $sport => $clusters) {
@@ -963,6 +944,8 @@ class SegmentMatchingService
 
         // Persist newly discovered climb clusters using medoid-endpoint consensus geometry.
         $climbsCreated = 0;
+        /** @var list<int> $newClimbIds */
+        $newClimbIds = [];
 
         foreach ($newClustersBySport as $sport => $clusters) {
             foreach ($clusters as $cluster) {
@@ -970,7 +953,7 @@ class SegmentMatchingService
                 $canonical = $this->selectConsensusObservation($observations);
                 $climb = $canonical['climb'];
 
-                Segment::query()->create([
+                $created = Segment::query()->create([
                     'name' => $this->buildInitialClimbNameFromLocation(
                         $canonical['activity_location'],
                         $climb['distance_meters'],
@@ -1000,7 +983,7 @@ class SegmentMatchingService
                     'encoded_polyline' => $canonical['encoded_polyline'],
                     'is_starred' => false,
                     'effort_count' => 0,
-                    'detection_count' => count($observations),
+                    'detection_count' => 0,
                     'is_sub_climb' => false,
                     'is_climb_verified' => true,
                     'best_elapsed_seconds' => null,
@@ -1009,9 +992,33 @@ class SegmentMatchingService
                     'geocoded_at' => null,
                 ]);
 
+                foreach ($observations as $observation) {
+                    $activityDetections[$observation['activity_id']][$created->id] = true;
+                }
+
+                $newClimbIds[] = $created->id;
                 $climbsCreated++;
             }
         }
+
+        /** @var array<int, true> $detectionChangedIds */
+        $detectionChangedIds = [];
+
+        if ($activityDetections !== []) {
+            $detectionActivities = Activity::query()
+                ->whereIn('id', array_keys($activityDetections))
+                ->get();
+
+            foreach ($detectionActivities as $detectionActivity) {
+                $segmentIds = array_keys($activityDetections[$detectionActivity->id]);
+
+                foreach ($this->syncActivityDetections($detectionActivity, $segmentIds) as $changedId) {
+                    $detectionChangedIds[$changedId] = true;
+                }
+            }
+        }
+
+        $this->refreshDetectionCounts(array_keys($detectionChangedIds));
 
         // Pass 2: Match all unscanned activities against all segments so every climb gets complete history.
         $allSegmentsBySport = Segment::query()->orderBy('id')->get()->groupBy('sport_category');
@@ -1022,9 +1029,11 @@ class SegmentMatchingService
         $touchedSegmentIds = [];
 
         foreach (array_chunk($ids, $chunkSize) as $idChunk) {
+            // Skip activities another scan stamped since this run started.
             $activities = Activity::query()
                 ->with('stream')
                 ->whereIn('id', $idChunk)
+                ->whereNull('segments_scanned_at')
                 ->orderBy('started_at_local')
                 ->orderBy('id')
                 ->get();
@@ -1048,6 +1057,8 @@ class SegmentMatchingService
                 }
 
                 $sportSegments = $allSegmentsBySport->get($activity->sport_category);
+                /** @var list<int> $evaluatedSegmentIds */
+                $evaluatedSegmentIds = [];
 
                 if ($sportSegments !== null && $sportSegments->isNotEmpty()) {
                     $activityCoords = $this->pointsToLatLng($points);
@@ -1064,40 +1075,20 @@ class SegmentMatchingService
                             continue;
                         }
 
+                        $evaluatedSegmentIds[] = $segment->id;
                         $passes = $this->findPassesInStream($segment, $points);
+                        $result = $this->persistPasses($segment, $activity, $points, $passes, $weightKg);
+                        $effortsRecorded += $result['recorded'];
 
-                        if ($passes === []) {
-                            continue;
+                        if ($result['changed']) {
+                            $touchedSegmentIds[$segment->id] = true;
+                            $sportsTouched[$segment->sport_category] = true;
                         }
-
-                        /** @var list<int> $matchedStartIndices */
-                        $matchedStartIndices = [];
-
-                        foreach ($passes as $pass) {
-                            $effortData = $this->computeEffortMetrics($activity, $points, $pass['entry_idx'], $pass['exit_idx'], $weightKg);
-                            $matchedStartIndices[] = $effortData['start_index'];
-
-                            SegmentEffort::query()->updateOrCreate(
-                                [
-                                    'segment_id' => $segment->id,
-                                    'activity_id' => $activity->id,
-                                    'start_index' => $effortData['start_index'],
-                                ],
-                                $effortData,
-                            );
-
-                            $effortsRecorded++;
-                        }
-
-                        SegmentEffort::query()
-                            ->where('segment_id', $segment->id)
-                            ->where('activity_id', $activity->id)
-                            ->whereNotIn('start_index', $matchedStartIndices)
-                            ->delete();
-
-                        $touchedSegmentIds[$segment->id] = true;
-                        $sportsTouched[$segment->sport_category] = true;
                     }
+                }
+
+                foreach ($this->pruneUnevaluatedEfforts($activity, $evaluatedSegmentIds) as $prunedSegmentId) {
+                    $touchedSegmentIds[$prunedSegmentId] = true;
                 }
 
                 $activity->update(['segments_scanned_at' => $now]);
@@ -1105,20 +1096,25 @@ class SegmentMatchingService
         }
 
         // Refresh rankings and climb verification on all touched segments.
-        if ($touchedSegmentIds !== []) {
-            $touchedSegments = Segment::query()
-                ->whereIn('id', array_keys($touchedSegmentIds))
-                ->orderBy('id')
-                ->get();
+        $touchedSegments = $touchedSegmentIds !== []
+            ? Segment::query()->whereIn('id', array_keys($touchedSegmentIds))->orderBy('id')->get()
+            : collect();
 
-            foreach ($touchedSegments as $segment) {
-                $this->refreshSegmentRankings($segment, dispatchGeocode: false);
-            }
+        foreach ($touchedSegments as $segment) {
+            $sportsTouched[$segment->sport_category] = true;
+            $this->refreshSegmentRankings($segment, dispatchGeocode: false);
         }
 
         // Update sub-climb flags once effort_count and is_climb_verified are final.
         foreach (array_keys($sportsTouched) as $sport) {
-            $this->refreshSubClimbFlagsForSport($sport);
+            RefreshSubClimbFlagsJob::dispatch($sport);
+        }
+
+        // Climbs discovered in this run still need efforts from activities scanned before it started.
+        if ($hasPreviouslyScannedActivities) {
+            foreach ($newClimbIds as $newClimbId) {
+                MatchSegmentBackfillJob::dispatch($newClimbId, scannedBefore: $now);
+            }
         }
 
         // Dispatch geocoding only for touched segments that now satisfy visibility rules.
@@ -1200,7 +1196,9 @@ class SegmentMatchingService
 
         DB::transaction(function (): void {
             SegmentEffort::query()->delete();
-            Segment::query()->climbs()->delete();
+            // Dismissed (soft-deleted) climbs survive so the rebuild cannot resurrect them. Builder::forceDelete()
+            // bypasses global scopes, so the trashed filter must be explicit.
+            Segment::query()->climbs()->whereNull('deleted_at')->forceDelete();
             Segment::query()->custom()->update([
                 'effort_count' => 0,
                 'best_elapsed_seconds' => null,
@@ -1611,7 +1609,8 @@ class SegmentMatchingService
     }
 
     /**
-     * Find the closest matching persisted climb segment using directional distance-weighted polyline overlap.
+     * Find the closest matching persisted climb segment (including dismissed climbs) using directional
+     * distance-weighted polyline overlap.
      *
      * @param  list<array{0: float, 1: float}>  $dedupPoly
      * @param  list<float>  $dedupCumDist
@@ -1630,7 +1629,7 @@ class SegmentMatchingService
         array $dedupPoly,
         array $dedupCumDist,
     ): ?Segment {
-        $candidates = Segment::query()
+        $candidates = Segment::withTrashed()
             ->climbs()
             ->where('sport_category', $sportCategory)
             ->where('bbox_max_lat', '>=', $bboxMinLat - self::BBOX_PADDING_DEG)
@@ -2196,6 +2195,10 @@ class SegmentMatchingService
 
             if ($segA->is_sub_climb !== $isSubClimb) {
                 $segA->update(['is_sub_climb' => $isSubClimb]);
+
+                if (! $isSubClimb) {
+                    $this->dispatchGeocodingIfEnabled($segA);
+                }
             }
         }
     }
@@ -2502,6 +2505,136 @@ class SegmentMatchingService
     }
 
     /**
+     * Upsert the matched passes of a segment within one activity and delete that activity's efforts on the
+     * segment whose passes were not found again (an empty `$passes` removes every effort for the pair).
+     *
+     * @param  list<GnssStreamPoint>  $points
+     * @param  list<MatchedPass>  $passes
+     * @return array{recorded: int, changed: bool}
+     */
+    private function persistPasses(
+        Segment $segment,
+        Activity $activity,
+        array $points,
+        array $passes,
+        ?float $weightKg,
+    ): array {
+        /** @var list<int> $matchedStartIndices */
+        $matchedStartIndices = [];
+
+        foreach ($passes as $pass) {
+            $effortData = $this->computeEffortMetrics($activity, $points, $pass['entry_idx'], $pass['exit_idx'], $weightKg);
+            $matchedStartIndices[] = $effortData['start_index'];
+
+            SegmentEffort::query()->updateOrCreate(
+                [
+                    'segment_id' => $segment->id,
+                    'activity_id' => $activity->id,
+                    'start_index' => $effortData['start_index'],
+                ],
+                $effortData,
+            );
+        }
+
+        $deleted = SegmentEffort::query()
+            ->where('segment_id', $segment->id)
+            ->where('activity_id', $activity->id)
+            ->whereNotIn('start_index', $matchedStartIndices)
+            ->delete();
+
+        return [
+            'recorded' => count($passes),
+            'changed' => $passes !== [] || $deleted > 0,
+        ];
+    }
+
+    /**
+     * Delete an activity's efforts on segments that were not evaluated in the current scan
+     * (sport changed, segment bbox no longer overlaps, or the stream lost its GNSS data).
+     *
+     * @param  list<int>  $evaluatedSegmentIds
+     * @return list<int> Segment ids whose efforts were removed.
+     */
+    private function pruneUnevaluatedEfforts(Activity $activity, array $evaluatedSegmentIds): array
+    {
+        $staleQuery = SegmentEffort::query()
+            ->where('activity_id', $activity->id)
+            ->whereNotIn('segment_id', $evaluatedSegmentIds);
+
+        /** @var list<int> $staleSegmentIds */
+        $staleSegmentIds = array_values(array_unique(array_map(
+            'intval',
+            (clone $staleQuery)->pluck('segment_id')->all(),
+        )));
+
+        if ($staleSegmentIds !== []) {
+            $staleQuery->delete();
+        }
+
+        return $staleSegmentIds;
+    }
+
+    /**
+     * @param  list<int>  $segmentIds
+     */
+    private function refreshRankingsFor(array $segmentIds): void
+    {
+        if ($segmentIds === []) {
+            return;
+        }
+
+        $segments = Segment::query()
+            ->whereIn('id', $segmentIds)
+            ->orderBy('id')
+            ->get();
+
+        foreach ($segments as $segment) {
+            $this->refreshSegmentRankings($segment, dispatchGeocode: false);
+        }
+    }
+
+    /**
+     * Replace the set of climbs detected in an activity so re-scans never double count a detection.
+     *
+     * @param  list<int>  $segmentIds
+     * @return list<int> Segment ids whose detections were attached or detached.
+     */
+    private function syncActivityDetections(Activity $activity, array $segmentIds): array
+    {
+        $changes = $activity->detectedSegments()->sync(array_values(array_unique($segmentIds)));
+
+        return array_values(array_unique(array_map(
+            'intval',
+            [...$changes['attached'], ...$changes['detached']],
+        )));
+    }
+
+    /**
+     * Recompute `detection_count` as the number of distinct activities in which each climb was detected.
+     *
+     * @param  list<int>  $segmentIds
+     */
+    private function refreshDetectionCounts(array $segmentIds): void
+    {
+        if ($segmentIds === []) {
+            return;
+        }
+
+        $segments = Segment::withTrashed()
+            ->whereIn('id', $segmentIds)
+            ->withCount('detectedActivities')
+            ->get();
+
+        foreach ($segments as $segment) {
+            $count = (int) $segment->getAttribute('detected_activities_count');
+
+            if ($segment->detection_count !== $count) {
+                $segment->update(['detection_count' => $count]);
+            }
+        }
+    }
+
+    /**
      * @return Builder<Activity>
      */
     private function historicalCandidateQuery(Segment $segment, ?int $excludeActivityId = null): Builder
@@ -2522,6 +2655,19 @@ class SegmentMatchingService
         if ($excludeActivityId !== null) {
             $query->where('id', '!=', $excludeActivityId);
         }
+
+        // Route fingerprints carry each outdoor activity's bbox; skip activities that cannot overlap the segment.
+        $query->where(function (Builder $overlap) use ($segment): void {
+            $overlap
+                ->whereDoesntHave('routeFingerprint')
+                ->orWhereHas('routeFingerprint', function (Builder $fingerprint) use ($segment): void {
+                    $fingerprint
+                        ->where('bbox_max_lat', '>=', $segment->bbox_min_lat - self::BBOX_PADDING_DEG)
+                        ->where('bbox_min_lat', '<=', $segment->bbox_max_lat + self::BBOX_PADDING_DEG)
+                        ->where('bbox_max_lng', '>=', $segment->bbox_min_lng - self::BBOX_PADDING_DEG)
+                        ->where('bbox_min_lng', '<=', $segment->bbox_max_lng + self::BBOX_PADDING_DEG);
+                });
+        });
 
         return $query;
     }

@@ -135,6 +135,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property-read ActivityRouteFingerprint|null $routeFingerprint
  * @property-read Collection<int, BestEffort> $bestEfforts
  * @property-read Collection<int, SegmentEffort> $segmentEfforts
+ * @property-read Collection<int, Segment> $detectedSegments
  */
 class Activity extends Model
 {
@@ -407,6 +408,16 @@ class Activity extends Model
     public function segmentEfforts(): HasMany
     {
         return $this->hasMany(SegmentEffort::class);
+    }
+
+    /**
+     * Auto-detected climbs the climb detector found in this activity's stream.
+     *
+     * @return BelongsToMany<Segment, $this>
+     */
+    public function detectedSegments(): BelongsToMany
+    {
+        return $this->belongsToMany(Segment::class, 'segment_detections')->withTimestamps();
     }
 
     /**

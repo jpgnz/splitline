@@ -201,7 +201,7 @@ class ReverseGeocodingService
     public function pendingCount(): int
     {
         $pendingSegments = Schema::hasTable('segments')
-            ? Segment::query()->whereNull('geocoded_at')->count()
+            ? Segment::query()->visible()->whereNull('geocoded_at')->count()
             : 0;
 
         return RouteCluster::query()->awaitingGeocoding()->count()

@@ -3,6 +3,7 @@
 namespace App\Services\Ingestion;
 
 use App\Jobs\GeocodeActivityLocationJob;
+use App\Jobs\MatchActivitySegmentsJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
@@ -20,7 +21,6 @@ use App\Models\WeightMeasurement;
 use App\Services\Garmin\BestEffortCalculator;
 use App\Services\Gear\GearService;
 use App\Services\Routes\RouteMatchingService;
-use App\Services\Segments\SegmentMatchingService;
 use Carbon\CarbonImmutable;
 use Splitline\Core\Data\ActivityStreamData;
 use Splitline\Core\Data\ActivityWeatherData;
@@ -118,7 +118,6 @@ class TelemetryPersistenceService
         private readonly BestEffortCalculator $bestEffortCalculator,
         private readonly GearService $gearService = new GearService,
         private readonly RouteMatchingService $routeMatchingService = new RouteMatchingService,
-        private readonly SegmentMatchingService $segmentMatchingService = new SegmentMatchingService,
     ) {}
 
     /**
@@ -342,6 +341,7 @@ class TelemetryPersistenceService
         $activityUpdates = [
             'streams_synced_at' => CarbonImmutable::now('UTC'),
             'streams_unavailable_at' => null,
+            'segments_scanned_at' => null,
         ];
 
         foreach ($extendedRawSummary as $column => $value) {
@@ -381,12 +381,7 @@ class TelemetryPersistenceService
             report($exception);
         }
 
-        try {
-            $this->segmentMatchingService->scanActivity($activity, $activityStream);
-        } catch (Throwable $exception) {
-            // Segment scanning is best-effort enrichment; the scheduled segments:scan retries it.
-            report($exception);
-        }
+        MatchActivitySegmentsJob::dispatch($activity->id);
 
         if (
             ! $activity->is_indoor

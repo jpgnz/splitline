@@ -7,10 +7,10 @@ use App\Http\Requests\UpdateSegmentsSettingsRequest;
 use App\Http\Requests\UpdateSportsSettingsRequest;
 use App\Http\Requests\UpdateUnitsRequest;
 use App\Jobs\GeocodeSegmentJob;
+use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Models\Segment;
 use App\Models\SyncRun;
 use App\Services\Geocoding\NominatimClient;
-use App\Services\Segments\SegmentMatchingService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
@@ -86,7 +86,6 @@ class SettingsController extends Controller
     public function updateSegments(
         UpdateSegmentsSettingsRequest $request,
         AppSettings $settings,
-        SegmentMatchingService $matcher,
     ): RedirectResponse {
         $minEfforts = (int) $request->validated('min_efforts');
 
@@ -101,7 +100,7 @@ class SettingsController extends Controller
                 ->all();
 
             foreach ($sports as $sport) {
-                $matcher->refreshSubClimbFlagsForSport($sport);
+                RefreshSubClimbFlagsJob::dispatch($sport);
             }
 
             if (
