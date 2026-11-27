@@ -26,6 +26,7 @@ import BaseChart, {
     type ChartPointClickPayload,
 } from '@/components/charts/BaseChart.vue';
 import ActivityMap from '@/components/maps/ActivityMap.vue';
+import SportFilterPills from '@/components/SportFilterPills.vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
     formatDurationClock,
@@ -38,7 +39,11 @@ import {
     compare as activitiesCompare,
     show as showActivity,
 } from '@/routes/activities';
-import { index as routesIndex, update as updateRoute } from '@/routes/routes';
+import {
+    index as routesIndex,
+    show as showRoute,
+    update as updateRoute,
+} from '@/routes/routes';
 import { unlink as unlinkActivityRoute } from '@/routes/routes/activities';
 import type { RouteAttemptItem, MatchedRouteShowProps } from '@/types/routes';
 
@@ -63,11 +68,41 @@ const {
 } = useUnits();
 
 const sportMeta = computed(() => getSportMeta(props.route.sport_key));
+const hasMixedSports = computed<boolean>(
+    () => props.available_sports.length > 1,
+);
+const selectedSportMeta = computed(() =>
+    props.selected_sport ? getSportMeta(props.selected_sport) : null,
+);
+const attemptsKpiLabel = computed<string>(() =>
+    selectedSportMeta.value
+        ? `${selectedSportMeta.value.short_label} Attempts`
+        : 'Attempts',
+);
+const prKpiLabel = computed<string>(() =>
+    selectedSportMeta.value
+        ? `${selectedSportMeta.value.short_label} Best`
+        : 'Route PR',
+);
 const usesPace = computed<boolean>(
     () =>
         props.route.metric_mode === 'pace' ||
         props.route.metric_mode === 'pace_100m',
 );
+
+function selectSport(sport: string | null): void {
+    const query: Record<string, string> = {};
+
+    if (sport !== null) {
+        query.sport = sport;
+    }
+
+    router.get(showRoute.url(props.route.id), query, {
+        preserveState: true,
+        preserveScroll: true,
+        replace: true,
+    });
+}
 
 const isEditingName = ref<boolean>(false);
 const renameInputRef = ref<HTMLInputElement | null>(null);
@@ -380,9 +415,15 @@ function formatSignedDuration(seconds: number | null): string {
 
 const progressionOption = computed<EChartsOption>(() => {
     const rows = props.progression;
-    const accent = props.route.accent_hex || '#10b981';
+    const accent =
+        selectedSportMeta.value?.accent_hex ||
+        props.route.accent_hex ||
+        '#10b981';
     const isPace = usesPace.value;
     const isPace100m = props.route.metric_mode === 'pace_100m';
+    const showAttemptSport = hasMixedSports.value;
+    const tintByAttemptSport =
+        hasMixedSports.value && props.selected_sport === null;
 
     const labels = rows.map((row) => formatShortDate(row.date));
     const hasHr = rows.some((row) => row.avg_hr !== null);
@@ -409,6 +450,15 @@ const progressionOption = computed<EChartsOption>(() => {
                     color: '#f59e0b',
                     borderColor: theme.isDark.value ? '#141417' : '#ffffff',
                     borderWidth: 2,
+                },
+            };
+        }
+
+        if (tintByAttemptSport) {
+            return {
+                value,
+                itemStyle: {
+                    color: getSportMeta(row.sport_key).accent_hex,
                 },
             };
         }
@@ -457,9 +507,12 @@ const progressionOption = computed<EChartsOption>(() => {
                 }
 
                 const attempt = rows[idx];
+                const attemptSportSuffix = showAttemptSport
+                    ? ` · ${getSportMeta(attempt.sport_key).label}`
+                    : '';
                 const lines = [
                     `<div style="font-weight:600;margin-bottom:4px;">${escapeHtml(attempt.name)}${attempt.is_pr ? ' ◆ PR' : ''}</div>`,
-                    `<div style="opacity:0.75;margin-bottom:4px;">${escapeHtml(formatDateWithYear(attempt.date))}</div>`,
+                    `<div style="opacity:0.75;margin-bottom:4px;">${escapeHtml(formatDateWithYear(attempt.date))}${escapeHtml(attemptSportSuffix)}</div>`,
                     `<div>Time: <strong>${escapeHtml(formatDurationClock(attempt.duration_seconds))}</strong></div>`,
                     `<div>${isPace ? 'Pace' : 'Speed'}: <strong>${escapeHtml(formatMetricSpeedOrPace(attempt.avg_speed))}</strong></div>`,
                 ];
@@ -763,7 +816,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                 <p
                     class="font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
                 >
-                    Attempts
+                    {{ attemptsKpiLabel }}
                 </p>
                 <p
                     class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -788,7 +841,7 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                     class="flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-amber-700 uppercase dark:text-amber-400"
                 >
                     <Trophy class="size-3" />
-                    Route PR
+                    {{ prKpiLabel }}
                 </p>
                 <p
                     class="mt-2 font-mono text-2xl font-semibold text-zinc-900 tabular-nums dark:text-zinc-100"
@@ -1257,18 +1310,29 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
             class="overflow-hidden rounded-xl border border-zinc-200/90 bg-white dark:border-zinc-800/90 dark:bg-[#141417]"
         >
             <div
-                class="flex items-center justify-between border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80"
+                class="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-100 px-5 py-3.5 dark:border-zinc-800/80"
             >
                 <h2
                     class="font-mono text-xs font-medium tracking-wider text-zinc-700 uppercase dark:text-zinc-200"
                 >
                     Attempts Comparison ({{ attempts.length }})
                 </h2>
-                <span
-                    class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
-                >
-                    Click column headers to sort
-                </span>
+
+                <div class="flex flex-wrap items-center gap-3">
+                    <!-- Discipline Filter Pills (shown when attempts span multiple disciplines) -->
+                    <SportFilterPills
+                        v-if="hasMixedSports"
+                        :options="available_sports"
+                        :selected="selected_sport"
+                        @select="selectSport"
+                    />
+
+                    <span
+                        class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
+                    >
+                        Click column headers to sort
+                    </span>
+                </div>
             </div>
 
             <div class="overflow-x-auto">
@@ -1472,17 +1536,36 @@ function onProgressionClick(payload: ChartPointClickPayload): void {
                                         #{{ attempt.rank }}
                                     </span>
                                     <div class="min-w-0">
-                                        <Link
-                                            :href="
-                                                showActivity.url(
-                                                    attempt.activity_id,
-                                                )
-                                            "
-                                            prefetch
-                                            class="block truncate font-medium text-zinc-900 hover:text-emerald-600 dark:text-zinc-100 dark:hover:text-emerald-400"
-                                        >
-                                            {{ attempt.name }}
-                                        </Link>
+                                        <div class="flex items-center gap-2">
+                                            <Link
+                                                :href="
+                                                    showActivity.url(
+                                                        attempt.activity_id,
+                                                    )
+                                                "
+                                                prefetch
+                                                class="min-w-0 truncate font-medium text-zinc-900 hover:text-emerald-600 dark:text-zinc-100 dark:hover:text-emerald-400"
+                                            >
+                                                {{ attempt.name }}
+                                            </Link>
+                                            <span
+                                                v-if="hasMixedSports"
+                                                :class="[
+                                                    'shrink-0 rounded border px-1.5 py-0.25 font-mono text-[10px] font-medium',
+                                                    sportBadgeClasses(
+                                                        getSportMeta(
+                                                            attempt.sport_key,
+                                                        ).color_token,
+                                                    ),
+                                                ]"
+                                            >
+                                                {{
+                                                    getSportMeta(
+                                                        attempt.sport_key,
+                                                    ).short_label
+                                                }}
+                                            </span>
+                                        </div>
                                         <p
                                             class="font-mono text-[11px] text-zinc-500 dark:text-zinc-400"
                                         >

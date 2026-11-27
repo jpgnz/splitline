@@ -37,6 +37,24 @@ services:
             OPEN_METEO_ENABLED: ${OPEN_METEO_ENABLED:-true}
             OPEN_METEO_AUTO_SYNC: ${OPEN_METEO_AUTO_SYNC:-true}
 
+            # Optional: OpenStreetMap Nominatim reverse geocoding (ODbL)
+            NOMINATIM_ENABLED: ${NOMINATIM_ENABLED:-true}
+            NOMINATIM_AUTO_SYNC: ${NOMINATIM_AUTO_SYNC:-true}
+            NOMINATIM_BASE_URL: ${NOMINATIM_BASE_URL:-https://nominatim.openstreetmap.org}
+            NOMINATIM_RATE_LIMIT_MS: ${NOMINATIM_RATE_LIMIT_MS:-1100}
+            NOMINATIM_USER_AGENT: ${NOMINATIM_USER_AGENT:-}
+            NOMINATIM_REFERER: ${NOMINATIM_REFERER:-}
+            NOMINATIM_EMAIL: ${NOMINATIM_EMAIL:-}
+            NOMINATIM_TIMEOUT: ${NOMINATIM_TIMEOUT:-15}
+            NOMINATIM_MAX_RETRIES: ${NOMINATIM_MAX_RETRIES:-2}
+            NOMINATIM_NEGATIVE_CACHE_DAYS: ${NOMINATIM_NEGATIVE_CACHE_DAYS:-30}
+            NOMINATIM_RETRY_FAILED_DAYS: ${NOMINATIM_RETRY_FAILED_DAYS:-7}
+
+            # Optional: Automated drop-folder import (.fit / .zip files)
+            AUTO_IMPORT_DIR: ${AUTO_IMPORT_DIR:-}
+            AUTO_IMPORT_MODE: ${AUTO_IMPORT_MODE:-keep}
+            AUTO_IMPORT_MIN_FILE_AGE_SECONDS: ${AUTO_IMPORT_MIN_FILE_AGE_SECONDS:-5}
+
             # Reverse proxy & HTTPS settings (uncomment/configure behind Caddy, Traefik,
             # Nginx, Tailscale Serve, or Cloudflare Tunnels)
             TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}

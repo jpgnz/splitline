@@ -10,6 +10,7 @@ use App\Services\Heatmap\HeatmapService;
 use App\Support\AppSettings;
 use App\Support\SportRegistry;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Query and presentation service for Personal Segments & Auto-Detected Climbs index, detail, and Activity integration.
@@ -36,6 +37,7 @@ use Illuminate\Database\Eloquent\Builder;
  *     id: int,
  *     activity_id: int,
  *     activity_name: string,
+ *     sport_key: string,
  *     date: string,
  *     started_at_local: string,
  *     year: int,
@@ -126,19 +128,14 @@ class SegmentQueryService
             $query->starred();
         }
 
+        $registry = $this->sportRegistry();
+
         if ($sport !== 'all') {
-            $registry = $this->sportRegistry();
             $entry = $registry->get($sport);
 
-            $query->where(function (Builder $sub) use ($sport, $entry, $registry): void {
-                $sub->whereHas('sourceActivity', function (Builder $activityQuery) use ($sport, $registry): void {
-                    $registry->applyScope($activityQuery, $sport);
-                });
-
-                if ($entry !== null && $entry['parent'] === null) {
-                    $sub->orWhere('sport_category', $entry['sport_category']);
-                }
-            });
+            if ($entry !== null) {
+                $query->where('sport_category', $entry['sport_category']);
+            }
         }
 
         if ($category !== 'all' && $kind !== 'custom') {
@@ -184,10 +181,21 @@ class SegmentQueryService
         };
 
         $models = $query->get();
+        /** @var list<int> $segmentIds */
+        $segmentIds = $models->pluck('id')->map(static fn (mixed $id): int => (int) $id)->all();
+        $effortSportCountsBySegment = $this->loadSegmentEffortSportCounts($segmentIds);
         $segments = [];
 
         foreach ($models as $segment) {
-            $sportMeta = $this->resolveSegmentSportMeta($segment);
+            $sportMeta = $this->resolveSegmentSportMeta(
+                $segment,
+                $effortSportCountsBySegment[$segment->id] ?? [],
+            );
+
+            if ($sport !== 'all' && ! $registry->sportKeyMatchesScope($sportMeta['sport_key'], $sport)) {
+                continue;
+            }
+
             $best = $segment->bestEffort;
 
             $segments[] = [
@@ -255,25 +263,52 @@ class SegmentQueryService
 
     /**
      * Build the full detail payload for a Segment including polyline, elevation profile, KPI summary,
-     * chronological progression, available years, and personal leaderboard.
+     * chronological progression, available years, available sports/disciplines, and personal leaderboard.
+     *
+     * Year and sport filters scope `display_rank` / `is_display_pr` and the summary, while each effort's
+     * stored `rank` / `is_pr` stay ranked across every discipline and year.
      *
      * @return array<string, mixed>
      */
-    public function show(Segment $segment, ?int $year = null): array
+    public function show(Segment $segment, ?int $year = null, ?string $sport = null): array
     {
+        $registry = $this->sportRegistry();
         $segment->load(['sourceActivity', 'bestEffort.activity.stream']);
 
         $allEfforts = SegmentEffort::query()
             ->with(['activity.weather'])
+            ->whereHas('activity')
             ->where('segment_id', $segment->id)
             ->orderBy('started_at_local')
             ->orderBy('id')
             ->get();
 
+        /** @var array<int, string> $effortSportKeysById */
+        $effortSportKeysById = [];
+        /** @var array<string, array{count: int, latest_at: string}> $effortSportCounts */
+        $effortSportCounts = [];
+
+        foreach ($allEfforts as $effort) {
+            $effortSportKey = $registry->resolveActivitySportKey($effort->activity);
+            $effortSportKeysById[$effort->id] = $effortSportKey;
+            $registry->addSportKeyCount(
+                $effortSportCounts,
+                $effortSportKey,
+                $effort->started_at_local->format('Y-m-d H:i:s'),
+            );
+        }
+
+        $availableSports = $registry->buildSportFilterOptions($effortSportCounts);
+        $selectedSport = $registry->resolveSportFilterSelection($availableSports, $sport);
+
+        $sportFilteredEfforts = $selectedSport !== null
+            ? $allEfforts->filter(static fn (SegmentEffort $e): bool => $registry->sportKeysShareBucket($effortSportKeysById[$e->id], $selectedSport))->values()
+            : $allEfforts->values();
+
         /** @var array<int, true> $yearSet */
         $yearSet = [];
 
-        foreach ($allEfforts as $effort) {
+        foreach ($sportFilteredEfforts as $effort) {
             $yearSet[(int) $effort->started_at_local->format('Y')] = true;
         }
 
@@ -283,8 +318,8 @@ class SegmentQueryService
         $selectedYear = ($year !== null && isset($yearSet[$year])) ? $year : null;
 
         $filteredEfforts = $selectedYear !== null
-            ? $allEfforts->filter(static fn (SegmentEffort $e): bool => (int) $e->started_at_local->format('Y') === $selectedYear)->values()
-            : $allEfforts->values();
+            ? $sportFilteredEfforts->filter(static fn (SegmentEffort $e): bool => (int) $e->started_at_local->format('Y') === $selectedYear)->values()
+            : $sportFilteredEfforts->values();
 
         // Compute leaderboard ordering (fastest elapsed_seconds first) for filtered set
         /** @var list<SegmentEffort> $rankedList */
@@ -352,6 +387,7 @@ class SegmentQueryService
                 'id' => $effort->id,
                 'activity_id' => $effort->activity_id,
                 'activity_name' => $activity->name,
+                'sport_key' => $effortSportKeysById[$effort->id],
                 'date' => $effort->started_at_local->format('Y-m-d'),
                 'started_at_local' => $effort->started_at_local->format('Y-m-d H:i:s'),
                 'year' => (int) $effort->started_at_local->format('Y'),
@@ -384,7 +420,7 @@ class SegmentQueryService
         usort($leaderboard, static fn (array $a, array $b): int => $a['display_rank'] <=> $b['display_rank']);
 
         $latest = $progression !== [] ? $progression[count($progression) - 1] : null;
-        $sportMeta = $this->resolveSegmentSportMeta($segment);
+        $sportMeta = $this->resolveSegmentSportMeta($segment, $effortSportCounts);
         [$polyline, $elevationProfile] = $this->resolveCanonicalGeometryAndProfile($segment, $prEffort);
 
         return [
@@ -416,7 +452,7 @@ class SegmentQueryService
             'elevation_profile' => $elevationProfile,
             'summary' => [
                 'effort_count' => count($progression),
-                'all_time_effort_count' => $allEfforts->count(),
+                'all_time_effort_count' => $sportFilteredEfforts->count(),
                 'pr_elapsed_seconds' => $prElapsed,
                 'pr_speed_mps' => $prEffort?->avg_speed !== null ? round($prEffort->avg_speed, 3) : null,
                 'pr_vam' => $prEffort?->vam !== null ? round($prEffort->vam, 1) : null,
@@ -433,6 +469,8 @@ class SegmentQueryService
             ],
             'available_years' => $availableYears,
             'selected_year' => $selectedYear,
+            'available_sports' => $availableSports,
+            'selected_sport' => $selectedSport,
             'progression' => $progression,
             'efforts' => $leaderboard,
         ];
@@ -628,17 +666,67 @@ class SegmentQueryService
     }
 
     /**
+     * Load effort sport-key counts per segment in chunked grouped queries (avoiding N+1).
+     *
+     * @param  list<int>  $segmentIds
+     * @return array<int, array<string, array{count: int, latest_at: string}>>
+     */
+    private function loadSegmentEffortSportCounts(array $segmentIds): array
+    {
+        if ($segmentIds === []) {
+            return [];
+        }
+
+        $registry = $this->sportRegistry();
+        /** @var array<int, array<string, array{count: int, latest_at: string}>> $countsBySegment */
+        $countsBySegment = [];
+
+        foreach (array_chunk($segmentIds, 500) as $idChunk) {
+            $rows = DB::table('segment_efforts')
+                ->join('activities', 'activities.id', '=', 'segment_efforts.activity_id')
+                ->whereIn('segment_efforts.segment_id', $idChunk)
+                ->whereNull('activities.excluded_at')
+                ->selectRaw(
+                    'segment_efforts.segment_id, activities.sport_category, COALESCE(activities.discipline_override, activities.sport_discipline) as effective_discipline, activities.is_indoor, COUNT(*) as effort_count, MAX(segment_efforts.started_at_local) as latest_at',
+                )
+                ->groupByRaw(
+                    'segment_efforts.segment_id, activities.sport_category, COALESCE(activities.discipline_override, activities.sport_discipline), activities.is_indoor',
+                )
+                ->get();
+
+            foreach ($rows as $row) {
+                $segmentId = (int) $row->segment_id;
+                $sportCategory = is_string($row->sport_category) ? $row->sport_category : 'other';
+                $effectiveDiscipline = is_string($row->effective_discipline) ? $row->effective_discipline : null;
+                $isIndoor = (bool) $row->is_indoor;
+                $count = (int) $row->effort_count;
+                $latestAt = is_string($row->latest_at) ? $row->latest_at : '';
+
+                $sportKey = $registry->resolveSportKey($sportCategory, $effectiveDiscipline, $isIndoor);
+                $countsBySegment[$segmentId] ??= [];
+                $registry->addSportKeyCount($countsBySegment[$segmentId], $sportKey, $latestAt, $count);
+            }
+        }
+
+        return $countsBySegment;
+    }
+
+    /**
+     * Resolve segment sport metadata from the majority specific effort discipline,
+     * ignoring generic fallbacks (`cycling`, `other`) whenever specific disciplines exist,
+     * and falling back to `sourceActivity` / `sport_category` when a segment has no efforts.
+     *
+     * @param  array<string, array{count: int, latest_at: string}>  $effortSportCounts
      * @return array{sport_key: string, accent_hex: string, metric_mode: string}
      */
-    private function resolveSegmentSportMeta(Segment $segment): array
+    private function resolveSegmentSportMeta(Segment $segment, array $effortSportCounts = []): array
     {
         $registry = $this->sportRegistry();
         $source = $segment->sourceActivity;
-
-        $sportKey = $source instanceof Activity
+        $fallbackSportKey = $source instanceof Activity
             ? $registry->resolveActivitySportKey($source)
-            : $registry->normalizeKey($segment->sport_category);
-
+            : null;
+        $sportKey = $registry->resolveDominantSportKey($effortSportCounts, $fallbackSportKey, $segment->sport_category);
         $entry = $registry->get($sportKey) ?? $registry->get($segment->sport_category);
 
         return [
