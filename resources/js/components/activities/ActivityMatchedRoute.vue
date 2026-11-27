@@ -3,6 +3,7 @@ import { Link, router } from '@inertiajs/vue3';
 import {
     ArrowUpRight,
     CloudSun,
+    MapPin,
     Mountain,
     Repeat,
     Route as RouteIcon,
@@ -297,6 +298,18 @@ function onPointClick(payload: ChartPointClickPayload): void {
                 >
                     {{ matchedRoute.route.name }}
                 </h2>
+
+                <p
+                    v-if="matchedRoute.route.place_label"
+                    class="flex items-center gap-1.5 truncate text-xs text-zinc-500 dark:text-zinc-400"
+                >
+                    <MapPin
+                        class="size-3 shrink-0 text-zinc-400 dark:text-zinc-500"
+                    />
+                    <span class="truncate">{{
+                        matchedRoute.route.place_label
+                    }}</span>
+                </p>
 
                 <div
                     class="flex flex-wrap items-center gap-3 font-mono text-xs text-zinc-500 dark:text-zinc-400"

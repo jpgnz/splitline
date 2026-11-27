@@ -2,6 +2,7 @@
 
 namespace App\Services\Ingestion;
 
+use App\Jobs\GeocodeActivityLocationJob;
 use App\Jobs\SyncActivityStreamJob;
 use App\Jobs\SyncActivityWeatherJob;
 use App\Models\Activity;
@@ -159,6 +160,8 @@ class TelemetryPersistenceService
             ? $existing->favorite_override
             : $dto->isFavorite;
 
+        $hasProviderLocation = $dto->locationName !== null && trim($dto->locationName) !== '';
+
         $attributes = [
             'provider' => $dto->provider,
             'external_id' => $dto->externalId,
@@ -172,7 +175,8 @@ class TelemetryPersistenceService
             'is_indoor' => $dto->isIndoor,
             'started_at_local' => $dto->startedAtLocal,
             'started_at_utc' => $dto->startedAtUtc,
-            'location_name' => $dto->locationName,
+            'location_name' => $hasProviderLocation ? $dto->locationName : $existing?->location_name,
+            'location_geocoded_at' => $hasProviderLocation ? null : $existing?->location_geocoded_at,
             'start_lat' => $dto->startLat ?? $existing?->start_lat,
             'start_lng' => $dto->startLng ?? $existing?->start_lng,
             'distance_meters' => $dto->distanceMeters,
@@ -292,6 +296,17 @@ class TelemetryPersistenceService
             ) {
                 SyncActivityWeatherJob::dispatch($activity->id);
             }
+
+            if (
+                ! $activity->is_indoor
+                && $activity->start_lat !== null
+                && $activity->start_lng !== null
+                && ($activity->location_name === null || trim($activity->location_name) === '')
+                && (bool) config('services.nominatim.enabled', true)
+                && (bool) config('services.nominatim.auto_sync', true)
+            ) {
+                GeocodeActivityLocationJob::dispatch($activity->id);
+            }
         }
 
         return $activity;
@@ -377,6 +392,18 @@ class TelemetryPersistenceService
             if ($existingSamplingMode === null || $existingSamplingMode === 'start_point') {
                 SyncActivityWeatherJob::dispatch($activity->id, force: $existingSamplingMode === 'start_point');
             }
+        }
+
+        if (
+            ! $activity->is_indoor
+            && $activity->start_lat !== null
+            && $activity->start_lng !== null
+            && ($activity->location_name === null || trim($activity->location_name) === '')
+            && $activity->geocode_attempted_at === null
+            && (bool) config('services.nominatim.enabled', true)
+            && (bool) config('services.nominatim.auto_sync', true)
+        ) {
+            GeocodeActivityLocationJob::dispatch($activity->id);
         }
 
         return $activityStream;

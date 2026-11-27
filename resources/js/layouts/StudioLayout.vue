@@ -252,6 +252,10 @@ const enrichmentTooltip = computed<string | undefined>(() => {
         parts.push(`${jobs.weather} weather`);
     }
 
+    if (jobs.geocode > 0) {
+        parts.push(`${jobs.geocode} geocode`);
+    }
+
     if (jobs.default > 0) {
         parts.push(`${jobs.default} default`);
     }
