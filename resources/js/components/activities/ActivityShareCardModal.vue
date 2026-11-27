@@ -826,7 +826,8 @@ function triggerBlobDownload(blob: Blob, filename: string): void {
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
-    URL.revokeObjectURL(url);
+    // Revoke after the click has been dispatched so the download can start.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function downloadSvg(): void {
@@ -1170,7 +1171,7 @@ onBeforeUnmount(() => {
                                             x="56"
                                             :y="126 + idx * 46"
                                             :fill="palette.textPrimary"
-                                            font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                            font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                             font-size="40"
                                             font-weight="700"
                                             letter-spacing="-0.8"
@@ -1189,7 +1190,7 @@ onBeforeUnmount(() => {
                                             "
                                             clip-path="url(#sl-landscape-subtitle-clip)"
                                             :fill="palette.textSecondary"
-                                            font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                            font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                             font-size="16"
                                             font-weight="500"
                                         >
@@ -1251,7 +1252,7 @@ onBeforeUnmount(() => {
                                                     Math.floor(idx / 2) * 102
                                                 "
                                                 :fill="palette.textPrimary"
-                                                font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                                font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                                 font-size="30"
                                                 font-weight="700"
                                                 letter-spacing="-0.4"
@@ -1382,7 +1383,7 @@ onBeforeUnmount(() => {
                                             x="64"
                                             :y="142 + idx * 50"
                                             :fill="palette.textPrimary"
-                                            font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                            font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                             font-size="44"
                                             font-weight="700"
                                             letter-spacing="-0.9"
@@ -1399,7 +1400,7 @@ onBeforeUnmount(() => {
                                                     : 182
                                             "
                                             :fill="palette.textSecondary"
-                                            font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                            font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                             font-size="18"
                                             font-weight="500"
                                         >
@@ -1501,7 +1502,7 @@ onBeforeUnmount(() => {
                                                     Math.floor(idx / 2) * 108
                                                 "
                                                 :fill="palette.textPrimary"
-                                                font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                                font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                                 font-size="36"
                                                 font-weight="700"
                                                 letter-spacing="-0.5"
@@ -1620,7 +1621,7 @@ onBeforeUnmount(() => {
                                             "
                                             text-anchor="middle"
                                             :fill="palette.textMuted"
-                                            font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+                                            font-family="'Instrument Sans', ui-sans-serif, system-ui, sans-serif"
                                             font-size="14"
                                             opacity="0.7"
                                         >

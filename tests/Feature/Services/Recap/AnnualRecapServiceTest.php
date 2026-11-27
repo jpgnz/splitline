@@ -358,24 +358,27 @@ it('identifies best efforts, all-time PRs, matched routes, and segment PRs for t
     ActivityRouteFingerprint::factory()->for($run2026Fast)->for($cluster, 'cluster')->create(['is_unlinked' => false]);
     ActivityRouteFingerprint::factory()->for($run2026Repeat)->for($cluster, 'cluster')->create(['is_unlinked' => false]);
 
-    // Segment PR in 2026 + non-PR in 2026 + PR in 2025
+    // Realistic rankings: only the current all-time best (2026, 210s) carries is_pr.
     $segment = Segment::factory()->climb('cat3')->create([
         'name' => 'Harbour Bridge Climb',
     ]);
     SegmentEffort::factory()->for($segment)->for($run2026Fast)->create([
         'started_at_local' => CarbonImmutable::parse('2026-04-12 07:15:00'),
         'elapsed_seconds' => 210.0,
+        'rank' => 1,
         'is_pr' => true,
     ]);
     SegmentEffort::factory()->for($segment)->for($run2026Repeat)->create([
         'started_at_local' => CarbonImmutable::parse('2026-04-20 07:15:00'),
         'elapsed_seconds' => 235.0,
+        'rank' => 3,
         'is_pr' => false,
     ]);
     SegmentEffort::factory()->for($segment)->for($run2025)->create([
         'started_at_local' => CarbonImmutable::parse('2025-05-10 07:15:00'),
         'elapsed_seconds' => 220.0,
-        'is_pr' => true,
+        'rank' => 2,
+        'is_pr' => false,
     ]);
 
     $payload = app(AnnualRecapService::class)->build(2026);
@@ -396,6 +399,204 @@ it('identifies best efforts, all-time PRs, matched routes, and segment PRs for t
         ->and($milestones['segment_prs'])->toHaveCount(1)
         ->and($milestones['segment_prs'][0]['segment_name'])->toBe('Harbour Bridge Climb');
 });
+
+it('keeps PRs from an earlier year after they were beaten in a later year', function () {
+    $run2024 = Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2024-04-01 07:00:00')]);
+    $marchRun2025 = Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2025-03-08 07:00:00')]);
+    $mayRun2025 = Activity::factory()->create([
+        'name' => 'Harbour 5K',
+        'started_at_local' => CarbonImmutable::parse('2025-05-10 07:00:00'),
+    ]);
+    $julyRun2025 = Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2025-07-19 07:00:00')]);
+    $run2026 = Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2026-04-12 07:00:00')]);
+
+    // 5K progression: 1300s (2024) -> 1250s (2025, PR at the time) -> 1180s (2026, current all-time best)
+    foreach ([[$run2024, 1300.0], [$mayRun2025, 1250.0], [$run2026, 1180.0]] as [$activity, $seconds]) {
+        BestEffort::factory()->for($activity)->create([
+            'sport' => 'running',
+            'distance_key' => '5k',
+            'distance_meters' => 5000.0,
+            'elapsed_seconds' => $seconds,
+            'achieved_at' => $activity->started_at_local,
+        ]);
+    }
+
+    // 10K: the 2024 effort stays faster, so 2025's best is not a PR
+    foreach ([[$run2024, 2400.0], [$julyRun2025, 2550.0]] as [$activity, $seconds]) {
+        BestEffort::factory()->for($activity)->create([
+            'sport' => 'running',
+            'distance_key' => '10k',
+            'distance_meters' => 10000.0,
+            'elapsed_seconds' => $seconds,
+            'achieved_at' => $activity->started_at_local,
+        ]);
+    }
+
+    // Segment rankings as SegmentMatchingService stores them: only the 2026 effort carries is_pr.
+    // 2025 PR'd twice (228s then 220s), then slowed to 225s.
+    $segment = Segment::factory()->create(['name' => 'Ridge Road']);
+    $segmentEfforts = [
+        [$run2024, 230.0, 5],
+        [$marchRun2025, 228.0, 4],
+        [$mayRun2025, 220.0, 2],
+        [$julyRun2025, 225.0, 3],
+        [$run2026, 210.0, 1],
+    ];
+
+    foreach ($segmentEfforts as [$activity, $seconds, $rank]) {
+        SegmentEffort::factory()->for($segment)->for($activity)->create([
+            'started_at_local' => $activity->started_at_local->addMinutes(10),
+            'elapsed_seconds' => $seconds,
+            'rank' => $rank,
+            'is_pr' => $rank === 1,
+        ]);
+    }
+
+    $milestones = app(AnnualRecapService::class)->build(2025)['milestones'];
+
+    expect($milestones['all_time_prs_count'])->toBe(1)
+        ->and($milestones['best_efforts'])->toHaveCount(2)
+        ->and($milestones['best_efforts'][0])->toMatchArray([
+            'distance_key' => '5k',
+            'activity_id' => $mayRun2025->id,
+            'elapsed_seconds' => 1250.0,
+            'is_all_time_pr' => true,
+        ])
+        ->and($milestones['best_efforts'][1])->toMatchArray([
+            'distance_key' => '10k',
+            'is_all_time_pr' => false,
+        ])
+        ->and($milestones['segment_efforts_count'])->toBe(3)
+        ->and($milestones['segment_prs_count'])->toBe(1)
+        ->and($milestones['segment_prs'])->toHaveCount(1)
+        ->and($milestones['segment_prs'][0])->toMatchArray([
+            'segment_name' => 'Ridge Road',
+            'activity_id' => $mayRun2025->id,
+            'elapsed_seconds' => 220.0,
+        ]);
+});
+
+it('does not count a segment effort that only ties an earlier effort as a PR', function () {
+    $segment = Segment::factory()->create();
+    $firstRun = Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2025-09-01 07:00:00')]);
+    $tieRun = Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2026-02-01 07:00:00')]);
+
+    SegmentEffort::factory()->for($segment)->for($firstRun)->create([
+        'started_at_local' => $firstRun->started_at_local,
+        'elapsed_seconds' => 300.0,
+        'rank' => 1,
+        'is_pr' => true,
+    ]);
+    SegmentEffort::factory()->for($segment)->for($tieRun)->create([
+        'started_at_local' => $tieRun->started_at_local,
+        'elapsed_seconds' => 300.0,
+        'rank' => 2,
+        'is_pr' => false,
+    ]);
+
+    $milestones = app(AnnualRecapService::class)->build(2026)['milestones'];
+
+    expect($milestones['segment_efforts_count'])->toBe(1)
+        ->and($milestones['segment_prs_count'])->toBe(0)
+        ->and($milestones['segment_prs'])->toBe([]);
+});
+
+it('assigns activities on either side of midnight on New Year to the correct year', function () {
+    $lastOf2025 = Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2025-12-31 23:59:59'),
+        'distance_meters' => 5000.0,
+    ]);
+    $firstOf2026 = Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-01-01 00:00:00'),
+        'distance_meters' => 7000.0,
+    ]);
+    BestEffort::factory()->for($lastOf2025)->create([
+        'sport' => 'running',
+        'distance_key' => '5k',
+        'achieved_at' => $lastOf2025->started_at_local,
+    ]);
+    BestEffort::factory()->for($firstOf2026)->create([
+        'sport' => 'running',
+        'distance_key' => '1k',
+        'achieved_at' => $firstOf2026->started_at_local,
+    ]);
+
+    $service = app(AnnualRecapService::class);
+    $recap2025 = $service->build(2025);
+    $recap2026 = $service->build(2026);
+
+    expect($recap2025['totals']['activities'])->toBe(1)
+        ->and($recap2025['totals']['distance_meters'])->toBe(5000.0)
+        ->and($recap2025['monthly'][11]['activities'])->toBe(1)
+        ->and(array_column($recap2025['milestones']['best_efforts'], 'distance_key'))->toBe(['5k'])
+        ->and(array_column($recap2025['annual_summary']['daily'], 'date'))->toBe(['2025-12-31'])
+        ->and($recap2025['annual_summary']['years'])->toBe([2026, 2025])
+        ->and($recap2026['totals']['activities'])->toBe(1)
+        ->and($recap2026['totals']['distance_meters'])->toBe(7000.0)
+        ->and($recap2026['monthly'][0]['activities'])->toBe(1)
+        ->and(array_column($recap2026['milestones']['best_efforts'], 'distance_key'))->toBe(['1k'])
+        ->and(array_column($recap2026['annual_summary']['daily'], 'date'))->toBe(['2026-01-01'])
+        ->and($recap2026['yoy']['has_previous_data'])->toBeFalse();
+});
+
+it('includes activities up to the last second of today in the current year', function () {
+    Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2026-06-15 23:59:59')]);
+    Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2025-06-15 23:59:59')]);
+    Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2025-06-16 00:00:00')]);
+
+    $recap = app(AnnualRecapService::class)->build(2026);
+
+    expect($recap['totals']['activities'])->toBe(1)
+        ->and($recap['yoy']['activities_pct'])->toBe(0.0);
+});
+
+it('clamps ISO weeks that straddle New Year to the selected year', function () {
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2025-12-30 07:00:00'),
+        'distance_meters' => 40000.0,
+    ]);
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-01-02 07:00:00'),
+        'distance_meters' => 30000.0,
+    ]);
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-01-06 07:00:00'),
+        'distance_meters' => 5000.0,
+    ]);
+
+    $service = app(AnnualRecapService::class);
+    $recap2026 = $service->build(2026);
+    $recap2025 = $service->build(2025);
+
+    expect($recap2026['peaks']['biggest_week'])->toMatchArray([
+        'week_start' => '2026-01-01',
+        'week_end' => '2026-01-04',
+        'label' => '1 Jan – 4 Jan',
+        'distance_meters' => 30000.0,
+        'count' => 1,
+    ])
+        ->and($recap2026['consistency']['longest_weekly_streak']['weeks'])->toBe(2)
+        ->and($recap2025['peaks']['biggest_week'])->toMatchArray([
+            'week_start' => '2025-12-29',
+            'week_end' => '2025-12-31',
+            'label' => '29 Dec – 31 Dec',
+            'distance_meters' => 40000.0,
+            'count' => 1,
+        ]);
+});
+
+it('falls back to the latest active year when the requested year is outside 1970 to the current year', function (int $requestedYear) {
+    Activity::factory()->create(['started_at_local' => CarbonImmutable::parse('2025-07-04 07:00:00')]);
+
+    $recap = app(AnnualRecapService::class)->build($requestedYear);
+
+    expect($recap['selected_year'])->toBe(2025)
+        ->and($recap['is_current_year'])->toBeFalse();
+})->with([
+    'next year' => [2027],
+    'far future' => [2100],
+    'before 1970' => [1969],
+]);
 
 it('captures weather extremes and rainy session count for the selected year', function () {
     $frostRun = Activity::factory()->create([

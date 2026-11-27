@@ -311,8 +311,18 @@ async function downloadYearCardPng(): Promise<void> {
         const monoFont =
             "'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace";
         const sansFont =
-            "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+            "'Instrument Sans', ui-sans-serif, system-ui, sans-serif";
 
+        // Canvas text silently falls back if a web font weight hasn't been loaded yet.
+        await Promise.allSettled(
+            [
+                `400 18px ${sansFont}`,
+                `500 12px ${sansFont}`,
+                `700 56px ${sansFont}`,
+                `500 10px ${monoFont}`,
+                `600 13px ${monoFont}`,
+            ].map((font) => document.fonts.load(font)),
+        );
         // Background gradient
         const bgGrad = ctx.createLinearGradient(0, 0, width, height);
         bgGrad.addColorStop(0, '#0e0f12');
@@ -617,7 +627,8 @@ async function downloadYearCardPng(): Promise<void> {
         document.body.appendChild(anchor);
         anchor.click();
         anchor.remove();
-        URL.revokeObjectURL(url);
+        // Revoke after the click has been dispatched so the download can start.
+        setTimeout(() => URL.revokeObjectURL(url), 0);
 
         toast.success(`Downloaded ${props.selected_year} Year in Sport card`);
     } catch {

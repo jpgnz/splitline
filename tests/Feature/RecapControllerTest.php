@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\Activity;
+use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
 use Inertia\Testing\AssertableInertia as Assert;
 
@@ -80,18 +81,44 @@ it('renders the requested past year when year query parameter is provided', func
         );
 });
 
-it('falls back to the default year when the year query parameter is invalid', function () {
+it('falls back to the default year when the year query parameter is invalid or out of range', function (string $rawYear) {
     Activity::factory()->create([
         'started_at_local' => CarbonImmutable::parse('2025-07-04 07:00:00'),
         'distance_meters' => 15000.0,
         'duration_seconds' => 4500.0,
     ]);
 
-    $this->get('/recap?year=invalid')
+    $this->get('/recap?year='.urlencode($rawYear))
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
             ->component('Recap/Index')
             ->where('selected_year', 2025)
             ->where('has_data', true),
+        );
+})->with([
+    'non-numeric' => ['invalid'],
+    'decimal' => ['2024.9'],
+    'next year' => ['2027'],
+    'far future' => ['2100'],
+    'before 1970' => ['1969'],
+]);
+
+it('keeps recap measurements canonical when the imperial unit system is selected', function () {
+    app(AppSettings::class)->set('unit_system', 'imperial');
+
+    Activity::factory()->create([
+        'started_at_local' => CarbonImmutable::parse('2026-04-10 07:00:00'),
+        'distance_meters' => 16093.4,
+        'elevation_gain' => 304.8,
+    ]);
+
+    $this->get('/recap')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Recap/Index')
+            ->where('units', 'imperial')
+            ->where('totals.distance_meters', 16093.4)
+            ->where('totals.elevation_gain', 304.8)
+            ->where('monthly.3.distance_meters', 16093.4),
         );
 });
