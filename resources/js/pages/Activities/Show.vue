@@ -6,8 +6,10 @@ import {
     ChevronLeft,
     ChevronRight,
     CloudSun,
+    EyeOff,
     MapPin,
     RefreshCw,
+    RotateCcw,
     Route as RouteIcon,
     Share2,
     Star,
@@ -15,10 +17,12 @@ import {
     Wind,
     X,
 } from '@lucide/vue';
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import InfoPopover from '@/components/InfoPopover.vue';
 import type { MetricGlossaryTopic } from '@/lib/metricGlossary';
 import {
+    exclude as excludeActivityAction,
+    restore as restoreActivityAction,
     syncWeather,
     toggleFavorite as toggleFavoriteAction,
 } from '@/actions/App/Http/Controllers/ActivityController';
@@ -148,7 +152,27 @@ const powerUnitMode = ref<'watts' | 'pct'>('watts');
 const isSyncingStreams = ref<boolean>(false);
 const isSyncingWeather = ref<boolean>(false);
 const isTogglingFavorite = ref<boolean>(false);
+const isUpdatingExclusion = ref<boolean>(false);
+const excludeModalOpen = ref<boolean>(false);
 const shareModalOpen = ref<boolean>(false);
+
+function handleModalKeyDown(event: KeyboardEvent): void {
+    if (
+        event.key === 'Escape' &&
+        excludeModalOpen.value &&
+        !isUpdatingExclusion.value
+    ) {
+        excludeModalOpen.value = false;
+    }
+}
+
+onMounted(() => {
+    document.addEventListener('keydown', handleModalKeyDown);
+});
+
+onBeforeUnmount(() => {
+    document.removeEventListener('keydown', handleModalKeyDown);
+});
 
 watch(
     () => props.activity.id,
@@ -160,6 +184,7 @@ watch(
         highlightedRange.value = null;
         splitsTab.value =
             (props.stream?.km_splits?.length ?? 0) > 0 ? 'splits' : 'laps';
+        excludeModalOpen.value = false;
         shareModalOpen.value = false;
     },
 );
@@ -343,6 +368,49 @@ function syncActivityWeather(): void {
             },
             onFinish: () => {
                 isSyncingWeather.value = false;
+            },
+        },
+    );
+}
+
+function confirmExcludeActivity(): void {
+    if (isUpdatingExclusion.value) {
+        return;
+    }
+
+    router.post(
+        excludeActivityAction.url(props.activity.id),
+        {},
+        {
+            preserveScroll: true,
+            onStart: () => {
+                isUpdatingExclusion.value = true;
+            },
+            onSuccess: () => {
+                excludeModalOpen.value = false;
+            },
+            onFinish: () => {
+                isUpdatingExclusion.value = false;
+            },
+        },
+    );
+}
+
+function restoreActivity(): void {
+    if (isUpdatingExclusion.value) {
+        return;
+    }
+
+    router.post(
+        restoreActivityAction.url(props.activity.id),
+        {},
+        {
+            preserveScroll: true,
+            onStart: () => {
+                isUpdatingExclusion.value = true;
+            },
+            onFinish: () => {
+                isUpdatingExclusion.value = false;
             },
         },
     );
@@ -1181,11 +1249,19 @@ const tabs = computed<
         <!-- Top Back & Prev/Next Bar -->
         <div class="flex items-center justify-between gap-3">
             <Link
-                :href="activitiesIndex.url()"
+                :href="
+                    activity.is_excluded
+                        ? activitiesIndex.url({ query: { excluded: 1 } })
+                        : activitiesIndex.url()
+                "
                 class="inline-flex items-center gap-1.5 font-mono text-xs text-zinc-500 transition-colors hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
             >
                 <ArrowLeft class="size-3.5" />
-                All Activities
+                {{
+                    activity.is_excluded
+                        ? 'Excluded Activities'
+                        : 'All Activities'
+                }}
             </Link>
 
             <div class="flex items-center gap-1.5">
@@ -1233,6 +1309,43 @@ const tabs = computed<
             </div>
         </div>
 
+        <!-- Excluded Status Banner -->
+        <div
+            v-if="activity.is_excluded"
+            role="status"
+            class="flex flex-col gap-3 rounded-xl border border-rose-500/35 bg-rose-50/90 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-rose-500/30 dark:bg-rose-500/10"
+        >
+            <div class="flex items-start gap-2.5">
+                <EyeOff
+                    class="mt-0.5 size-4 shrink-0 text-rose-600 dark:text-rose-400"
+                />
+                <div class="text-xs text-rose-900 dark:text-rose-200">
+                    <p class="font-semibold">
+                        Excluded from stats &amp; analytics
+                    </p>
+                    <p class="mt-0.5 text-rose-700/90 dark:text-rose-300/80">
+                        This activity is hidden from totals, PRs, gear mileage,
+                        matched routes, and segments, and will not be re-synced.
+                    </p>
+                </div>
+            </div>
+            <button
+                type="button"
+                :disabled="isUpdatingExclusion"
+                class="inline-flex h-8 shrink-0 cursor-pointer items-center justify-center gap-1.5 rounded-lg border border-rose-600/30 bg-white px-3 py-1.5 font-mono text-xs font-medium text-rose-700 transition-colors hover:bg-rose-100/80 disabled:cursor-not-allowed disabled:opacity-60 dark:border-rose-400/30 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-500/20"
+                @click="restoreActivity"
+            >
+                <RotateCcw class="size-3.5" />
+                <span>
+                    {{
+                        isUpdatingExclusion
+                            ? 'Restoring...'
+                            : 'Restore to stats'
+                    }}
+                </span>
+            </button>
+        </div>
+
         <!-- Activity Header -->
         <header
             class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"
@@ -1248,6 +1361,14 @@ const tabs = computed<
                             :style="{ backgroundColor: sportMeta.accentHex }"
                         />
                         {{ sportMeta.label }}
+                    </span>
+
+                    <span
+                        v-if="activity.is_excluded"
+                        class="inline-flex items-center gap-1 rounded-md border border-rose-500/40 bg-rose-50 px-2 py-0.5 font-mono text-[10px] font-medium tracking-wider text-rose-700 uppercase dark:bg-rose-500/15 dark:text-rose-300"
+                    >
+                        <EyeOff class="size-3" />
+                        Excluded
                     </span>
 
                     <span
@@ -1355,6 +1476,7 @@ const tabs = computed<
             <!-- Action Controls -->
             <div class="flex flex-wrap items-center gap-2">
                 <Link
+                    v-if="!activity.is_excluded"
                     :href="compareUrl"
                     prefetch
                     class="inline-flex h-8 items-center gap-1.5 rounded-lg border border-emerald-500/35 bg-emerald-500/10 px-2.5 py-1.5 font-mono text-xs font-medium whitespace-nowrap text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:border-emerald-500/30 dark:text-emerald-300 dark:hover:bg-emerald-500/20"
@@ -1384,7 +1506,10 @@ const tabs = computed<
                     :can-sync-weather="canSyncWeather"
                     :has-weather="weather !== null"
                     :syncing-weather="isSyncingWeather"
+                    :updating-exclusion="isUpdatingExclusion"
                     @sync-weather="syncActivityWeather"
+                    @exclude="excludeModalOpen = true"
+                    @restore="restoreActivity"
                 />
             </div>
         </header>
@@ -1946,5 +2071,91 @@ const tabs = computed<
             :weather="weather"
             @close="shareModalOpen = false"
         />
+
+        <!-- Exclude Confirmation Modal -->
+        <div
+            v-if="excludeModalOpen"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="exclude-activity-title"
+            class="fixed inset-0 z-50 flex items-center justify-center bg-zinc-950/60 p-4 backdrop-blur-xs"
+            @click.self="!isUpdatingExclusion && (excludeModalOpen = false)"
+        >
+            <div
+                class="w-full max-w-md rounded-xl border border-zinc-200/90 bg-white p-5 shadow-2xl dark:border-zinc-800/90 dark:bg-[#141417]"
+            >
+                <div class="flex items-start justify-between gap-3">
+                    <div class="flex items-center gap-2.5">
+                        <span
+                            class="inline-flex size-8 items-center justify-center rounded-lg bg-rose-500/10 text-rose-600 dark:text-rose-400"
+                        >
+                            <EyeOff class="size-4" />
+                        </span>
+                        <h2
+                            id="exclude-activity-title"
+                            class="text-base font-semibold text-zinc-900 dark:text-zinc-100"
+                        >
+                            Exclude activity from stats?
+                        </h2>
+                    </div>
+                    <button
+                        type="button"
+                        :disabled="isUpdatingExclusion"
+                        aria-label="Close dialog"
+                        class="cursor-pointer rounded-md p-1 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-700 disabled:opacity-50 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+                        @click="excludeModalOpen = false"
+                    >
+                        <X class="size-4" />
+                    </button>
+                </div>
+
+                <p class="mt-3 text-sm text-zinc-600 dark:text-zinc-400">
+                    <span class="font-medium text-zinc-900 dark:text-zinc-100">
+                        {{ activity.name }}
+                    </span>
+                    will be removed from all dashboards, totals, PRs, gear
+                    mileage, matched routes, and segments.
+                </p>
+
+                <ul
+                    class="mt-3 space-y-1.5 rounded-lg border border-zinc-200/80 bg-[#f7f7f5] px-3.5 py-2.5 text-xs text-zinc-600 dark:border-zinc-800/80 dark:bg-zinc-900/60 dark:text-zinc-400"
+                >
+                    <li>
+                        • Future Garmin syncs and file imports will skip it
+                        automatically.
+                    </li>
+                    <li>
+                        • Its telemetry is kept intact so you can inspect or
+                        restore it anytime from the Excluded filter.
+                    </li>
+                </ul>
+
+                <div class="mt-5 flex items-center justify-end gap-2">
+                    <button
+                        type="button"
+                        :disabled="isUpdatingExclusion"
+                        class="inline-flex h-8 cursor-pointer items-center rounded-lg border border-zinc-200/90 bg-white px-3 font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-800/90 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                        @click="excludeModalOpen = false"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        :disabled="isUpdatingExclusion"
+                        class="inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-lg bg-rose-600 px-3 font-mono text-xs font-medium text-white transition-colors hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-rose-500 dark:hover:bg-rose-600"
+                        @click="confirmExcludeActivity"
+                    >
+                        <EyeOff class="size-3.5" />
+                        <span>
+                            {{
+                                isUpdatingExclusion
+                                    ? 'Excluding...'
+                                    : 'Exclude from stats'
+                            }}
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
     </div>
 </template>

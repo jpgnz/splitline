@@ -318,6 +318,34 @@ class RouteMatchingService
     }
 
     /**
+     * Remove an activity's route fingerprint and refresh its former cluster when excluding an activity.
+     */
+    public function removeActivity(Activity $activity): void
+    {
+        $fingerprint = ActivityRouteFingerprint::query()
+            ->where('activity_id', $activity->id)
+            ->first();
+
+        if ($fingerprint === null) {
+            return;
+        }
+
+        $clusterId = $fingerprint->route_cluster_id;
+
+        DB::transaction(function () use ($fingerprint, $clusterId): void {
+            $fingerprint->delete();
+
+            if ($clusterId !== null) {
+                $cluster = RouteCluster::query()->find($clusterId);
+
+                if ($cluster !== null) {
+                    $this->refreshCluster($cluster);
+                }
+            }
+        });
+    }
+
+    /**
      * Count eligible outdoor streamed activities still awaiting route matching.
      */
     public function unfingerprintedCount(): int

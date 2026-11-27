@@ -152,6 +152,7 @@ class PaceDistributionService
         $windowEnd = $referenceDate->format('Y-m-d').' 23:59:59';
 
         $recentEfforts = BestEffort::query()
+            ->whereHas('activity')
             ->where('sport', 'running')
             ->where('is_excluded', false)
             ->whereIn('distance_key', self::QUALIFYING_KEYS)
@@ -170,6 +171,7 @@ class PaceDistributionService
         }
 
         $allTimeEfforts = BestEffort::query()
+            ->whereHas('activity')
             ->where('sport', 'running')
             ->where('is_excluded', false)
             ->whereIn('distance_key', self::QUALIFYING_KEYS)

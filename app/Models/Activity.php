@@ -2,8 +2,10 @@
 
 namespace App\Models;
 
+use App\Models\Scopes\NotExcludedScope;
 use Carbon\CarbonImmutable;
 use Database\Factories\ActivityFactory;
+use Illuminate\Database\Eloquent\Attributes\ScopedBy;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -123,6 +125,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property bool|null $favorite_override
  * @property bool $is_pr
  * @property bool $is_manual
+ * @property CarbonImmutable|null $excluded_at
  * @property CarbonImmutable|null $streams_synced_at
  * @property CarbonImmutable|null $streams_unavailable_at
  * @property CarbonImmutable|null $route_match_skipped_at
@@ -138,6 +141,7 @@ use Illuminate\Database\Query\Builder as QueryBuilder;
  * @property-read Collection<int, SegmentEffort> $segmentEfforts
  * @property-read Collection<int, Segment> $detectedSegments
  */
+#[ScopedBy([NotExcludedScope::class])]
 class Activity extends Model
 {
     /** @use HasFactory<ActivityFactory> */
@@ -255,6 +259,7 @@ class Activity extends Model
         'favorite_override',
         'is_pr',
         'is_manual',
+        'excluded_at',
         'streams_synced_at',
         'streams_unavailable_at',
         'route_match_skipped_at',
@@ -361,6 +366,7 @@ class Activity extends Model
             'favorite_override' => 'boolean',
             'is_pr' => 'boolean',
             'is_manual' => 'boolean',
+            'excluded_at' => 'immutable_datetime',
             'streams_synced_at' => 'immutable_datetime',
             'streams_unavailable_at' => 'immutable_datetime',
             'route_match_skipped_at' => 'immutable_datetime',
@@ -440,6 +446,46 @@ class Activity extends Model
     public function effectiveDiscipline(): ?string
     {
         return $this->discipline_override ?? $this->sport_discipline;
+    }
+
+    public function isExcluded(): bool
+    {
+        return $this->excluded_at !== null;
+    }
+
+    /**
+     * Resolve route bindings including excluded activities so users can inspect and restore them.
+     *
+     * @param  mixed  $value
+     * @param  string|null  $field
+     */
+    public function resolveRouteBinding($value, $field = null): ?Model
+    {
+        return $this->resolveRouteBindingQuery(static::withExcluded(), $value, $field)->first();
+    }
+
+    /**
+     * Include user-excluded activities in the query.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeWithExcluded(Builder $query): Builder
+    {
+        return $query->withoutGlobalScope(NotExcludedScope::class);
+    }
+
+    /**
+     * Restrict the query to user-excluded activities only.
+     *
+     * @param  Builder<self>  $query
+     * @return Builder<self>
+     */
+    public function scopeOnlyExcluded(Builder $query): Builder
+    {
+        return $query
+            ->withoutGlobalScope(NotExcludedScope::class)
+            ->whereNotNull($this->qualifyColumn('excluded_at'));
     }
 
     /**

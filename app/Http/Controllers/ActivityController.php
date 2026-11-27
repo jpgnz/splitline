@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Requests\UpdateActivityDisciplineRequest;
 use App\Models\Activity;
+use App\Services\Activities\ActivityExclusionService;
 use App\Services\Activities\ActivityQueryService;
 use App\Services\Garmin\ActivityStreamSyncService;
 use App\Services\Weather\ActivityWeatherSyncService;
@@ -28,6 +29,7 @@ class ActivityController extends Controller
                 'to',
                 'pr',
                 'favorite',
+                'excluded',
                 'view',
                 'month',
                 'sort',
@@ -101,5 +103,19 @@ class ActivityController extends Controller
         }
 
         return back()->with('status', 'Activity weather updated.');
+    }
+
+    public function exclude(Activity $activity, ActivityExclusionService $exclusions): RedirectResponse
+    {
+        $exclusions->exclude($activity);
+
+        return back()->with('status', 'Activity excluded from stats. It will not be re-synced and can be restored anytime.');
+    }
+
+    public function restore(Activity $activity, ActivityExclusionService $exclusions): RedirectResponse
+    {
+        $exclusions->restore($activity);
+
+        return back()->with('status', 'Activity restored to stats.');
     }
 }

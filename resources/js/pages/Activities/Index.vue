@@ -10,6 +10,7 @@ import {
     ChevronLeft,
     ChevronRight,
     Download,
+    EyeOff,
     RotateCcw,
     Search,
     Star,
@@ -18,6 +19,7 @@ import {
     X,
 } from '@lucide/vue';
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { restore as restoreActivityAction } from '@/actions/App/Http/Controllers/ActivityController';
 import DateRangeControl, {
     type DateRangePreset,
     type DateWindowMeta,
@@ -46,6 +48,7 @@ interface ActivityFilters {
     to: string | null;
     pr: boolean;
     favorite: boolean;
+    excluded: boolean;
     view: 'table' | 'calendar';
     month: string;
     sort: string;
@@ -97,6 +100,8 @@ interface ActivityListItem {
     calories: number | null;
     is_favorite: boolean;
     is_pr: boolean;
+    excluded_at?: string | null;
+    is_excluded?: boolean;
 }
 
 interface PaginationLink {
@@ -165,6 +170,7 @@ interface ActivitiesIndexProps {
     calendar: ActivityCalendar;
     dateWindow: DateWindowMeta;
     available_sports?: AvailableSportOption[];
+    excluded_count?: number;
 }
 
 const props = defineProps<ActivitiesIndexProps>();
@@ -243,6 +249,7 @@ const WEEKDAY_HEADERS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const searchInput = ref<string>(props.filters.search ?? '');
 const selectedCompareIds = ref<number[]>([]);
 const selectedCompareNames = ref<Record<number, string>>({});
+const restoringActivityId = ref<number | null>(null);
 
 watch(
     () => props.activities.data,
@@ -353,6 +360,7 @@ const hasActiveFilters = computed<boolean>(
         props.filters.range !== 'all' ||
         props.filters.pr ||
         props.filters.favorite ||
+        props.filters.excluded ||
         (Boolean(props.filters.sort) && props.filters.sort !== 'date') ||
         (Boolean(props.filters.dir) && props.filters.dir !== 'desc'),
 );
@@ -477,6 +485,10 @@ function buildQuery(
         query.favorite = 1;
     }
 
+    if (merged.excluded) {
+        query.excluded = 1;
+    }
+
     if (merged.view === 'calendar') {
         query.view = 'calendar';
 
@@ -565,6 +577,31 @@ function toggleFavorite(): void {
     applyFilters({ favorite: !props.filters.favorite });
 }
 
+function toggleExcluded(): void {
+    clearCompareSelection();
+    applyFilters({ excluded: !props.filters.excluded });
+}
+
+function restoreActivity(activityId: number): void {
+    if (restoringActivityId.value !== null) {
+        return;
+    }
+
+    router.post(
+        restoreActivityAction.url(activityId),
+        {},
+        {
+            preserveScroll: true,
+            onStart: () => {
+                restoringActivityId.value = activityId;
+            },
+            onFinish: () => {
+                restoringActivityId.value = null;
+            },
+        },
+    );
+}
+
 function setView(view: 'table' | 'calendar'): void {
     if (view === props.filters.view) {
         return;
@@ -603,6 +640,7 @@ function resetFilters(): void {
         to: null,
         pr: false,
         favorite: false,
+        excluded: false,
         sort: 'date',
         dir: 'desc',
     });
@@ -817,6 +855,7 @@ const summaryKpis = computed<
 
                 <!-- Export Filtered CSV -->
                 <a
+                    v-if="!filters.excluded"
                     :href="csvExportUrl"
                     class="inline-flex items-center gap-1.5 rounded-lg border border-zinc-200/90 bg-white px-3 py-2 font-mono text-xs font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-[#141417] dark:text-zinc-300 dark:hover:bg-zinc-900 dark:hover:text-white"
                     title="Export currently filtered activities as CSV"
@@ -950,9 +989,51 @@ const summaryKpis = computed<
                         />
                         <span>Favorites</span>
                     </button>
+
+                    <button
+                        v-if="(excluded_count ?? 0) > 0 || filters.excluded"
+                        type="button"
+                        class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-mono text-[11px] font-medium transition-colors"
+                        :class="
+                            filters.excluded
+                                ? 'border-rose-500/60 bg-rose-50 text-rose-800 dark:border-rose-500/50 dark:bg-rose-500/15 dark:text-rose-300'
+                                : 'border-zinc-200/90 bg-white text-zinc-600 hover:border-zinc-300 hover:text-zinc-950 dark:border-zinc-800/90 dark:bg-zinc-900/50 dark:text-zinc-400 dark:hover:border-zinc-700 dark:hover:text-zinc-100'
+                        "
+                        @click="toggleExcluded"
+                    >
+                        <EyeOff class="size-3 text-rose-500" />
+                        <span>Excluded ({{ excluded_count ?? 0 }})</span>
+                    </button>
                 </div>
             </div>
         </section>
+
+        <!-- Excluded Activities Notice -->
+        <div
+            v-if="filters.excluded"
+            role="status"
+            class="flex flex-col gap-2 rounded-xl border border-rose-500/30 bg-rose-50/80 px-4 py-3 sm:flex-row sm:items-center sm:justify-between dark:border-rose-500/25 dark:bg-rose-500/10"
+        >
+            <div
+                class="flex items-center gap-2 text-xs text-rose-900 dark:text-rose-200"
+            >
+                <EyeOff
+                    class="size-4 shrink-0 text-rose-600 dark:text-rose-400"
+                />
+                <span>
+                    Showing excluded activities. They are omitted from all
+                    stats, PRs, routes, segments, and gear, and won’t be
+                    re-synced.
+                </span>
+            </div>
+            <button
+                type="button"
+                class="inline-flex shrink-0 cursor-pointer items-center gap-1 self-start rounded-lg border border-rose-500/30 bg-white px-2.5 py-1 font-mono text-[11px] font-medium text-rose-700 transition-colors hover:bg-rose-100/80 sm:self-auto dark:border-rose-400/30 dark:bg-zinc-900 dark:text-rose-300 dark:hover:bg-rose-500/20"
+                @click="toggleExcluded"
+            >
+                Back to active
+            </button>
+        </div>
 
         <!-- Dynamic Filtered Summary Strip -->
         <section class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -1186,14 +1267,19 @@ const summaryKpis = computed<
                                     type="checkbox"
                                     :checked="isSelectedForCompare(activity.id)"
                                     :disabled="
-                                        !isSelectedForCompare(activity.id) &&
-                                        selectedCompareIds.length >= 3
+                                        filters.excluded ||
+                                        (!isSelectedForCompare(activity.id) &&
+                                            selectedCompareIds.length >= 3)
                                     "
                                     :title="
-                                        !isSelectedForCompare(activity.id) &&
-                                        selectedCompareIds.length >= 3
-                                            ? 'Maximum 3 activities can be compared'
-                                            : undefined
+                                        filters.excluded
+                                            ? 'Restore activity to compare'
+                                            : !isSelectedForCompare(
+                                                    activity.id,
+                                                ) &&
+                                                selectedCompareIds.length >= 3
+                                              ? 'Maximum 3 activities can be compared'
+                                              : undefined
                                     "
                                     :aria-label="`Select ${activity.name} for comparison`"
                                     class="size-3.5 cursor-pointer rounded border-zinc-300 text-emerald-600 accent-emerald-600 focus:ring-emerald-500 disabled:cursor-not-allowed disabled:opacity-40 dark:border-zinc-700 dark:bg-zinc-900"
@@ -1267,6 +1353,33 @@ const summaryKpis = computed<
                                             >
                                                 PR
                                             </span>
+                                            <span
+                                                v-if="activity.is_excluded"
+                                                class="inline-flex items-center rounded border border-rose-500/40 bg-rose-50 px-1.5 py-0.5 font-mono text-[10px] leading-none font-medium text-rose-700 dark:bg-rose-500/15 dark:text-rose-300"
+                                            >
+                                                EXCLUDED
+                                            </span>
+                                            <button
+                                                v-if="activity.is_excluded"
+                                                type="button"
+                                                :disabled="
+                                                    restoringActivityId !== null
+                                                "
+                                                class="inline-flex cursor-pointer items-center gap-1 rounded border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 font-mono text-[10px] leading-none font-medium text-emerald-700 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-300"
+                                                @click="
+                                                    restoreActivity(activity.id)
+                                                "
+                                            >
+                                                <RotateCcw class="size-2.5" />
+                                                <span>
+                                                    {{
+                                                        restoringActivityId ===
+                                                        activity.id
+                                                            ? 'Restoring...'
+                                                            : 'Restore'
+                                                    }}
+                                                </span>
+                                            </button>
                                             <span
                                                 v-if="activity.is_indoor"
                                                 class="inline-flex items-center rounded border border-zinc-200 bg-zinc-100 px-1.5 py-0.5 font-mono text-[10px] leading-none text-zinc-600 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-400"

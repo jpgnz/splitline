@@ -38,6 +38,8 @@ Route::patch('/activities/{activity}/discipline', [ActivityController::class, 'u
 Route::post('/activities/{activity}/favorite', [ActivityController::class, 'toggleFavorite'])->name('activities.favorite.toggle');
 Route::post('/activities/{activity}/sync-streams', [ActivityController::class, 'syncStreams'])->name('activities.streams.sync');
 Route::post('/activities/{activity}/sync-weather', [ActivityController::class, 'syncWeather'])->name('activities.weather.sync');
+Route::post('/activities/{activity}/exclude', [ActivityController::class, 'exclude'])->name('activities.exclude');
+Route::post('/activities/{activity}/restore', [ActivityController::class, 'restore'])->name('activities.restore');
 Route::patch('/activities/{activity}/gear', [GearController::class, 'assignToActivity'])->name('activities.gear.assign');
 
 Route::get('/running', [SportsController::class, 'running'])->name('running.index');

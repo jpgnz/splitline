@@ -208,4 +208,11 @@ class ActivityFactory extends Factory
             'start_lng' => null,
         ]);
     }
+
+    public function excluded(?CarbonImmutable $at = null): static
+    {
+        return $this->state(fn (array $attributes): array => [
+            'excluded_at' => $at ?? CarbonImmutable::now('UTC'),
+        ]);
+    }
 }
