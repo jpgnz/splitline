@@ -1859,7 +1859,10 @@ function submitSegmentsSettings(): void {
             <section
                 class="rounded-xl border border-zinc-200/90 bg-white p-6 dark:border-zinc-800/90 dark:bg-[#141417]"
             >
-                <form class="space-y-5" @submit.prevent="submitSegmentsSettings">
+                <form
+                    class="space-y-5"
+                    @submit.prevent="submitSegmentsSettings"
+                >
                     <div
                         class="flex flex-wrap items-start justify-between gap-3"
                     >
