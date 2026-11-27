@@ -582,9 +582,17 @@ const disciplineTelemetryCells = computed<TelemetryCell[]>(() => {
                 label: 'Stride Length',
                 value: formatStride(a.avg_stride_length),
                 sub:
-                    a.avg_vertical_oscillation !== null
-                        ? `Osc ${formatOscillation(a.avg_vertical_oscillation)}`
-                        : null,
+                    [
+                        a.avg_vertical_oscillation !== null
+                            ? `Osc ${formatOscillation(a.avg_vertical_oscillation)}`
+                            : null,
+                        a.avg_vertical_ratio !== null &&
+                        a.avg_ground_contact_time === null
+                            ? `Vert Ratio ${a.avg_vertical_ratio.toFixed(1)}%`
+                            : null,
+                    ]
+                        .filter((part): part is string => part !== null)
+                        .join(' · ') || null,
             },
         ];
 
