@@ -1,93 +1,153 @@
 # Screenshots
 
-All screenshots below were captured at `1920×1080` using randomized demo health and activity data.
+Screenshots are captured at `1920×1080` against the synthetic **Boulder, Colorado** demo database built by `php artisan demo:seed`. It uses real OpenStreetMap routes, real terrain elevation, real historical weather, and physics-based telemetry, and contains no personal data. The hero collage (`00-hero.png`) is the image featured in the root README.
 
-## Overview & Daily Health
+## Overview & Health
 
-### Health Overview (Light)
+### Health Overview — Light
 
-![Health Overview (Light)](01-dashboard.png)
+![Health Overview — In Focus bento grid and 7-day training load](01-dashboard-top.png)
 
-### Health Overview (Dark)
+![Health Overview — At a Glance and annual activity summary](02-dashboard-bottom.png)
 
-![Health Overview (Dark)](02-dashboard-dark.png)
+### Health Overview — Dark
+
+![Health Overview — dark mode](03-dashboard-dark.png)
 
 ### Sleep Trends & Stages
 
-![Sleep Trends & Stages](03-health-sleep.png)
+![Sleep trends and stages](04-health-sleep.png)
 
-### All Activities
+## Fitness, Insights & Recap
 
-![All Activities](04-activities.png)
+### Training Load & Form
 
-## Running Hub
+![Training Load & Form — Performance Management Chart](05-fitness-load.png)
 
-### Volume & HR Zone Polarization
+### Health & Performance Insights
 
-![Running Hub — Volume & HR Zones](05-running-hub.png)
+![Insights — headline findings, sleep and HRV panels](06-insights-top.png)
 
-### Best Efforts Board, 5K Timeline & Race Predictor
+![Insights — temperature, wind, and overnight recovery](07-insights-weather-recovery.png)
 
-![Running Hub — Best Efforts & Race Predictor](06-running-hub-efforts.png)
+![Insights — day-of-week and time-of-day patterns](08-insights-patterns.png)
 
-### Aerobic Efficiency, Cadence & Run/Walk Breakdown
+### Year in Sport
 
-![Running Hub — Aerobic Efficiency & Cadence](07-running-hub-efficiency.png)
+![Year in Sport — headline KPIs, monthly momentum, and sport mix](09-recap-top.png)
 
-## Cycling, MTB & Road Hubs
+![Year in Sport — consistency, peak moments, records, and routes](10-recap-highlights.png)
 
-### Cycling Overview & Reclassification Inbox
+## Activities, Heatmap, Routes & Segments
 
-![Cycling Overview](08-cycling-overview.png)
+### All Activities — Calendar
 
-### Mountain Biking — Volume & HR Zones
+![November 2026 activity calendar](11-activities-calendar.png)
 
-![Mountain Biking Hub](09-mtb-hub.png)
+### Route Heatmap
 
-### Mountain Biking — Climbing, Grit, Flow & Jumps
+![Route heatmap — Boulder Front Range in tilted 3D terrain view](12-heatmap.png)
 
-![Mountain Biking — Trail Dynamics](10-mtb-hub-trails.png)
+### Matched Routes
 
-### Road Cycling — Volume & HR Zones
+![Matched routes overview](13-routes-overview.png)
 
-![Road Cycling Hub](11-road-hub.png)
+![Flagstaff Mountain Climb — matched route detail and weather impact](14-route-detail.png)
 
-### Road Cycling — FTP, Power Curve & 180-Day CTL/ATL/TSB
+### Segments & Climbs
 
-![Road Cycling — Power & Fitness](12-road-hub-power.png)
+![Segments and climbs overview](15-segments-overview.png)
 
-### Road Cycling — Weekly TSS, FTP History & Power Zones
+![Flagstaff Road Climb — detail, effort progression, and elevation profile](16-segment-detail.png)
 
-![Road Cycling — TSS & Power Zones](13-road-hub-zones.png)
+![Flagstaff Road Climb — personal leaderboard](17-segment-leaderboard.png)
 
-## Activity Telemetry & Maps
+### Activity Comparison
 
-### Running Activity — Pace Route & Running Dynamics
+![Side-by-side comparison of two Flagstaff Mountain Climb rides](18-activity-compare.png)
 
-![Running Activity — Pace Route](14-activity-running.png)
+## Running Hub & Activity
 
-### Running Activity — Historical Weather & FIT Telemetry Streams
+### Running Overview
 
-![Running Activity — Streams](15-activity-running-streams.png)
+![Running hub — discipline summaries, goals, and weekly volume](19-running-hub-1-overview.png)
 
-### Mountain Biking Activity — Flow Route & Trail Dynamics
+![Road running hub — best efforts board, race predictor, and VO2 max trend](20-running-hub-2-zones-efforts.png)
 
-![Mountain Biking Activity — Flow Route](16-activity-mtb.png)
+![Road running hub — running dynamics and Eddington](21-running-hub-3-dynamics-eddington.png)
 
-### Mountain Biking Activity — Streams & Detected Jumps
+### Chautauqua & Mesa Foothills Run
 
-![Mountain Biking Activity — Jumps](17-activity-mtb-jumps.png)
+![Running activity — Profile route with live hover telemetry](22-activity-run-hero.png)
 
-### Road Cycling Activity — Power Route & Summary
+![Running activity — telemetry streams](23-activity-run-streams.png)
 
-![Road Cycling Activity — Power Route](18-activity-road.png)
+![Running activity — splits and zones](24-activity-run-splits-zones.png)
 
-### Road Cycling Activity — Wind Route Overlay, Wind Arrows & Weather Breakdown
+![Running activity — best efforts and matched segments](25-activity-run-efforts-segments.png)
 
-![Road Cycling Activity — Wind Map](19-activity-road-wind.png)
+![Running activity — route and effort context](26-activity-run-context.png)
 
-## Settings
+![Running activity — all stats](27-activity-run-stats.png)
+
+## Cycling, Road & MTB Hubs and Activities
+
+### Cycling Overview
+
+![Cycling hub — discipline summaries and weekly volume](28-cycling-overview.png)
+
+### Road Cycling Overview
+
+![Road cycling hub — overview](29-road-hub-1-overview.png)
+
+![Road cycling hub — zones and aerobic efficiency](30-road-hub-2-zones-efficiency.png)
+
+![Road cycling hub — power curve and fitness](31-road-hub-3-power-fitness.png)
+
+![Road cycling hub — TSS, power zones, and efforts](32-road-hub-4-tss-zones-efforts.png)
+
+### Front Range & Peak-to-Peak Century
+
+![Road activity — Profile and Wind map with live hover telemetry](33-activity-road-hero-wind.png)
+
+![Road activity — telemetry streams](34-activity-road-streams.png)
+
+![Road activity — splits and zones](35-activity-road-splits-zones.png)
+
+![Road activity — best efforts and matched segments](36-activity-road-efforts-segments.png)
+
+![Road activity — route and effort context](37-activity-road-context.png)
+
+![Road activity — all stats](38-activity-road-stats.png)
+
+### Mountain Biking Overview
+
+![Mountain biking hub — overview and weekly volume](39-mtb-hub-1-overview.png)
+
+![Mountain biking hub — climbing and off-road dynamics](40-mtb-hub-2-climbing-offroad.png)
+
+### Betasso Preserve Canyon Loop
+
+![MTB activity — 3D Speed route with Jump #1 tooltip](41-activity-mtb-hero-3d-jump.png)
+
+![MTB activity — telemetry streams and detected jumps](42-activity-mtb-streams-jumps.png)
+
+![MTB activity — splits and zones](43-activity-mtb-splits-zones.png)
+
+![MTB activity — efforts and matched segments](44-activity-mtb-efforts-segments.png)
+
+![MTB activity — all stats](45-activity-mtb-context-stats.png)
+
+## Gear, Goals & Settings
+
+### Gear
+
+![Gear — bikes and shoes with logged mileage](46-gear.png)
+
+### Goals & Streaks
+
+![Goals and streaks](47-goals.png)
 
 ### Appearance, Units & Sports Configuration
 
-![Settings](20-settings.png)
+![Settings](48-settings.png)
