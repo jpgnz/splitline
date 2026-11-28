@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { decodePolyline } from '@/lib/polyline';
+import { computeSvgPathArrows, type SvgPathArrow } from '@/lib/routeDirection';
 
 const props = withDefaults(
     defineProps<{
@@ -22,6 +23,7 @@ const projected = computed<{
     pathD: string;
     start: { x: number; y: number };
     end: { x: number; y: number };
+    arrows: SvgPathArrow[];
 } | null>(() => {
     if (!props.encodedPolyline) {
         return null;
@@ -80,10 +82,13 @@ const projected = computed<{
         .map((pt, idx) => `${idx === 0 ? 'M' : 'L'}${pt.x} ${pt.y}`)
         .join(' ');
 
+    const arrows = computeSvgPathArrows(coords);
+
     return {
         pathD,
         start: coords[0],
         end: coords[coords.length - 1],
+        arrows,
     };
 });
 </script>
@@ -139,6 +144,22 @@ const projected = computed<{
                 stroke-linecap="round"
                 stroke-linejoin="round"
             />
+
+            <!-- Directional chevrons along the route -->
+            <g
+                v-for="(arrow, idx) in projected.arrows"
+                :key="idx"
+                :transform="`translate(${arrow.x} ${arrow.y}) rotate(${arrow.angleDeg})`"
+            >
+                <path
+                    d="M-2.6 -3.6L3.2 0L-2.6 3.6L-0.8 0Z"
+                    fill="none"
+                    class="stroke-white dark:stroke-zinc-950"
+                    stroke-width="2.4"
+                    stroke-linejoin="round"
+                />
+                <path d="M-2.6 -3.6L3.2 0L-2.6 3.6L-0.8 0Z" :fill="accentHex" />
+            </g>
 
             <!-- Finish point (shown when not a closed loop) -->
             <circle

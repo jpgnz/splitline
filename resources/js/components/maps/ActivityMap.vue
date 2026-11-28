@@ -14,6 +14,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useChartTheme } from '@/composables/useChartTheme';
 import {
     ElevationCurtainLayer,
+    type ElevationCurtainArrow,
     type ElevationCurtainMarker,
     type ElevationCurtainPoint,
 } from '@/lib/elevationCurtainLayer';
@@ -25,6 +26,12 @@ import {
     syncMapterhornTerrain,
     toLngLat,
 } from '@/lib/maplibre';
+import {
+    buildSdfImageData,
+    computeGeoRouteArrows,
+    type GeoRouteArrow,
+    type GeoRouteVertex,
+} from '@/lib/routeDirection';
 import { percentileOf } from '@/lib/telemetry';
 import { M_TO_FT, useUnits } from '@/lib/units';
 import {
@@ -83,12 +90,17 @@ type ActivityMapViewMode = '2d' | 'profile' | '3d';
 const WIND_ARROW_IMAGE_ID = 'wind-arrow';
 const WIND_AMBIENT_SOURCE_ID = 'activity-wind-ambient';
 const WIND_AMBIENT_LAYER_ID = 'activity-wind-ambient-arrows';
+const ROUTE_DIRECTION_IMAGE_ID = 'route-direction-arrow';
+const ROUTE_DIRECTION_SOURCE_ID = 'activity-route-direction';
+const ROUTE_DIRECTION_LAYER_ID = 'activity-route-direction-arrows';
 const ROUTE_SOURCE_ID = 'activity-route';
 const ROUTE_LAYER_ID = 'activity-route-line';
 const ROUTE_HIT_LAYER_ID = 'activity-route-hit';
 const HIGHLIGHT_SOURCE_ID = 'activity-highlight-route';
 const HIGHLIGHT_CASING_LAYER_ID = 'activity-highlight-casing';
 const HIGHLIGHT_LAYER_ID = 'activity-highlight-line';
+const HIGHLIGHT_DIRECTION_SOURCE_ID = 'activity-highlight-direction';
+const HIGHLIGHT_DIRECTION_LAYER_ID = 'activity-highlight-direction-arrows';
 const HIGHLIGHT_ENDPOINTS_SOURCE_ID = 'activity-highlight-endpoints';
 const HIGHLIGHT_ENDPOINTS_LAYER_ID = 'activity-highlight-endpoints-circles';
 const JUMPS_SOURCE_ID = 'activity-jumps';
@@ -109,12 +121,15 @@ const TELEMETRY_STOPS: Array<[number, number, number]> = [
 const EARTH_RADIUS_METERS = 6371000;
 const WIND_ARROW_CANVAS_SIZE = 64;
 const WIND_ARROW_SDF_RADIUS = 10;
+const ROUTE_ARROW_CANVAS_SIZE = 48;
+const ROUTE_ARROW_SDF_RADIUS = 8;
 const WIND_GRID_MARGIN_X = 34;
 const WIND_GRID_MARGIN_Y = 30;
 const WIND_GRID_TARGET_SPACING_X = 110;
 const WIND_GRID_TARGET_SPACING_Y = 88;
 
 let cachedWindArrowImageData: ImageData | null = null;
+let cachedRouteArrowImageData: ImageData | null = null;
 
 const page = usePage();
 const mapConfig = computed(() => resolveMapConfig(page.props.maps));
@@ -357,94 +372,46 @@ function getWindArrowImageData(): ImageData | null {
         return cachedWindArrowImageData;
     }
 
-    if (typeof document === 'undefined') {
-        return null;
-    }
-
-    const size = WIND_ARROW_CANVAS_SIZE;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-    if (!ctx) {
-        return null;
-    }
-
-    ctx.clearRect(0, 0, size, size);
-    ctx.fillStyle = '#ffffff';
-    ctx.beginPath();
-    ctx.moveTo(32, 10);
-    ctx.lineTo(47, 29);
-    ctx.lineTo(36.5, 26.5);
-    ctx.lineTo(36.5, 53);
-    ctx.lineTo(27.5, 53);
-    ctx.lineTo(27.5, 26.5);
-    ctx.lineTo(17, 29);
-    ctx.closePath();
-    ctx.fill();
-
-    const raw = ctx.getImageData(0, 0, size, size);
-    const inside = new Uint8Array(size * size);
-
-    for (let i = 0; i < size * size; i += 1) {
-        inside[i] = raw.data[i * 4 + 3] >= 128 ? 1 : 0;
-    }
-
-    const sdfData = new Uint8ClampedArray(size * size * 4);
-    const radius = WIND_ARROW_SDF_RADIUS;
-    const radiusSq = radius * radius;
-
-    for (let y = 0; y < size; y += 1) {
-        const yMin = Math.max(0, y - radius);
-        const yMax = Math.min(size - 1, y + radius);
-
-        for (let x = 0; x < size; x += 1) {
-            const idx = y * size + x;
-            const isIn = inside[idx];
-            const xMin = Math.max(0, x - radius);
-            const xMax = Math.min(size - 1, x + radius);
-            let minDistSq = radiusSq;
-
-            for (let ny = yMin; ny <= yMax; ny += 1) {
-                const dy = ny - y;
-                const dySq = dy * dy;
-
-                if (dySq >= minDistSq) {
-                    continue;
-                }
-
-                const rowOffset = ny * size;
-
-                for (let nx = xMin; nx <= xMax; nx += 1) {
-                    if (inside[rowOffset + nx] !== isIn) {
-                        const dx = nx - x;
-                        const dSq = dx * dx + dySq;
-
-                        if (dSq < minDistSq) {
-                            minDistSq = dSq;
-                        }
-                    }
-                }
-            }
-
-            const dist = Math.sqrt(minDistSq);
-            const signedDist = isIn ? dist : -dist;
-            const normalized = Math.max(
-                0,
-                Math.min(1, 0.75 + (signedDist / radius) * 0.75),
-            );
-            const offset = idx * 4;
-            sdfData[offset] = 255;
-            sdfData[offset + 1] = 255;
-            sdfData[offset + 2] = 255;
-            sdfData[offset + 3] = Math.round(normalized * 255);
-        }
-    }
-
-    cachedWindArrowImageData = new ImageData(sdfData, size, size);
+    cachedWindArrowImageData = buildSdfImageData(
+        WIND_ARROW_CANVAS_SIZE,
+        WIND_ARROW_SDF_RADIUS,
+        (ctx) => {
+            ctx.beginPath();
+            ctx.moveTo(32, 10);
+            ctx.lineTo(47, 29);
+            ctx.lineTo(36.5, 26.5);
+            ctx.lineTo(36.5, 53);
+            ctx.lineTo(27.5, 53);
+            ctx.lineTo(27.5, 26.5);
+            ctx.lineTo(17, 29);
+            ctx.closePath();
+            ctx.fill();
+        },
+    );
 
     return cachedWindArrowImageData;
+}
+
+function getRouteArrowImageData(): ImageData | null {
+    if (cachedRouteArrowImageData) {
+        return cachedRouteArrowImageData;
+    }
+
+    cachedRouteArrowImageData = buildSdfImageData(
+        ROUTE_ARROW_CANVAS_SIZE,
+        ROUTE_ARROW_SDF_RADIUS,
+        (ctx) => {
+            ctx.beginPath();
+            ctx.moveTo(24, 10);
+            ctx.lineTo(36.5, 34);
+            ctx.lineTo(24, 27);
+            ctx.lineTo(11.5, 34);
+            ctx.closePath();
+            ctx.fill();
+        },
+    );
+
+    return cachedRouteArrowImageData;
 }
 
 function computeWindArrowSize(speedKmh: number): number {
@@ -851,9 +818,67 @@ function computeLngLatBounds(points: [number, number][]): LngLatBounds | null {
     return bounds.isEmpty() ? null : bounds;
 }
 
-function buildRouteGeoJson(): {
+function mutedRouteColor(): string {
+    return isDark.value ? '#64748b' : '#94a3b8';
+}
+
+function isDistanceInHighlightRange(
+    distance: number | null,
+    range: HighlightRange | null,
+): boolean {
+    return Boolean(
+        range &&
+        distance !== null &&
+        distance >= range.startDistance &&
+        distance <= range.endDistance,
+    );
+}
+
+function arrowsToGeoJson(arrows: GeoRouteArrow[]): FeatureCollection<Point> {
+    return {
+        type: 'FeatureCollection',
+        features: arrows.map((arrow) => ({
+            type: 'Feature',
+            properties: {
+                bearing: arrow.bearing,
+                color: arrow.color,
+            },
+            geometry: {
+                type: 'Point',
+                coordinates: [arrow.lng, arrow.lat],
+            },
+        })),
+    };
+}
+
+function toCurtainArrows(
+    arrows: GeoRouteArrow[],
+    style: {
+        strokeColor: string;
+        sizePx: number;
+        strokeWidthPx: number;
+        alpha: number;
+    },
+): ElevationCurtainArrow[] {
+    return arrows.map((arrow) => ({
+        lng: arrow.lng,
+        lat: arrow.lat,
+        heightMeters: arrow.heightMeters,
+        aheadLng: arrow.aheadLng,
+        aheadLat: arrow.aheadLat,
+        aheadHeightMeters: arrow.aheadHeightMeters,
+        fillColor: arrow.color,
+        strokeColor: style.strokeColor,
+        sizePx: style.sizePx,
+        strokeWidthPx: style.strokeWidthPx,
+        alpha: style.alpha,
+    }));
+}
+
+function buildRouteGeoJson(includeDirectionVertices = true): {
     data: FeatureCollection<LineString>;
     lineWidth: number;
+    directionVertices: GeoRouteVertex[];
 } {
     const boundsPoints = getBoundsPoints();
 
@@ -861,8 +886,12 @@ function buildRouteGeoJson(): {
         return {
             data: { type: 'FeatureCollection', features: [] },
             lineWidth: 3.5,
+            directionVertices: [],
         };
     }
+
+    const range = props.highlightRange;
+    const dimmedColor = range ? mutedRouteColor() : null;
 
     if (
         props.colorMode === 'wind' &&
@@ -874,6 +903,7 @@ function buildRouteGeoJson(): {
         const pts = gnssSeriesPoints.value;
         const maxScale = windMaxScaleKmh.value;
         const features: Array<Feature<LineString>> = [];
+        const directionVertices: GeoRouteVertex[] = [];
 
         for (let i = 0; i < pts.length - 1; i += 1) {
             const current = pts[i];
@@ -909,6 +939,30 @@ function buildRouteGeoJson(): {
                 );
             }
 
+            if (includeDirectionVertices) {
+                if (i === 0) {
+                    directionVertices.push({
+                        lat: current.latLng[0],
+                        lng: current.latLng[1],
+                        color: dimmedColor ?? color,
+                        highlighted: isDistanceInHighlightRange(
+                            current.point.distance,
+                            range,
+                        ),
+                    });
+                }
+
+                directionVertices.push({
+                    lat: next.latLng[0],
+                    lng: next.latLng[1],
+                    color: dimmedColor ?? color,
+                    highlighted: isDistanceInHighlightRange(
+                        next.point.distance,
+                        range,
+                    ),
+                });
+            }
+
             features.push({
                 type: 'Feature',
                 properties: {
@@ -928,6 +982,7 @@ function buildRouteGeoJson(): {
         return {
             data: { type: 'FeatureCollection', features },
             lineWidth: 4,
+            directionVertices,
         };
     }
 
@@ -942,6 +997,7 @@ function buildRouteGeoJson(): {
         const span = max - min;
         const pts = gnssSeriesPoints.value;
         const features: Array<Feature<LineString>> = [];
+        const directionVertices: GeoRouteVertex[] = [];
 
         for (let i = 0; i < pts.length - 1; i += 1) {
             const current = pts[i];
@@ -973,6 +1029,30 @@ function buildRouteGeoJson(): {
                           props.colorMode === 'stamina',
                       );
 
+            if (includeDirectionVertices) {
+                if (i === 0) {
+                    directionVertices.push({
+                        lat: current.latLng[0],
+                        lng: current.latLng[1],
+                        color: dimmedColor ?? color,
+                        highlighted: isDistanceInHighlightRange(
+                            current.point.distance,
+                            range,
+                        ),
+                    });
+                }
+
+                directionVertices.push({
+                    lat: next.latLng[0],
+                    lng: next.latLng[1],
+                    color: dimmedColor ?? color,
+                    highlighted: isDistanceInHighlightRange(
+                        next.point.distance,
+                        range,
+                    ),
+                });
+            }
+
             features.push({
                 type: 'Feature',
                 properties: {
@@ -992,7 +1072,30 @@ function buildRouteGeoJson(): {
         return {
             data: { type: 'FeatureCollection', features },
             lineWidth: 4,
+            directionVertices,
         };
+    }
+
+    const solidArrowColor = dimmedColor ?? props.accentColor;
+    let directionVertices: GeoRouteVertex[] = [];
+
+    if (includeDirectionVertices) {
+        directionVertices =
+            range && gnssSeriesPoints.value.length >= 2
+                ? gnssSeriesPoints.value.map((item) => ({
+                      lat: item.latLng[0],
+                      lng: item.latLng[1],
+                      color: solidArrowColor,
+                      highlighted: isDistanceInHighlightRange(
+                          item.point.distance,
+                          range,
+                      ),
+                  }))
+                : boundsPoints.map(([lat, lng]) => ({
+                      lat,
+                      lng,
+                      color: solidArrowColor,
+                  }));
     }
 
     return {
@@ -1012,12 +1115,30 @@ function buildRouteGeoJson(): {
             ],
         },
         lineWidth: 3.5,
+        directionVertices,
     };
 }
 
-function buildHighlightGeoJson(): {
+function buildRouteDirectionGeoJson(
+    vertices: GeoRouteVertex[],
+    avoidPoints: ReadonlyArray<{ lat: number; lng: number }> = [],
+): FeatureCollection<Point> {
+    return arrowsToGeoJson(
+        computeGeoRouteArrows(vertices, {
+            skipHighlighted: Boolean(props.highlightRange),
+            avoidPoints,
+        }),
+    );
+}
+
+function buildHighlightGeoJson(
+    includeArrows = true,
+    fullRouteBounds?: ReadonlyArray<{ lat: number; lng: number }>,
+): {
     line: FeatureCollection<LineString>;
     endpoints: FeatureCollection<Point>;
+    arrows: FeatureCollection<Point>;
+    endpointLatLngs: Array<{ lat: number; lng: number }>;
 } {
     const range = props.highlightRange;
 
@@ -1025,20 +1146,22 @@ function buildHighlightGeoJson(): {
         return {
             line: { type: 'FeatureCollection', features: [] },
             endpoints: { type: 'FeatureCollection', features: [] },
+            arrows: { type: 'FeatureCollection', features: [] },
+            endpointLatLngs: [],
         };
     }
 
     const coords: [number, number][] = [];
+    const arrowVertices: GeoRouteVertex[] = [];
 
     for (const item of gnssSeriesPoints.value) {
-        const dist = item.point.distance;
-
-        if (
-            dist !== null &&
-            dist >= range.startDistance &&
-            dist <= range.endDistance
-        ) {
+        if (isDistanceInHighlightRange(item.point.distance, range)) {
             coords.push(toLngLat(item.latLng));
+            arrowVertices.push({
+                lat: item.latLng[0],
+                lng: item.latLng[1],
+                color: '#ea580c',
+            });
         }
     }
 
@@ -1046,8 +1169,25 @@ function buildHighlightGeoJson(): {
         return {
             line: { type: 'FeatureCollection', features: [] },
             endpoints: { type: 'FeatureCollection', features: [] },
+            arrows: { type: 'FeatureCollection', features: [] },
+            endpointLatLngs: [],
         };
     }
+
+    const highlightArrows = includeArrows
+        ? computeGeoRouteArrows(arrowVertices, {
+              boundsVertices: fullRouteBounds,
+              minPathLength: 26,
+              targetSpacing: 105,
+              minArrows: 1,
+              maxArrows: 5,
+              minEndpointClearance: 16,
+              minArrowClearance: 32,
+          })
+        : [];
+
+    const firstVertex = arrowVertices[0];
+    const lastVertex = arrowVertices[arrowVertices.length - 1];
 
     return {
         line: {
@@ -1092,6 +1232,11 @@ function buildHighlightGeoJson(): {
                 },
             ],
         },
+        arrows: arrowsToGeoJson(highlightArrows),
+        endpointLatLngs: [
+            { lat: firstVertex.lat, lng: firstVertex.lng },
+            { lat: lastVertex.lat, lng: lastVertex.lng },
+        ],
     };
 }
 
@@ -1239,13 +1384,19 @@ function buildHoverGeoJson(index: number | null): FeatureCollection<Point> {
 function buildElevationCurtainModel(): {
     points: ElevationCurtainPoint[];
     markers: ElevationCurtainMarker[];
+    arrows: ElevationCurtainArrow[];
     heightBySeriesIndex: Map<number, number>;
 } {
     const pts = gnssSeriesPoints.value;
     const heightMap = new Map<number, number>();
 
     if (pts.length < 2) {
-        return { points: [], markers: [], heightBySeriesIndex: heightMap };
+        return {
+            points: [],
+            markers: [],
+            arrows: [],
+            heightBySeriesIndex: heightMap,
+        };
     }
 
     const altitudes: Array<number | null> = pts.map((item) =>
@@ -1256,7 +1407,12 @@ function buildElevationCurtainModel(): {
     const validAlts = altitudes.filter((v): v is number => v !== null);
 
     if (validAlts.length < 2) {
-        return { points: [], markers: [], heightBySeriesIndex: heightMap };
+        return {
+            points: [],
+            markers: [],
+            arrows: [],
+            heightBySeriesIndex: heightMap,
+        };
     }
 
     // Fill isolated null altitude readings by linear interpolation from neighbors
@@ -1346,7 +1502,7 @@ function buildElevationCurtainModel(): {
     const baseOffset = Math.max(routeSpanMeters * 0.008, scaledPeak * 0.045);
 
     const range = props.highlightRange;
-    const mutedColor = isDark.value ? '#64748b' : '#94a3b8';
+    const mutedColor = mutedRouteColor();
     const useWindColors =
         !range &&
         props.colorMode === 'wind' &&
@@ -1374,12 +1530,9 @@ function buildElevationCurtainModel(): {
             Math.max(0, filledAlts[i] - minAlt) * verticalExaggeration;
         heightMap.set(item.index, heightMeters);
 
-        const dist = item.point.distance;
-        const inHighlight = Boolean(
-            range &&
-            dist !== null &&
-            dist >= range.startDistance &&
-            dist <= range.endDistance,
+        const inHighlight = isDistanceInHighlightRange(
+            item.point.distance,
+            range,
         );
 
         let color = props.accentColor;
@@ -1505,9 +1658,89 @@ function buildElevationCurtainModel(): {
         );
     }
 
+    const allArrowVertices: GeoRouteVertex[] = curtainPoints.map((pt) => ({
+        lat: pt.lat,
+        lng: pt.lng,
+        color: range ? mutedColor : pt.color,
+        heightMeters: pt.heightMeters,
+        highlighted: pt.highlighted,
+    }));
+
+    const arrows: ElevationCurtainArrow[] = [];
+
+    if (range) {
+        const highlightAvoidPoints =
+            highlightFirstPoint && highlightLastPoint
+                ? [
+                      {
+                          lat: highlightFirstPoint.lat,
+                          lng: highlightFirstPoint.lng,
+                      },
+                      {
+                          lat: highlightLastPoint.lat,
+                          lng: highlightLastPoint.lng,
+                      },
+                  ]
+                : [];
+
+        arrows.push(
+            ...toCurtainArrows(
+                computeGeoRouteArrows(allArrowVertices, {
+                    skipHighlighted: true,
+                    avoidPoints: highlightAvoidPoints,
+                }),
+                {
+                    strokeColor,
+                    sizePx: 4.8,
+                    strokeWidthPx: 1.5,
+                    alpha: 0.45,
+                },
+            ),
+        );
+
+        const highlightedVertices: GeoRouteVertex[] = curtainPoints
+            .filter((pt) => pt.highlighted)
+            .map((pt) => ({
+                lat: pt.lat,
+                lng: pt.lng,
+                color: '#ea580c',
+                heightMeters: pt.heightMeters,
+            }));
+
+        arrows.push(
+            ...toCurtainArrows(
+                computeGeoRouteArrows(highlightedVertices, {
+                    boundsVertices: allArrowVertices,
+                    minPathLength: 26,
+                    targetSpacing: 105,
+                    minArrows: 1,
+                    maxArrows: 5,
+                    minEndpointClearance: 16,
+                    minArrowClearance: 32,
+                }),
+                {
+                    strokeColor,
+                    sizePx: 6.2,
+                    strokeWidthPx: 1.9,
+                    alpha: 1,
+                },
+            ),
+        );
+    } else {
+        arrows.push(
+            ...toCurtainArrows(computeGeoRouteArrows(allArrowVertices), {
+                strokeColor,
+                sizePx: 5.8,
+                strokeWidthPx: 1.8,
+                alpha: 0.98,
+            }),
+        );
+    }
+
     return {
         points: curtainPoints,
         markers,
+        arrows,
         heightBySeriesIndex: heightMap,
     };
 }
@@ -1754,6 +1987,17 @@ function ensureOverlayLayers(): void {
         }
     }
 
+    if (!map.hasImage(ROUTE_DIRECTION_IMAGE_ID)) {
+        const routeArrowImage = getRouteArrowImageData();
+
+        if (routeArrowImage) {
+            map.addImage(ROUTE_DIRECTION_IMAGE_ID, routeArrowImage, {
+                sdf: true,
+                pixelRatio: 2,
+            });
+        }
+    }
+
     if (!map.getSource(WIND_AMBIENT_SOURCE_ID)) {
         map.addSource(WIND_AMBIENT_SOURCE_ID, {
             type: 'geojson',
@@ -1812,6 +2056,37 @@ function ensureOverlayLayers(): void {
         });
     }
 
+    if (!map.getSource(ROUTE_DIRECTION_SOURCE_ID)) {
+        map.addSource(ROUTE_DIRECTION_SOURCE_ID, {
+            type: 'geojson',
+            data: emptyFeatureCollection(),
+        });
+    }
+
+    if (!map.getLayer(ROUTE_DIRECTION_LAYER_ID)) {
+        map.addLayer({
+            id: ROUTE_DIRECTION_LAYER_ID,
+            type: 'symbol',
+            source: ROUTE_DIRECTION_SOURCE_ID,
+            layout: {
+                'icon-image': ROUTE_DIRECTION_IMAGE_ID,
+                'icon-rotate': ['get', 'bearing'],
+                'icon-rotation-alignment': 'map',
+                'icon-pitch-alignment': 'map',
+                'icon-size': 0.86,
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true,
+            },
+            paint: {
+                'icon-color': ['get', 'color'],
+                'icon-halo-color': strokeColor,
+                'icon-halo-width': 1.85,
+                'icon-halo-blur': 0.25,
+                'icon-opacity': 0.96,
+            },
+        });
+    }
+
     if (!map.getLayer(ROUTE_HIT_LAYER_ID)) {
         map.addLayer({
             id: ROUTE_HIT_LAYER_ID,
@@ -1866,6 +2141,37 @@ function ensureOverlayLayers(): void {
                 'line-color': '#ea580c',
                 'line-width': 5.5,
                 'line-opacity': 1,
+            },
+        });
+    }
+
+    if (!map.getSource(HIGHLIGHT_DIRECTION_SOURCE_ID)) {
+        map.addSource(HIGHLIGHT_DIRECTION_SOURCE_ID, {
+            type: 'geojson',
+            data: emptyFeatureCollection(),
+        });
+    }
+
+    if (!map.getLayer(HIGHLIGHT_DIRECTION_LAYER_ID)) {
+        map.addLayer({
+            id: HIGHLIGHT_DIRECTION_LAYER_ID,
+            type: 'symbol',
+            source: HIGHLIGHT_DIRECTION_SOURCE_ID,
+            layout: {
+                'icon-image': ROUTE_DIRECTION_IMAGE_ID,
+                'icon-rotate': ['get', 'bearing'],
+                'icon-rotation-alignment': 'map',
+                'icon-pitch-alignment': 'map',
+                'icon-size': 0.92,
+                'icon-allow-overlap': true,
+                'icon-ignore-placement': true,
+            },
+            paint: {
+                'icon-color': ['get', 'color'],
+                'icon-halo-color': strokeColor,
+                'icon-halo-width': 2.0,
+                'icon-halo-blur': 0.25,
+                'icon-opacity': 0.98,
             },
         });
     }
@@ -2065,7 +2371,11 @@ function renderRoute(fitBounds = false): void {
     ensureOverlayLayers();
 
     const profileActive = isProfileMode.value;
-    const { data: routeData, lineWidth } = buildRouteGeoJson();
+    const {
+        data: routeData,
+        lineWidth,
+        directionVertices,
+    } = buildRouteGeoJson(!profileActive);
     const routeSource = map.getSource(ROUTE_SOURCE_ID) as
         | GeoJSONSource
         | undefined;
@@ -2089,11 +2399,7 @@ function renderRoute(fitBounds = false): void {
             map.setPaintProperty(
                 ROUTE_LAYER_ID,
                 'line-color',
-                props.highlightRange
-                    ? isDark.value
-                        ? '#64748b'
-                        : '#94a3b8'
-                    : ['get', 'color'],
+                props.highlightRange ? mutedRouteColor() : ['get', 'color'],
             );
             map.setPaintProperty(
                 ROUTE_LAYER_ID,
@@ -2103,11 +2409,41 @@ function renderRoute(fitBounds = false): void {
         }
     }
 
+    const strokeColor = markerStrokeColor();
+    const highlight = buildHighlightGeoJson(!profileActive, directionVertices);
+
+    const routeDirectionSource = map.getSource(ROUTE_DIRECTION_SOURCE_ID) as
+        | GeoJSONSource
+        | undefined;
+    routeDirectionSource?.setData(
+        profileActive
+            ? emptyFeatureCollection()
+            : buildRouteDirectionGeoJson(
+                  directionVertices,
+                  highlight.endpointLatLngs,
+              ),
+    );
+
+    if (map.getLayer(ROUTE_DIRECTION_LAYER_ID)) {
+        map.setPaintProperty(
+            ROUTE_DIRECTION_LAYER_ID,
+            'icon-halo-color',
+            strokeColor,
+        );
+        map.setPaintProperty(
+            ROUTE_DIRECTION_LAYER_ID,
+            'icon-opacity',
+            props.highlightRange ? 0.55 : 0.96,
+        );
+    }
+
     const flatOverlayVisibility = profileActive ? 'none' : 'visible';
 
     for (const layerId of [
+        ROUTE_DIRECTION_LAYER_ID,
         HIGHLIGHT_CASING_LAYER_ID,
         HIGHLIGHT_LAYER_ID,
+        HIGHLIGHT_DIRECTION_LAYER_ID,
         HIGHLIGHT_ENDPOINTS_LAYER_ID,
         ENDPOINTS_LAYER_ID,
     ]) {
@@ -2116,11 +2452,25 @@ function renderRoute(fitBounds = false): void {
         }
     }
 
-    const highlight = buildHighlightGeoJson();
+    if (map.getLayer(HIGHLIGHT_DIRECTION_LAYER_ID)) {
+        map.setPaintProperty(
+            HIGHLIGHT_DIRECTION_LAYER_ID,
+            'icon-halo-color',
+            strokeColor,
+        );
+    }
+
     const highlightSource = map.getSource(HIGHLIGHT_SOURCE_ID) as
         | GeoJSONSource
         | undefined;
     highlightSource?.setData(highlight.line);
+
+    const highlightDirectionSource = map.getSource(
+        HIGHLIGHT_DIRECTION_SOURCE_ID,
+    ) as GeoJSONSource | undefined;
+    highlightDirectionSource?.setData(
+        profileActive ? emptyFeatureCollection() : highlight.arrows,
+    );
 
     const highlightEndpointsSource = map.getSource(
         HIGHLIGHT_ENDPOINTS_SOURCE_ID,
@@ -2143,6 +2493,7 @@ function renderRoute(fitBounds = false): void {
         elevationCurtainLayer.setData({
             points: model.points,
             markers: model.markers,
+            arrows: model.arrows,
             hoverMarker: buildCurtainHoverMarker(props.activeIndex),
             isDark: isDark.value,
         });
@@ -2153,8 +2504,6 @@ function renderRoute(fitBounds = false): void {
     }
 
     updateWindArrows();
-
-    const strokeColor = markerStrokeColor();
 
     if (map.getLayer(HIGHLIGHT_CASING_LAYER_ID)) {
         map.setPaintProperty(
