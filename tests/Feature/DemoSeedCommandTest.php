@@ -48,10 +48,13 @@ it('rejects out-of-range days and invalid end-date values', function () {
 });
 
 it('seeds an isolated sqlite demo database with streams, weather, matched routes, climbs, and health history', function () {
-    $originalDb = config('database.connections.sqlite.database');
-    $tempDb = '/tmp/opencode/demo-seed-e2e-test.sqlite';
+    $originalDefault = DB::getDefaultConnection();
+    $originalSqliteUrl = config('database.connections.sqlite.url');
+    $tempDb = sys_get_temp_dir().'/demo-seed-e2e-test-'.uniqid('', true).'.sqlite';
     $routeCachePath = storage_path('app/demo-routes-cache.json');
     $originalCacheBytes = is_file($routeCachePath) ? file_get_contents($routeCachePath) : null;
+
+    config(['database.connections.sqlite.url' => 'sqlite:///:memory:']);
 
     @mkdir(dirname($tempDb), 0755, true);
 
@@ -98,7 +101,8 @@ it('seeds an isolated sqlite demo database with streams, weather, matched routes
             '--seed' => 12345,
         ])->assertExitCode(0);
 
-        expect(Activity::query()->count())->toBeGreaterThan(50)
+        expect(config('database.connections.demo_seed.url'))->toBeNull()
+            ->and(Activity::query()->count())->toBeGreaterThan(50)
             ->and(ActivityStream::query()->count())->toBe(Activity::query()->count())
             ->and(ActivityDerivedMetric::query()->count())->toBe(Activity::query()->count())
             ->and(ActivityWeather::query()->count())->toBeGreaterThan(40)
@@ -110,9 +114,12 @@ it('seeds an isolated sqlite demo database with streams, weather, matched routes
             ->and(HrvRecord::query()->count())->toBe(90)
             ->and(Activity::query()->where('jump_count', '>', 0)->exists())->toBeTrue();
     } finally {
-        config(['database.connections.sqlite.database' => $originalDb]);
-        DB::purge('sqlite');
-        DB::reconnect('sqlite');
+        config([
+            'database.default' => $originalDefault,
+            'database.connections.sqlite.url' => $originalSqliteUrl,
+        ]);
+        DB::setDefaultConnection($originalDefault);
+        DB::purge('demo_seed');
 
         foreach ([$tempDb, "{$tempDb}-wal", "{$tempDb}-shm"] as $file) {
             if (file_exists($file)) {

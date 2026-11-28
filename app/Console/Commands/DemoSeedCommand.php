@@ -570,17 +570,31 @@ class DemoSeedCommand extends Command
             return false;
         }
 
+        $baseSqliteConfig = config('database.connections.sqlite', []);
+        $demoConnectionConfig = array_merge(
+            is_array($baseSqliteConfig) ? $baseSqliteConfig : [],
+            [
+                'driver' => 'sqlite',
+                'url' => null,
+                'database' => $dbPath,
+                'prefix' => '',
+                'foreign_key_constraints' => true,
+            ],
+        );
+
         config([
-            'database.default' => 'sqlite',
-            'database.connections.sqlite.database' => $dbPath,
-            'database.connections.sqlite.foreign_key_constraints' => true,
+            'database.connections.demo_seed' => $demoConnectionConfig,
+            'database.default' => 'demo_seed',
         ]);
 
-        DB::purge('sqlite');
-        DB::reconnect('sqlite');
+        DB::purge('demo_seed');
+        DB::setDefaultConnection('demo_seed');
 
         $this->components->info('Running database migrations on demo SQLite file...');
-        $exitCode = Artisan::call('migrate', ['--force' => true]);
+        $exitCode = Artisan::call('migrate', [
+            '--database' => 'demo_seed',
+            '--force' => true,
+        ]);
 
         if ($exitCode !== 0) {
             $this->components->error('Database migrations failed: '.trim(Artisan::output()));
