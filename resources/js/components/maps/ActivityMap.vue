@@ -2606,7 +2606,7 @@ onBeforeUnmount(() => {
 
         <!-- Top-Right View Mode & Terrain Controls -->
         <div
-            v-if="showViewModeSwitcher || terrainEnabled"
+            v-if="showViewModeSwitcher"
             class="absolute top-3 right-3 z-[400] flex flex-wrap items-center justify-end gap-1.5"
         >
             <div

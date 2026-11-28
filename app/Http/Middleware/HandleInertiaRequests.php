@@ -3,6 +3,7 @@
 namespace App\Http\Middleware;
 
 use App\Models\SyncRun;
+use App\Services\Garmin\GarminSyncService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\AppVersion;
@@ -89,7 +90,7 @@ class HandleInertiaRequests extends Middleware
      */
     private function latestSyncSummary(): array
     {
-        $providerConfigured = trim((string) config('services.garmin.key', '')) !== '';
+        $providerConfigured = GarminSyncService::isConfigured();
         $enrichments = $this->queueStatus->activeJobs();
 
         if (! Schema::hasTable('sync_runs')) {

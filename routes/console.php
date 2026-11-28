@@ -1,12 +1,13 @@
 <?php
 
 use App\Services\Export\DataExportService;
+use App\Services\Garmin\GarminSyncService;
 use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('garmin:sync')
     ->everyThirtyMinutes()
     ->withoutOverlapping()
-    ->when(fn (): bool => trim((string) config('services.garmin.key', '')) !== '');
+    ->when(fn (): bool => GarminSyncService::isConfigured());
 
 Schedule::command('routes:match --queue')
     ->hourly()

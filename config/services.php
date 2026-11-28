@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\MapConfig;
+
 return [
 
     /*
@@ -73,12 +75,12 @@ return [
     ],
 
     'maps' => [
-        'enabled' => (bool) env('MAPS_ENABLED', true),
+        'enabled' => env('MAPS_ENABLED', true),
         'tiles_enabled' => env('MAP_TILES_ENABLED'),
         'terrain_enabled' => env('MAP_TERRAIN_ENABLED'),
-        'style_light_url' => env('MAP_STYLE_LIGHT_URL', 'https://tiles.openfreemap.org/styles/positron'),
-        'style_dark_url' => env('MAP_STYLE_DARK_URL', 'https://tiles.openfreemap.org/styles/dark'),
-        'terrain_tilejson_url' => env('MAP_TERRAIN_TILEJSON_URL', 'https://tiles.mapterhorn.com/tilejson.json'),
+        'style_light_url' => env('MAP_STYLE_LIGHT_URL', MapConfig::DEFAULT_STYLE_LIGHT_URL),
+        'style_dark_url' => env('MAP_STYLE_DARK_URL', MapConfig::DEFAULT_STYLE_DARK_URL),
+        'terrain_tilejson_url' => env('MAP_TERRAIN_TILEJSON_URL', MapConfig::DEFAULT_TERRAIN_TILEJSON_URL),
     ],
 
     'auto_import' => [

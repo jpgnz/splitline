@@ -16,7 +16,7 @@ class MapConfig
 
     public function isEnabled(): bool
     {
-        return (bool) config('services.maps.enabled', true);
+        return $this->parseOptionalBool(config('services.maps.enabled')) ?? true;
     }
 
     public function tilesEnabled(): bool
@@ -70,27 +70,42 @@ class MapConfig
 
     public function tilesHost(): string
     {
-        $url = $this->resolveHttpUrl(config('services.maps.style_light_url'), self::DEFAULT_STYLE_LIGHT_URL);
-        $host = parse_url($url, PHP_URL_HOST);
+        $lightHost = $this->extractHost(
+            $this->resolveHttpUrl(config('services.maps.style_light_url'), self::DEFAULT_STYLE_LIGHT_URL),
+            self::PUBLIC_TILES_HOST,
+        );
+        $darkHost = $this->extractHost(
+            $this->resolveHttpUrl(config('services.maps.style_dark_url'), self::DEFAULT_STYLE_DARK_URL),
+            self::PUBLIC_TILES_HOST,
+        );
 
-        return is_string($host) && trim($host) !== ''
-            ? strtolower(trim($host))
-            : self::PUBLIC_TILES_HOST;
+        if ($lightHost === $darkHost) {
+            return $lightHost;
+        }
+
+        return "{$lightHost}, {$darkHost}";
     }
 
     public function terrainHost(): string
     {
-        $url = $this->resolveHttpUrl(config('services.maps.terrain_tilejson_url'), self::DEFAULT_TERRAIN_TILEJSON_URL);
-        $host = parse_url($url, PHP_URL_HOST);
-
-        return is_string($host) && trim($host) !== ''
-            ? strtolower(trim($host))
-            : self::PUBLIC_TERRAIN_HOST;
+        return $this->extractHost(
+            $this->resolveHttpUrl(config('services.maps.terrain_tilejson_url'), self::DEFAULT_TERRAIN_TILEJSON_URL),
+            self::PUBLIC_TERRAIN_HOST,
+        );
     }
 
     public function isPublicTilesHost(): bool
     {
-        return $this->tilesHost() === self::PUBLIC_TILES_HOST;
+        $lightHost = $this->extractHost(
+            $this->resolveHttpUrl(config('services.maps.style_light_url'), self::DEFAULT_STYLE_LIGHT_URL),
+            self::PUBLIC_TILES_HOST,
+        );
+        $darkHost = $this->extractHost(
+            $this->resolveHttpUrl(config('services.maps.style_dark_url'), self::DEFAULT_STYLE_DARK_URL),
+            self::PUBLIC_TILES_HOST,
+        );
+
+        return $lightHost === self::PUBLIC_TILES_HOST && $darkHost === self::PUBLIC_TILES_HOST;
     }
 
     public function isPublicTerrainHost(): bool
@@ -193,5 +208,14 @@ class MapConfig
         }
 
         return $trimmed;
+    }
+
+    private function extractHost(string $url, string $fallback): string
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+
+        return is_string($host) && trim($host) !== ''
+            ? strtolower(trim($host))
+            : $fallback;
     }
 }

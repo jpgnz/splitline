@@ -14,6 +14,7 @@ use App\Models\Activity;
 use App\Models\RouteCluster;
 use App\Models\Segment;
 use App\Services\Activities\ActivityDerivedMetricsService;
+use App\Services\Garmin\GarminSyncService;
 use App\Services\Routes\RouteMatchingService;
 use App\Services\Segments\SegmentMatchingService;
 use Illuminate\Bus\UniqueLock;
@@ -140,7 +141,7 @@ class QueueStatusService
             ];
         }
 
-        $garminConfigured = trim((string) config('services.garmin.key', '')) !== '';
+        $garminConfigured = GarminSyncService::isConfigured();
         $weatherEnabled = (bool) config('services.open_meteo.enabled', true);
         $nominatimEnabled = (bool) config('services.nominatim.enabled', true);
 
@@ -229,7 +230,7 @@ class QueueStatusService
             return $counts;
         }
 
-        if (trim((string) config('services.garmin.key', '')) !== '') {
+        if (GarminSyncService::isConfigured()) {
             /** @var list<int> $streamIds */
             $streamIds = array_values(array_map(
                 'intval',

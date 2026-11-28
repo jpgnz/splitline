@@ -34,16 +34,13 @@ const props = withDefaults(
     defineProps<{
         derivedMetrics: ActivityDerivedMetricsPayload | null;
         weather: ActivityWeatherPayload | null;
-        isIndoor: boolean;
-        hasCoordinates: boolean;
-        weatherSyncEnabled?: boolean;
+        showWeather: boolean;
         syncingWeather?: boolean;
         disciplineTitle: string | null;
         disciplineCells: SnapshotTelemetryCell[];
         accentHex: string;
     }>(),
     {
-        weatherSyncEnabled: true,
         syncingWeather: false,
     },
 );
@@ -235,12 +232,7 @@ const hrSegments = computed<{ low: number; moderate: number; high: number }>(
 );
 
 // --- Weather ---
-const showWeatherCard = computed<boolean>(
-    () =>
-        !props.isIndoor &&
-        (props.weather !== null ||
-            (props.weatherSyncEnabled && props.hasCoordinates)),
-);
+const showWeatherCard = computed<boolean>(() => props.showWeather);
 
 const WEATHER_ICONS: Record<string, Component> = {
     wind: Wind,

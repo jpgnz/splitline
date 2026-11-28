@@ -129,9 +129,9 @@ interface GeocodingConfigSummary {
 
 interface WeatherConfigSummary {
     enabled: boolean;
-    auto_sync: boolean;
     host: string;
     is_public_endpoint: boolean;
+    is_commercial_endpoint: boolean;
 }
 
 interface MapsConfigSummary {
@@ -200,7 +200,7 @@ const mapsStatusBadge = computed<{ label: string; enabled: boolean }>(() => {
         const isPublic = cfg.is_public_tiles_host && cfg.is_public_terrain_host;
 
         return {
-            label: isPublic ? 'Enabled · Public' : 'Enabled · Custom',
+            label: isPublic ? 'Enabled · Public' : 'Enabled · Self-hosted',
             enabled: true,
         };
     }
@@ -209,7 +209,7 @@ const mapsStatusBadge = computed<{ label: string; enabled: boolean }>(() => {
         return {
             label: cfg.is_public_tiles_host
                 ? 'Tiles Only · Public'
-                : 'Tiles Only · Custom',
+                : 'Tiles Only · Self-hosted',
             enabled: true,
         };
     }
@@ -217,10 +217,22 @@ const mapsStatusBadge = computed<{ label: string; enabled: boolean }>(() => {
     return {
         label: cfg.is_public_terrain_host
             ? 'Terrain Only · Public'
-            : 'Terrain Only · Custom',
+            : 'Terrain Only · Self-hosted',
         enabled: true,
     };
 });
+
+const showPublicTilesAttribution = computed<boolean>(
+    () =>
+        props.maps_config.tiles_enabled &&
+        props.maps_config.is_public_tiles_host,
+);
+
+const showPublicTerrainAttribution = computed<boolean>(
+    () =>
+        props.maps_config.terrain_enabled &&
+        props.maps_config.is_public_terrain_host,
+);
 
 type BackfillRange = '90d' | '1y' | '3y' | 'all';
 
@@ -2949,7 +2961,9 @@ function submitSegmentsSettings(): void {
                                         weather.enabled
                                             ? weather.is_public_endpoint
                                                 ? 'Enabled · Public'
-                                                : 'Enabled · Self-hosted'
+                                                : weather.is_commercial_endpoint
+                                                  ? 'Enabled · Commercial'
+                                                  : 'Enabled · Self-hosted'
                                             : 'Disabled'
                                     }}
                                 </span>
@@ -2973,6 +2987,7 @@ function submitSegmentsSettings(): void {
                             </p>
                         </div>
                         <span
+                            v-if="weather.is_public_endpoint"
                             class="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
                         >
                             Weather via
@@ -3052,12 +3067,12 @@ function submitSegmentsSettings(): void {
                         </div>
                         <span
                             v-if="
-                                maps_config.tiles_enabled ||
-                                maps_config.terrain_enabled
+                                showPublicTilesAttribution ||
+                                showPublicTerrainAttribution
                             "
                             class="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
                         >
-                            <template v-if="maps_config.tiles_enabled">
+                            <template v-if="showPublicTilesAttribution">
                                 <a
                                     href="https://openfreemap.org/"
                                     target="_blank"
@@ -3069,13 +3084,13 @@ function submitSegmentsSettings(): void {
                             </template>
                             <template
                                 v-if="
-                                    maps_config.tiles_enabled &&
-                                    maps_config.terrain_enabled
+                                    showPublicTilesAttribution &&
+                                    showPublicTerrainAttribution
                                 "
                             >
                                 ·
                             </template>
-                            <template v-if="maps_config.terrain_enabled">
+                            <template v-if="showPublicTerrainAttribution">
                                 <a
                                     href="https://mapterhorn.com/"
                                     target="_blank"

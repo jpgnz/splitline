@@ -20,8 +20,7 @@ import type { ActivityWeatherPayload } from '@/types/activity';
 const props = withDefaults(
     defineProps<{
         weather: ActivityWeatherPayload | null;
-        isIndoor: boolean;
-        hasCoordinates: boolean;
+        showWeather: boolean;
         weatherSyncEnabled?: boolean;
         syncing?: boolean;
     }>(),
@@ -37,12 +36,7 @@ const emit = defineEmits<{
 
 const { formatPrecip, formatSpeedKmh, formatTemp, tempFromC } = useUnits();
 
-const isVisible = computed<boolean>(
-    () =>
-        !props.isIndoor &&
-        (props.weather !== null ||
-            (props.weatherSyncEnabled && props.hasCoordinates)),
-);
+const isVisible = computed<boolean>(() => props.showWeather);
 
 const WEATHER_ICONS: Record<string, Component> = {
     wind: Wind,

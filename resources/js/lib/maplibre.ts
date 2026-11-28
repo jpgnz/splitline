@@ -11,13 +11,6 @@ import type { SharedMapsConfig } from '@/types/global';
 
 let workerConfigured = false;
 
-export const MAP_STYLE_URLS = {
-    light: 'https://tiles.openfreemap.org/styles/positron',
-    dark: 'https://tiles.openfreemap.org/styles/dark',
-} as const;
-
-export const MAPTERHORN_TILEJSON_URL =
-    'https://tiles.mapterhorn.com/tilejson.json';
 export const MAPTERHORN_HILLSHADE_SOURCE_ID = 'mapterhorn-hillshade-dem';
 export const MAPTERHORN_TERRAIN_SOURCE_ID = 'mapterhorn-terrain-dem';
 export const MAPTERHORN_HILLSHADE_LAYER_ID = 'mapterhorn-hillshade';
@@ -46,11 +39,11 @@ export function resolveMapConfig(
 ): SharedMapsConfig {
     if (!shared) {
         return {
-            tiles_enabled: true,
-            terrain_enabled: true,
-            style_light_url: MAP_STYLE_URLS.light,
-            style_dark_url: MAP_STYLE_URLS.dark,
-            terrain_tilejson_url: MAPTERHORN_TILEJSON_URL,
+            tiles_enabled: false,
+            terrain_enabled: false,
+            style_light_url: null,
+            style_dark_url: null,
+            terrain_tilejson_url: null,
         };
     }
 
@@ -151,7 +144,7 @@ export function syncMapterhornTerrain(
         isDark,
         exaggeration = DEFAULT_TERRAIN_EXAGGERATION,
         enabled = true,
-        tilejsonUrl = MAPTERHORN_TILEJSON_URL,
+        tilejsonUrl = null,
     } = options;
 
     const terrainAvailable = enabled && Boolean(tilejsonUrl);

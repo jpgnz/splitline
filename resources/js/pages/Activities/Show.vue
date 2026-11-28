@@ -1156,12 +1156,17 @@ const hasDerivedMetrics = computed<boolean>(() => {
     );
 });
 
+const showWeatherSection = computed<boolean>(
+    () =>
+        !props.activity.is_indoor &&
+        (props.weather !== null ||
+            (weatherEnabled.value && hasCoordinates.value)),
+);
+
 const hasSnapshotRail = computed<boolean>(
     () =>
         hasDerivedMetrics.value ||
-        (!props.activity.is_indoor &&
-            (props.weather !== null ||
-                (weatherEnabled.value && hasCoordinates.value))) ||
+        showWeatherSection.value ||
         (disciplineTelemetryTitle.value !== null &&
             disciplineTelemetryCells.value.length > 0),
 );
@@ -1789,9 +1794,7 @@ const tabs = computed<
                 <ActivitySessionSnapshotRail
                     :derived-metrics="derivedMetrics ?? null"
                     :weather="weather"
-                    :is-indoor="activity.is_indoor"
-                    :has-coordinates="hasCoordinates"
-                    :weather-sync-enabled="weatherEnabled"
+                    :show-weather="showWeatherSection"
                     :syncing-weather="isSyncingWeather"
                     :discipline-title="disciplineTelemetryTitle"
                     :discipline-cells="disciplineTelemetryCells"
@@ -1850,8 +1853,7 @@ const tabs = computed<
 
             <ActivityWeatherCard
                 :weather="weather"
-                :is-indoor="activity.is_indoor"
-                :has-coordinates="hasCoordinates"
+                :show-weather="showWeatherSection"
                 :weather-sync-enabled="weatherEnabled"
                 :syncing="isSyncingWeather"
                 @sync="syncActivityWeather"

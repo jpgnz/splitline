@@ -60,10 +60,10 @@ class GarminSyncCommand extends Command
             return self::FAILURE;
         }
 
-        if (trim((string) config('services.garmin.key', '')) === '') {
-            $this->components->warn('Garmin API key is not configured (GARMIN_KEY is empty). Skipping sync.');
+        if (! GarminSyncService::isConfigured()) {
+            $this->components->error('Garmin API key is not configured. Set GARMIN_KEY in your environment.');
 
-            return self::SUCCESS;
+            return self::FAILURE;
         }
 
         $activeRun = SyncRun::findActive();

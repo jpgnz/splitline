@@ -83,13 +83,98 @@ it('exposes maps_config and weather status on the settings page for purely offli
         );
 });
 
-it('skips garmin:sync cleanly without creating a failed SyncRun or making HTTP calls when GARMIN_KEY is empty', function () {
+it('parses off and no string values consistently for MAPS_ENABLED and detects self-hosted dark-only tile styles', function () {
+    config([
+        'services.maps.enabled' => 'off',
+        'services.maps.tiles_enabled' => '',
+        'services.maps.terrain_enabled' => '',
+    ]);
+
+    $maps = app(MapConfig::class);
+
+    expect($maps->isEnabled())->toBeFalse()
+        ->and($maps->tilesEnabled())->toBeFalse()
+        ->and($maps->terrainEnabled())->toBeFalse();
+
+    config([
+        'services.maps.enabled' => 'no',
+    ]);
+
+    expect($maps->isEnabled())->toBeFalse();
+
+    config([
+        'services.maps.enabled' => true,
+        'services.maps.tiles_enabled' => true,
+        'services.maps.style_light_url' => MapConfig::DEFAULT_STYLE_LIGHT_URL,
+        'services.maps.style_dark_url' => 'https://dark-tiles.internal.local/style.json',
+    ]);
+
+    expect($maps->isPublicTilesHost())->toBeFalse()
+        ->and($maps->tilesHost())->toBe('tiles.openfreemap.org, dark-tiles.internal.local');
+});
+
+it('classifies Open-Meteo weather endpoints across forecast, historical_forecast, and archive URLs without matching look-alike domains', function () {
+    // 1. Default free public endpoints
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.enabled', true)
+            ->where('weather.host', 'open-meteo.com')
+            ->where('weather.is_public_endpoint', true)
+            ->where('weather.is_commercial_endpoint', false)
+            ->missing('weather.auto_sync'),
+        );
+
+    // 2. Self-hosted archive_url only (forecast_url still default) -> Self-hosted
+    config([
+        'services.open_meteo.archive_url' => 'https://weather.internal.local/v1/archive',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.host', 'weather.internal.local')
+            ->where('weather.is_public_endpoint', false)
+            ->where('weather.is_commercial_endpoint', false),
+        );
+
+    // 3. Look-alike domain must NOT match open-meteo.com
+    config([
+        'services.open_meteo.forecast_url' => 'https://notopen-meteo.com/v1/forecast',
+        'services.open_meteo.historical_forecast_url' => 'https://notopen-meteo.com/v1/forecast',
+        'services.open_meteo.archive_url' => 'https://notopen-meteo.com/v1/archive',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.host', 'notopen-meteo.com')
+            ->where('weather.is_public_endpoint', false)
+            ->where('weather.is_commercial_endpoint', false),
+        );
+
+    // 4. Paid commercial Open-Meteo endpoint
+    config([
+        'services.open_meteo.forecast_url' => 'https://customer-api.open-meteo.com/v1/forecast',
+        'services.open_meteo.historical_forecast_url' => 'https://customer-historical-forecast-api.open-meteo.com/v1/forecast',
+        'services.open_meteo.archive_url' => 'https://customer-archive-api.open-meteo.com/v1/archive',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.is_public_endpoint', false)
+            ->where('weather.is_commercial_endpoint', true),
+        );
+});
+
+it('fails garmin:sync cleanly without creating a SyncRun or making HTTP calls when GARMIN_KEY is empty', function () {
     Http::preventStrayRequests();
     config(['services.garmin.key' => '']);
 
     $this->artisan('garmin:sync', ['--days' => 1])
-        ->expectsOutputToContain('GARMIN_KEY is empty')
-        ->assertSuccessful();
+        ->expectsOutputToContain('Garmin API key is not configured')
+        ->assertFailed();
 
     expect(SyncRun::query()->count())->toBe(0);
     Http::assertNothingSent();
