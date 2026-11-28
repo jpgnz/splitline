@@ -50,6 +50,14 @@ services:
             NOMINATIM_NEGATIVE_CACHE_DAYS: ${NOMINATIM_NEGATIVE_CACHE_DAYS:-30}
             NOMINATIM_RETRY_FAILED_DAYS: ${NOMINATIM_RETRY_FAILED_DAYS:-7}
 
+            # Optional: Map vector tiles (OpenFreeMap) & 3D/hillshade terrain (Mapterhorn)
+            MAPS_ENABLED: ${MAPS_ENABLED:-true}
+            MAP_TILES_ENABLED: ${MAP_TILES_ENABLED:-}
+            MAP_TERRAIN_ENABLED: ${MAP_TERRAIN_ENABLED:-}
+            MAP_STYLE_LIGHT_URL: ${MAP_STYLE_LIGHT_URL:-}
+            MAP_STYLE_DARK_URL: ${MAP_STYLE_DARK_URL:-}
+            MAP_TERRAIN_TILEJSON_URL: ${MAP_TERRAIN_TILEJSON_URL:-}
+
             # Optional: Automated drop-folder import (.fit / .zip files)
             AUTO_IMPORT_DIR: ${AUTO_IMPORT_DIR:-}
             AUTO_IMPORT_MODE: ${AUTO_IMPORT_MODE:-keep}

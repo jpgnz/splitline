@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePage } from '@inertiajs/vue3';
 import { Mountain } from '@lucide/vue';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import {
@@ -19,7 +20,8 @@ import {
 import {
     emptyFeatureCollection,
     ensureMapLibreWorker,
-    getMapStyleUrl,
+    getMapStyle,
+    resolveMapConfig,
     syncMapterhornTerrain,
     toLngLat,
 } from '@/lib/maplibre';
@@ -114,6 +116,12 @@ const WIND_GRID_TARGET_SPACING_Y = 88;
 
 let cachedWindArrowImageData: ImageData | null = null;
 
+const page = usePage();
+const mapConfig = computed(() => resolveMapConfig(page.props.maps));
+const terrainEnabled = computed<boolean>(() => mapConfig.value.terrain_enabled);
+const hasExternalMapAttribution = computed<boolean>(
+    () => mapConfig.value.tiles_enabled || mapConfig.value.terrain_enabled,
+);
 const containerRef = ref<HTMLElement | null>(null);
 const viewMode = ref<ActivityMapViewMode>('2d');
 const showTerrain = ref<boolean>(false);
@@ -258,8 +266,16 @@ const isProfileMode = computed<boolean>(
     () => viewMode.value === 'profile' && hasAltitudeData.value,
 );
 
+const showViewModeSwitcher = computed<boolean>(
+    () => hasAltitudeData.value || terrainEnabled.value,
+);
+
 function selectViewMode(mode: ActivityMapViewMode): void {
     if (mode === 'profile' && !hasAltitudeData.value) {
+        return;
+    }
+
+    if (mode === '3d' && !terrainEnabled.value) {
         return;
     }
 
@@ -277,6 +293,10 @@ function selectViewMode(mode: ActivityMapViewMode): void {
 }
 
 function toggleTerrain(): void {
+    if (!terrainEnabled.value) {
+        return;
+    }
+
     showTerrain.value = !showTerrain.value;
 }
 
@@ -1964,6 +1984,8 @@ function syncTerrainState(): void {
         hillshade: showTerrain.value,
         terrain3d: viewMode.value === '3d',
         isDark: isDark.value,
+        enabled: terrainEnabled.value,
+        tilejsonUrl: mapConfig.value.terrain_tilejson_url,
     });
 }
 
@@ -2217,7 +2239,7 @@ onMounted(() => {
 
     map = new MapLibreMap({
         container: containerRef.value,
-        style: getMapStyleUrl(isDark.value),
+        style: getMapStyle(isDark.value, mapConfig.value),
         scrollZoom: true,
         cooperativeGestures: true,
         maxPitch: 75,
@@ -2240,7 +2262,13 @@ onMounted(() => {
         new NavigationControl({ showCompass: true, visualizePitch: true }),
         'top-left',
     );
-    map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
+
+    if (hasExternalMapAttribution.value) {
+        map.addControl(
+            new AttributionControl({ compact: true }),
+            'bottom-right',
+        );
+    }
 
     endpointPopup = new Popup({
         closeButton: false,
@@ -2503,7 +2531,7 @@ watch(isDark, (dark) => {
     }
 
     styleReady = false;
-    map.setStyle(getMapStyleUrl(dark), { diff: false });
+    map.setStyle(getMapStyle(dark, mapConfig.value), { diff: false });
 });
 
 watch(hasAltitudeData, (available) => {
@@ -2578,9 +2606,11 @@ onBeforeUnmount(() => {
 
         <!-- Top-Right View Mode & Terrain Controls -->
         <div
+            v-if="showViewModeSwitcher"
             class="absolute top-3 right-3 z-[400] flex flex-wrap items-center justify-end gap-1.5"
         >
             <div
+                v-if="showViewModeSwitcher"
                 class="inline-flex items-center rounded-lg border border-zinc-200/90 bg-white/95 p-0.5 font-mono text-[11px] shadow-xs backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95"
                 role="group"
                 aria-label="Map view mode"
@@ -2613,6 +2643,7 @@ onBeforeUnmount(() => {
                     Profile
                 </button>
                 <button
+                    v-if="terrainEnabled"
                     type="button"
                     title="3D terrain view"
                     class="rounded-md px-2 py-1 font-medium transition-colors"
@@ -2628,6 +2659,7 @@ onBeforeUnmount(() => {
             </div>
 
             <button
+                v-if="terrainEnabled"
                 type="button"
                 :aria-pressed="showTerrain"
                 title="Toggle Mapterhorn terrain hillshading"

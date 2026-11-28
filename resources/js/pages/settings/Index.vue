@@ -7,12 +7,14 @@ import {
     Check,
     ChevronDown,
     Clock,
+    CloudSun,
     Database,
     ExternalLink,
     HeartPulse,
     History,
     Info,
     Layers,
+    Map as MapIcon,
     MapPin,
     Mountain,
     Palette,
@@ -125,6 +127,23 @@ interface GeocodingConfigSummary {
     rate_limit_ms: number;
 }
 
+interface WeatherConfigSummary {
+    enabled: boolean;
+    host: string;
+    is_public_endpoint: boolean;
+    is_commercial_endpoint: boolean;
+}
+
+interface MapsConfigSummary {
+    enabled: boolean;
+    tiles_enabled: boolean;
+    terrain_enabled: boolean;
+    tiles_host: string;
+    terrain_host: string;
+    is_public_tiles_host: boolean;
+    is_public_terrain_host: boolean;
+}
+
 interface SegmentsSettingsPayload {
     min_efforts: number;
     default_min_efforts: number;
@@ -142,6 +161,8 @@ interface SettingsProps {
     backfill: BackfillSummary;
     enrichment_queue: EnrichmentQueueSummary;
     geocoding: GeocodingConfigSummary;
+    weather: WeatherConfigSummary;
+    maps_config: MapsConfigSummary;
     auto_import: AutoImportStatus;
     data_export: DataExportSummary;
     sports_settings: {
@@ -167,6 +188,51 @@ const releaseNotesUrl = computed<string | null>(() => {
 
     return `https://github.com/splitline-php/splitline/releases/tag/${encodeURIComponent(tag)}`;
 });
+
+const mapsStatusBadge = computed<{ label: string; enabled: boolean }>(() => {
+    const cfg = props.maps_config;
+
+    if (!cfg.tiles_enabled && !cfg.terrain_enabled) {
+        return { label: 'Disabled · Plot Only', enabled: false };
+    }
+
+    if (cfg.tiles_enabled && cfg.terrain_enabled) {
+        const isPublic = cfg.is_public_tiles_host && cfg.is_public_terrain_host;
+
+        return {
+            label: isPublic ? 'Enabled · Public' : 'Enabled · Self-hosted',
+            enabled: true,
+        };
+    }
+
+    if (cfg.tiles_enabled) {
+        return {
+            label: cfg.is_public_tiles_host
+                ? 'Tiles Only · Public'
+                : 'Tiles Only · Self-hosted',
+            enabled: true,
+        };
+    }
+
+    return {
+        label: cfg.is_public_terrain_host
+            ? 'Terrain Only · Public'
+            : 'Terrain Only · Self-hosted',
+        enabled: true,
+    };
+});
+
+const showPublicTilesAttribution = computed<boolean>(
+    () =>
+        props.maps_config.tiles_enabled &&
+        props.maps_config.is_public_tiles_host,
+);
+
+const showPublicTerrainAttribution = computed<boolean>(
+    () =>
+        props.maps_config.terrain_enabled &&
+        props.maps_config.is_public_terrain_host,
+);
 
 type BackfillRange = '90d' | '1y' | '3y' | 'all';
 
@@ -2868,6 +2934,172 @@ function submitSegmentsSettings(): void {
                             >
                                 OpenStreetMap contributors (ODbL)
                             </a>
+                        </span>
+                    </div>
+
+                    <!-- Historical Weather Provider -->
+                    <div
+                        class="mt-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-200/80 bg-white px-3.5 py-3 text-xs dark:border-zinc-800 dark:bg-[#141417]"
+                    >
+                        <div class="space-y-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span
+                                    class="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                                >
+                                    <CloudSun class="size-3" />
+                                    Historical Weather (Open-Meteo)
+                                </span>
+                                <span
+                                    class="inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[10px] font-medium"
+                                    :class="
+                                        weather.enabled
+                                            ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-400'
+                                            : 'bg-zinc-200/70 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                                    "
+                                >
+                                    {{
+                                        weather.enabled
+                                            ? weather.is_public_endpoint
+                                                ? 'Enabled · Public'
+                                                : weather.is_commercial_endpoint
+                                                  ? 'Enabled · Commercial'
+                                                  : 'Enabled · Self-hosted'
+                                            : 'Disabled'
+                                    }}
+                                </span>
+                            </div>
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                <template v-if="weather.enabled">
+                                    Fetches historical route weather &amp; wind
+                                    via
+                                    <span
+                                        class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
+                                        >{{ weather.host }}</span
+                                    >.
+                                </template>
+                                <template v-else>
+                                    Weather lookups are disabled (<span
+                                        class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
+                                        >OPEN_METEO_ENABLED=false</span
+                                    >). Previously synced weather remains
+                                    visible.
+                                </template>
+                            </p>
+                        </div>
+                        <span
+                            v-if="weather.is_public_endpoint"
+                            class="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                        >
+                            Weather via
+                            <a
+                                href="https://open-meteo.com/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-600 dark:decoration-zinc-700 dark:hover:text-zinc-300"
+                            >
+                                Open-Meteo (CC BY 4.0)
+                            </a>
+                        </span>
+                    </div>
+
+                    <!-- Maps & Terrain Provider -->
+                    <div
+                        class="mt-3 flex flex-wrap items-start justify-between gap-3 rounded-lg border border-zinc-200/80 bg-white px-3.5 py-3 text-xs dark:border-zinc-800 dark:bg-[#141417]"
+                    >
+                        <div class="space-y-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span
+                                    class="inline-flex items-center gap-1.5 font-mono text-[10px] tracking-wider text-zinc-500 uppercase dark:text-zinc-400"
+                                >
+                                    <MapIcon class="size-3" />
+                                    Maps &amp; Terrain
+                                </span>
+                                <span
+                                    class="inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[10px] font-medium"
+                                    :class="
+                                        mapsStatusBadge.enabled
+                                            ? 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-400'
+                                            : 'bg-zinc-200/70 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                                    "
+                                >
+                                    {{ mapsStatusBadge.label }}
+                                </span>
+                            </div>
+                            <p class="text-xs text-zinc-500 dark:text-zinc-400">
+                                <template
+                                    v-if="
+                                        !maps_config.tiles_enabled &&
+                                        !maps_config.terrain_enabled
+                                    "
+                                >
+                                    External map tiles and 3D terrain are
+                                    disabled. GPS routes, heatmaps, and
+                                    elevation profiles still plot locally.
+                                </template>
+                                <template v-else>
+                                    <template v-if="maps_config.tiles_enabled">
+                                        Basemap tiles via
+                                        <span
+                                            class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
+                                            >{{ maps_config.tiles_host }}</span
+                                        >
+                                    </template>
+                                    <template v-else>
+                                        Basemap tiles disabled (local canvas)
+                                    </template>
+                                    ·
+                                    <template
+                                        v-if="maps_config.terrain_enabled"
+                                    >
+                                        Terrain DEM via
+                                        <span
+                                            class="font-mono text-[11px] text-zinc-700 dark:text-zinc-300"
+                                            >{{
+                                                maps_config.terrain_host
+                                            }}</span
+                                        >.
+                                    </template>
+                                    <template v-else>
+                                        3D terrain &amp; hillshade disabled.
+                                    </template>
+                                </template>
+                            </p>
+                        </div>
+                        <span
+                            v-if="
+                                showPublicTilesAttribution ||
+                                showPublicTerrainAttribution
+                            "
+                            class="shrink-0 font-mono text-[10px] text-zinc-400 dark:text-zinc-500"
+                        >
+                            <template v-if="showPublicTilesAttribution">
+                                <a
+                                    href="https://openfreemap.org/"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-600 dark:decoration-zinc-700 dark:hover:text-zinc-300"
+                                >
+                                    OpenFreeMap
+                                </a>
+                            </template>
+                            <template
+                                v-if="
+                                    showPublicTilesAttribution &&
+                                    showPublicTerrainAttribution
+                                "
+                            >
+                                ·
+                            </template>
+                            <template v-if="showPublicTerrainAttribution">
+                                <a
+                                    href="https://mapterhorn.com/"
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    class="underline decoration-zinc-300 underline-offset-2 transition-colors hover:text-zinc-600 dark:decoration-zinc-700 dark:hover:text-zinc-300"
+                                >
+                                    Mapterhorn
+                                </a>
+                            </template>
                         </span>
                     </div>
                 </div>

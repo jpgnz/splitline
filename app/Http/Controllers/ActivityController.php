@@ -92,6 +92,10 @@ class ActivityController extends Controller
 
     public function syncWeather(Activity $activity, ActivityWeatherSyncService $weatherSync): RedirectResponse
     {
+        if (! (bool) config('services.open_meteo.enabled', true)) {
+            return back()->with('status', 'Weather lookups are disabled (OPEN_METEO_ENABLED=false).');
+        }
+
         if (! $weatherSync->isEligible($activity)) {
             return back()->with('status', 'Weather is only available for outdoor activities with GPS coordinates.');
         }

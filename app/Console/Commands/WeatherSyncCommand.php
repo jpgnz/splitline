@@ -70,6 +70,12 @@ class WeatherSyncCommand extends Command
         $upgradeOnly = (bool) $this->option('upgrade-only');
         $queue = (bool) $this->option('queue');
 
+        if (! (bool) config('services.open_meteo.enabled', true)) {
+            $this->components->info('Open-Meteo weather sync is disabled (OPEN_METEO_ENABLED=false). Nothing to do.');
+
+            return self::SUCCESS;
+        }
+
         $activityIds = $this->resolveTargetActivityIds($activityOption, $limit, $force, $upgradeOnly);
 
         if ($activityOption !== null && $activityIds === []) {

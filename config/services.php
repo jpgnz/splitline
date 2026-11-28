@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\MapConfig;
+
 return [
 
     /*
@@ -70,6 +72,15 @@ return [
         'max_retries' => (int) env('NOMINATIM_MAX_RETRIES', 2),
         'negative_cache_days' => (int) env('NOMINATIM_NEGATIVE_CACHE_DAYS', 30),
         'retry_failed_days' => (int) env('NOMINATIM_RETRY_FAILED_DAYS', 7),
+    ],
+
+    'maps' => [
+        'enabled' => env('MAPS_ENABLED', true),
+        'tiles_enabled' => env('MAP_TILES_ENABLED'),
+        'terrain_enabled' => env('MAP_TERRAIN_ENABLED'),
+        'style_light_url' => env('MAP_STYLE_LIGHT_URL', MapConfig::DEFAULT_STYLE_LIGHT_URL),
+        'style_dark_url' => env('MAP_STYLE_DARK_URL', MapConfig::DEFAULT_STYLE_DARK_URL),
+        'terrain_tilejson_url' => env('MAP_TERRAIN_TILEJSON_URL', MapConfig::DEFAULT_TERRAIN_TILEJSON_URL),
     ],
 
     'auto_import' => [

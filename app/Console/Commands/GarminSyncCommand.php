@@ -60,6 +60,12 @@ class GarminSyncCommand extends Command
             return self::FAILURE;
         }
 
+        if (! GarminSyncService::isConfigured()) {
+            $this->components->error('Garmin API key is not configured. Set GARMIN_KEY in your environment.');
+
+            return self::FAILURE;
+        }
+
         $activeRun = SyncRun::findActive();
 
         if ($activeRun !== null) {

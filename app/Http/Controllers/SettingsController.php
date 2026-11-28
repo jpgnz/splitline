@@ -11,16 +11,19 @@ use App\Jobs\RefreshSubClimbFlagsJob;
 use App\Models\Segment;
 use App\Models\SyncRun;
 use App\Services\Export\DataExportService;
+use App\Services\Garmin\GarminSyncService;
 use App\Services\Geocoding\NominatimClient;
 use App\Services\Ingestion\AutoImportService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
+use App\Support\MapConfig;
 use App\Support\SportRegistry;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Schema;
 use Inertia\Inertia;
 use Inertia\Response;
+use Splitline\Weather\OpenMeteoConfig;
 
 class SettingsController extends Controller
 {
@@ -30,6 +33,7 @@ class SettingsController extends Controller
         QueueStatusService $queueStatus,
         HealthSourceRegistry $healthSources,
         NominatimClient $nominatim,
+        MapConfig $maps,
         AutoImportService $autoImport,
         DataExportService $dataExport,
     ): Response {
@@ -38,7 +42,7 @@ class SettingsController extends Controller
             'timezone' => $settings->displayTimezone(),
             'provider' => [
                 'name' => 'Garmin Connect',
-                'configured' => trim((string) config('services.garmin.key', '')) !== '',
+                'configured' => GarminSyncService::isConfigured(),
             ],
             'backfill' => $this->backfillSummary(),
             'enrichment_queue' => fn (): array => $queueStatus->summary(),
@@ -49,6 +53,8 @@ class SettingsController extends Controller
                 'is_public_endpoint' => $nominatim->isPublicHost(),
                 'rate_limit_ms' => $nominatim->effectiveRateLimitMs(),
             ],
+            'weather' => $this->weatherSettingsSummary(),
+            'maps_config' => $maps->settingsPayload(),
             'auto_import' => $autoImport->statusPayload(),
             'data_export' => $dataExport->summaryPayload(),
             'sports_settings' => $sports->settingsPayload(),
@@ -205,5 +211,77 @@ class SettingsController extends Controller
             'resume_until_date' => $canResume ? $latestBackfill->until_date : null,
             'last_error' => $latestBackfill?->status === 'failed' ? $latestBackfill->error_message : null,
         ];
+    }
+
+    /**
+     * @return array{
+     *     enabled: bool,
+     *     host: string,
+     *     is_public_endpoint: bool,
+     *     is_commercial_endpoint: bool
+     * }
+     */
+    private function weatherSettingsSummary(): array
+    {
+        $configuredHosts = [
+            $this->resolveWeatherEndpointHost(config('services.open_meteo.forecast_url'), OpenMeteoConfig::DEFAULT_FORECAST_URL),
+            $this->resolveWeatherEndpointHost(config('services.open_meteo.historical_forecast_url'), OpenMeteoConfig::DEFAULT_HISTORICAL_FORECAST_URL),
+            $this->resolveWeatherEndpointHost(config('services.open_meteo.archive_url'), OpenMeteoConfig::DEFAULT_ARCHIVE_URL),
+        ];
+
+        $publicHosts = [
+            $this->resolveWeatherEndpointHost(OpenMeteoConfig::DEFAULT_FORECAST_URL, OpenMeteoConfig::DEFAULT_FORECAST_URL),
+            $this->resolveWeatherEndpointHost(OpenMeteoConfig::DEFAULT_HISTORICAL_FORECAST_URL, OpenMeteoConfig::DEFAULT_HISTORICAL_FORECAST_URL),
+            $this->resolveWeatherEndpointHost(OpenMeteoConfig::DEFAULT_ARCHIVE_URL, OpenMeteoConfig::DEFAULT_ARCHIVE_URL),
+        ];
+
+        $allPublic = true;
+        $allOpenMeteo = true;
+        /** @var list<string> $selfHostedHosts */
+        $selfHostedHosts = [];
+
+        foreach ($configuredHosts as $host) {
+            if (! in_array($host, $publicHosts, true)) {
+                $allPublic = false;
+            }
+
+            if ($host !== 'open-meteo.com' && ! str_ends_with($host, '.open-meteo.com')) {
+                $allOpenMeteo = false;
+                $selfHostedHosts[] = $host;
+            }
+        }
+
+        $isCommercial = ! $allPublic && $allOpenMeteo;
+
+        if ($allPublic) {
+            $displayHost = 'open-meteo.com';
+        } elseif ($selfHostedHosts !== []) {
+            $displayHost = implode(', ', array_values(array_unique($selfHostedHosts)));
+        } else {
+            $displayHost = implode(', ', array_values(array_unique($configuredHosts)));
+        }
+
+        return [
+            'enabled' => (bool) config('services.open_meteo.enabled', true),
+            'host' => $displayHost,
+            'is_public_endpoint' => $allPublic,
+            'is_commercial_endpoint' => $isCommercial,
+        ];
+    }
+
+    private function resolveWeatherEndpointHost(mixed $configured, string $defaultUrl): string
+    {
+        $url = is_string($configured) && trim($configured) !== '' ? trim($configured) : $defaultUrl;
+        $host = parse_url($url, PHP_URL_HOST);
+
+        if (is_string($host) && trim($host) !== '') {
+            return strtolower(trim($host));
+        }
+
+        $fallbackHost = parse_url($defaultUrl, PHP_URL_HOST);
+
+        return is_string($fallbackHost) && trim($fallbackHost) !== ''
+            ? strtolower(trim($fallbackHost))
+            : 'open-meteo.com';
     }
 }

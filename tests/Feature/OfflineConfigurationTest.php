@@ -1,0 +1,260 @@
+<?php
+
+use App\Jobs\SyncActivityWeatherJob;
+use App\Models\Activity;
+use App\Models\SyncRun;
+use App\Support\MapConfig;
+use Illuminate\Console\Scheduling\Event as ScheduledEvent;
+use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Inertia\Testing\AssertableInertia as Assert;
+
+it('disables both map tiles and terrain and clears external URLs when MAPS_ENABLED is false', function () {
+    config([
+        'services.maps.enabled' => false,
+        'services.maps.tiles_enabled' => true,
+        'services.maps.terrain_enabled' => true,
+        'services.maps.style_light_url' => 'https://tiles.example.test/light.json',
+        'services.maps.style_dark_url' => 'https://tiles.example.test/dark.json',
+        'services.maps.terrain_tilejson_url' => 'https://dem.example.test/tilejson.json',
+    ]);
+
+    $this->get('/')
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('maps.tiles_enabled', false)
+            ->where('maps.terrain_enabled', false)
+            ->where('maps.style_light_url', null)
+            ->where('maps.style_dark_url', null)
+            ->where('maps.terrain_tilejson_url', null),
+        );
+});
+
+it('supports granular map tile and terrain toggles, empty docker overrides, and self-hosted style URLs', function () {
+    config([
+        'services.maps.enabled' => true,
+        'services.maps.tiles_enabled' => '',
+        'services.maps.terrain_enabled' => 'false',
+        'services.maps.style_light_url' => 'https://maps.internal.local/styles/light.json',
+        'services.maps.style_dark_url' => 'https://maps.internal.local/styles/dark.json',
+        'services.maps.terrain_tilejson_url' => '',
+    ]);
+
+    $maps = app(MapConfig::class);
+
+    expect($maps->tilesEnabled())->toBeTrue()
+        ->and($maps->terrainEnabled())->toBeFalse()
+        ->and($maps->styleLightUrl())->toBe('https://maps.internal.local/styles/light.json')
+        ->and($maps->styleDarkUrl())->toBe('https://maps.internal.local/styles/dark.json')
+        ->and($maps->terrainTilejsonUrl())->toBeNull()
+        ->and($maps->tilesHost())->toBe('maps.internal.local')
+        ->and($maps->isPublicTilesHost())->toBeFalse();
+
+    // Non-HTTP URL schemes fall back safely to built-in defaults
+    config([
+        'services.maps.tiles_enabled' => 'true',
+        'services.maps.style_light_url' => 'javascript:alert(1)',
+    ]);
+
+    expect($maps->styleLightUrl())->toBe(MapConfig::DEFAULT_STYLE_LIGHT_URL);
+});
+
+it('exposes maps_config and weather status on the settings page for purely offline configurations', function () {
+    config([
+        'services.garmin.key' => '',
+        'services.open_meteo.enabled' => false,
+        'services.nominatim.enabled' => false,
+        'services.maps.enabled' => false,
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('settings/Index')
+            ->where('weatherEnabled', false)
+            ->where('weather.enabled', false)
+            ->where('geocoding.enabled', false)
+            ->where('maps_config.enabled', false)
+            ->where('maps_config.tiles_enabled', false)
+            ->where('maps_config.terrain_enabled', false)
+            ->where('maps.tiles_enabled', false)
+            ->where('maps.terrain_enabled', false),
+        );
+});
+
+it('parses off and no string values consistently for MAPS_ENABLED and detects self-hosted dark-only tile styles', function () {
+    config([
+        'services.maps.enabled' => 'off',
+        'services.maps.tiles_enabled' => '',
+        'services.maps.terrain_enabled' => '',
+    ]);
+
+    $maps = app(MapConfig::class);
+
+    expect($maps->isEnabled())->toBeFalse()
+        ->and($maps->tilesEnabled())->toBeFalse()
+        ->and($maps->terrainEnabled())->toBeFalse();
+
+    config([
+        'services.maps.enabled' => 'no',
+    ]);
+
+    expect($maps->isEnabled())->toBeFalse();
+
+    config([
+        'services.maps.enabled' => true,
+        'services.maps.tiles_enabled' => true,
+        'services.maps.style_light_url' => MapConfig::DEFAULT_STYLE_LIGHT_URL,
+        'services.maps.style_dark_url' => 'https://dark-tiles.internal.local/style.json',
+    ]);
+
+    expect($maps->isPublicTilesHost())->toBeFalse()
+        ->and($maps->tilesHost())->toBe('tiles.openfreemap.org, dark-tiles.internal.local');
+});
+
+it('classifies Open-Meteo weather endpoints across forecast, historical_forecast, and archive URLs without matching look-alike domains', function () {
+    // 1. Default free public endpoints
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.enabled', true)
+            ->where('weather.host', 'open-meteo.com')
+            ->where('weather.is_public_endpoint', true)
+            ->where('weather.is_commercial_endpoint', false)
+            ->missing('weather.auto_sync'),
+        );
+
+    // 2. Self-hosted archive_url only (forecast_url still default) -> Self-hosted
+    config([
+        'services.open_meteo.archive_url' => 'https://weather.internal.local/v1/archive',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.host', 'weather.internal.local')
+            ->where('weather.is_public_endpoint', false)
+            ->where('weather.is_commercial_endpoint', false),
+        );
+
+    // 3. Look-alike domain must NOT match open-meteo.com
+    config([
+        'services.open_meteo.forecast_url' => 'https://notopen-meteo.com/v1/forecast',
+        'services.open_meteo.historical_forecast_url' => 'https://notopen-meteo.com/v1/forecast',
+        'services.open_meteo.archive_url' => 'https://notopen-meteo.com/v1/archive',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.host', 'notopen-meteo.com')
+            ->where('weather.is_public_endpoint', false)
+            ->where('weather.is_commercial_endpoint', false),
+        );
+
+    // 4. Paid commercial Open-Meteo endpoint
+    config([
+        'services.open_meteo.forecast_url' => 'https://customer-api.open-meteo.com/v1/forecast',
+        'services.open_meteo.historical_forecast_url' => 'https://customer-historical-forecast-api.open-meteo.com/v1/forecast',
+        'services.open_meteo.archive_url' => 'https://customer-archive-api.open-meteo.com/v1/archive',
+    ]);
+
+    $this->get(route('settings.index'))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weather.is_public_endpoint', false)
+            ->where('weather.is_commercial_endpoint', true),
+        );
+});
+
+it('fails garmin:sync cleanly without creating a SyncRun or making HTTP calls when GARMIN_KEY is empty', function () {
+    Http::preventStrayRequests();
+    config(['services.garmin.key' => '']);
+
+    $this->artisan('garmin:sync', ['--days' => 1])
+        ->expectsOutputToContain('Garmin API key is not configured')
+        ->assertFailed();
+
+    expect(SyncRun::query()->count())->toBe(0);
+    Http::assertNothingSent();
+});
+
+it('skips weather:sync cleanly without queuing jobs, creating a SyncRun, or making HTTP calls when OPEN_METEO_ENABLED is false', function () {
+    Http::preventStrayRequests();
+    Queue::fake([SyncActivityWeatherJob::class]);
+    config(['services.open_meteo.enabled' => false]);
+
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'start_lat' => -36.85,
+        'start_lng' => 174.76,
+    ]);
+
+    $this->artisan('weather:sync')
+        ->expectsOutputToContain('OPEN_METEO_ENABLED=false')
+        ->assertSuccessful();
+
+    $this->artisan('weather:sync', ['--queue' => true])
+        ->expectsOutputToContain('OPEN_METEO_ENABLED=false')
+        ->assertSuccessful();
+
+    expect(SyncRun::query()->count())->toBe(0);
+    Queue::assertNothingPushed();
+    Http::assertNothingSent();
+});
+
+it('blocks manual weather sync requests and shares weatherEnabled=false when OPEN_METEO_ENABLED is false', function () {
+    Http::preventStrayRequests();
+    config(['services.open_meteo.enabled' => false]);
+
+    $activity = Activity::factory()->create([
+        'is_indoor' => false,
+        'start_lat' => -36.85,
+        'start_lng' => 174.76,
+    ]);
+
+    $this->get(route('activities.show', $activity))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('weatherEnabled', false),
+        );
+
+    $this->from(route('activities.show', $activity))
+        ->post(route('activities.weather.sync', $activity))
+        ->assertRedirect(route('activities.show', $activity))
+        ->assertSessionHas('status', 'Weather lookups are disabled (OPEN_METEO_ENABLED=false).');
+
+    Http::assertNothingSent();
+});
+
+it('gates scheduled garmin:sync and geocode:sync commands when their services are unconfigured or disabled', function () {
+    $schedule = app(Schedule::class);
+    $events = collect($schedule->events());
+
+    $garminEvent = $events->first(
+        fn (ScheduledEvent $event): bool => is_string($event->command) && str_contains($event->command, 'garmin:sync'),
+    );
+    $geocodeEvent = $events->first(
+        fn (ScheduledEvent $event): bool => is_string($event->command) && str_contains($event->command, 'geocode:sync'),
+    );
+
+    expect($garminEvent)->toBeInstanceOf(ScheduledEvent::class)
+        ->and($geocodeEvent)->toBeInstanceOf(ScheduledEvent::class);
+
+    config([
+        'services.garmin.key' => '',
+        'services.nominatim.enabled' => false,
+    ]);
+
+    expect($garminEvent->filtersPass($this->app))->toBeFalse()
+        ->and($geocodeEvent->filtersPass($this->app))->toBeFalse();
+
+    config([
+        'services.garmin.key' => 'configured-key',
+        'services.nominatim.enabled' => true,
+    ]);
+
+    expect($garminEvent->filtersPass($this->app))->toBeTrue()
+        ->and($geocodeEvent->filtersPass($this->app))->toBeTrue();
+});

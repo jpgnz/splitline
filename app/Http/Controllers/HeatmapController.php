@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Jobs\SyncActivityStreamJob;
 use App\Models\Activity;
+use App\Services\Garmin\GarminSyncService;
 use App\Services\Heatmap\ExplorerTileService;
 use App\Services\Heatmap\HeatmapService;
 use Illuminate\Http\JsonResponse;
@@ -48,6 +49,10 @@ class HeatmapController extends Controller
 
     public function syncStreams(): RedirectResponse
     {
+        if (! GarminSyncService::isConfigured()) {
+            return back()->with('status', 'Garmin API key is not configured. Set GARMIN_KEY to download FIT streams.');
+        }
+
         $ids = Activity::query()
             ->where('is_indoor', false)
             ->where('is_manual', false)

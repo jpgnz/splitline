@@ -6,6 +6,7 @@ use App\Http\Requests\StartBackfillRequest;
 use App\Jobs\SyncGarminBackfillJob;
 use App\Jobs\SyncGarminJob;
 use App\Models\SyncRun;
+use App\Services\Garmin\GarminSyncService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use Carbon\CarbonImmutable;
@@ -131,13 +132,9 @@ class SyncController extends Controller
         $queued = $this->queueStatus->queuePendingEnrichments();
 
         if ($queued['total'] === 0) {
-            $summary = $this->queueStatus->summary();
-            $remainingPending = array_sum($summary['pending']);
-            $message = match (true) {
-                $queued['already_queued'] > 0 => 'Pending enrichments are already queued in the background.',
-                $remainingPending > 0 => 'Remaining pending enrichments require a disabled or unconfigured provider.',
-                default => 'All activities are already enriched.',
-            };
+            $message = $queued['already_queued'] > 0
+                ? 'Pending enrichments are already queued in the background.'
+                : 'All activities are already enriched.';
         } else {
             $parts = [];
 
@@ -228,7 +225,7 @@ class SyncController extends Controller
 
     private function isProviderConfigured(): bool
     {
-        return trim((string) config('services.garmin.key', '')) !== '';
+        return GarminSyncService::isConfigured();
     }
 
     /**

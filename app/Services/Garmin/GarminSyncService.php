@@ -39,6 +39,11 @@ class GarminSyncService
         private readonly TelemetryPersistenceService $persistence,
     ) {}
 
+    public static function isConfigured(): bool
+    {
+        return trim((string) config('services.garmin.key', '')) !== '';
+    }
+
     /**
      * Run an incremental sync of recent health metrics, HR zones, and new activities.
      *
