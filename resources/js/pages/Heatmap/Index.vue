@@ -20,6 +20,7 @@ import type {
 } from 'geojson';
 import {
     AttributionControl,
+    FullscreenControl,
     LngLatBounds,
     Map as MapLibreMap,
     NavigationControl,
@@ -217,6 +218,7 @@ const providerConfigured = computed<boolean>(() =>
     Boolean(page.props.sync?.provider_configured),
 );
 
+const mapStageRef = ref<HTMLElement | null>(null);
 const mapContainerRef = ref<HTMLElement | null>(null);
 const inspectorRef = ref<HTMLElement | null>(null);
 const inspectedTracks = ref<DecodedHeatmapTrack[]>([]);
@@ -1364,6 +1366,17 @@ function initMap(): void {
         'top-left',
     );
 
+    const fullscreenControl = new FullscreenControl({
+        container: mapStageRef.value ?? undefined,
+    });
+    fullscreenControl.on('fullscreenstart', () => {
+        map?.resize();
+    });
+    fullscreenControl.on('fullscreenend', () => {
+        map?.resize();
+    });
+    map.addControl(fullscreenControl, 'top-left');
+
     if (hasExternalMapAttribution.value) {
         map.addControl(
             new AttributionControl({ compact: true }),
@@ -1831,11 +1844,14 @@ onBeforeUnmount(() => {
             v-if="hasTracks"
             class="overflow-hidden rounded-xl border border-zinc-200/90 bg-white dark:border-zinc-800/90 dark:bg-[#141417]"
         >
-            <div class="relative isolate">
+            <div
+                ref="mapStageRef"
+                class="map-fullscreen-stage relative isolate"
+            >
                 <!-- MapLibre GL Canvas Mount -->
                 <div
                     ref="mapContainerRef"
-                    class="h-[calc(100vh-19rem)] max-h-[820px] min-h-[520px] w-full bg-[#f4f4f2] dark:bg-[#191a1a]"
+                    class="map-fullscreen-canvas h-[calc(100vh-19rem)] max-h-[820px] min-h-[520px] w-full bg-[#f4f4f2] dark:bg-[#191a1a]"
                 />
 
                 <!-- Top-Right Map Mode, Terrain & Recenter Controls (shifts left when inspector is open on desktop) -->

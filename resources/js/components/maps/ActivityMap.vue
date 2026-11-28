@@ -4,6 +4,7 @@ import { Mountain } from '@lucide/vue';
 import type { Feature, FeatureCollection, LineString, Point } from 'geojson';
 import {
     AttributionControl,
+    FullscreenControl,
     LngLatBounds,
     Map as MapLibreMap,
     NavigationControl,
@@ -137,6 +138,7 @@ const terrainEnabled = computed<boolean>(() => mapConfig.value.terrain_enabled);
 const hasExternalMapAttribution = computed<boolean>(
     () => mapConfig.value.tiles_enabled || mapConfig.value.terrain_enabled,
 );
+const wrapperRef = ref<HTMLElement | null>(null);
 const containerRef = ref<HTMLElement | null>(null);
 const viewMode = ref<ActivityMapViewMode>('2d');
 const showTerrain = ref<boolean>(false);
@@ -2612,6 +2614,19 @@ onMounted(() => {
         'top-left',
     );
 
+    const fullscreenControl = new FullscreenControl({
+        container: wrapperRef.value ?? undefined,
+    });
+    fullscreenControl.on('fullscreenstart', () => {
+        map?.resize();
+        scheduleWindArrowsRefresh();
+    });
+    fullscreenControl.on('fullscreenend', () => {
+        map?.resize();
+        scheduleWindArrowsRefresh();
+    });
+    map.addControl(fullscreenControl, 'top-left');
+
     if (hasExternalMapAttribution.value) {
         map.addControl(
             new AttributionControl({ compact: true }),
@@ -2948,7 +2963,8 @@ onBeforeUnmount(() => {
 
 <template>
     <div
-        class="relative isolate w-full overflow-hidden rounded-lg border border-zinc-200/80 bg-[#f4f4f2] dark:border-zinc-800/80 dark:bg-[#191a1a]"
+        ref="wrapperRef"
+        class="map-fullscreen-stage relative isolate w-full overflow-hidden rounded-lg border border-zinc-200/80 bg-[#f4f4f2] dark:border-zinc-800/80 dark:bg-[#191a1a]"
         :style="containerStyle"
     >
         <div ref="containerRef" class="h-full w-full" />
