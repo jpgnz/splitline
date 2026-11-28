@@ -3,9 +3,11 @@ import {
     setWorkerUrl,
     type Map as MapLibreMap,
     type SkySpecification,
+    type StyleSpecification,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+import type { SharedMapsConfig } from '@/types/global';
 
 let workerConfigured = false;
 
@@ -26,6 +28,8 @@ export interface MapterhornTerrainOptions {
     terrain3d: boolean;
     isDark: boolean;
     exaggeration?: number;
+    enabled?: boolean;
+    tilejsonUrl?: string | null;
 }
 
 export function ensureMapLibreWorker(): void {
@@ -37,8 +41,55 @@ export function ensureMapLibreWorker(): void {
     workerConfigured = true;
 }
 
-export function getMapStyleUrl(isDark: boolean): string {
-    return isDark ? MAP_STYLE_URLS.dark : MAP_STYLE_URLS.light;
+export function resolveMapConfig(
+    shared?: SharedMapsConfig | null,
+): SharedMapsConfig {
+    if (!shared) {
+        return {
+            tiles_enabled: true,
+            terrain_enabled: true,
+            style_light_url: MAP_STYLE_URLS.light,
+            style_dark_url: MAP_STYLE_URLS.dark,
+            terrain_tilejson_url: MAPTERHORN_TILEJSON_URL,
+        };
+    }
+
+    return shared;
+}
+
+export function buildBlankMapStyle(isDark: boolean): StyleSpecification {
+    return {
+        version: 8,
+        sources: {},
+        layers: [
+            {
+                id: 'background',
+                type: 'background',
+                paint: {
+                    'background-color': isDark ? '#191a1a' : '#f4f4f2',
+                },
+            },
+        ],
+    };
+}
+
+export function getMapStyle(
+    isDark: boolean,
+    config?: SharedMapsConfig | null,
+): string | StyleSpecification {
+    const resolved = resolveMapConfig(config);
+
+    if (!resolved.tiles_enabled) {
+        return buildBlankMapStyle(isDark);
+    }
+
+    const url = isDark ? resolved.style_dark_url : resolved.style_light_url;
+
+    if (!url) {
+        return buildBlankMapStyle(isDark);
+    }
+
+    return url;
 }
 
 export function toLngLat(point: [number, number]): [number, number] {
@@ -99,21 +150,27 @@ export function syncMapterhornTerrain(
         terrain3d,
         isDark,
         exaggeration = DEFAULT_TERRAIN_EXAGGERATION,
+        enabled = true,
+        tilejsonUrl = MAPTERHORN_TILEJSON_URL,
     } = options;
 
-    if (hillshade) {
+    const terrainAvailable = enabled && Boolean(tilejsonUrl);
+    const effectiveHillshade = terrainAvailable && hillshade;
+    const effectiveTerrain3d = terrainAvailable && terrain3d;
+
+    if (effectiveHillshade && tilejsonUrl) {
         if (!map.getSource(MAPTERHORN_HILLSHADE_SOURCE_ID)) {
             map.addSource(MAPTERHORN_HILLSHADE_SOURCE_ID, {
                 type: 'raster-dem',
-                url: MAPTERHORN_TILEJSON_URL,
+                url: tilejsonUrl,
             });
         }
 
         const hillshadeExaggeration = isDark
-            ? terrain3d
+            ? effectiveTerrain3d
                 ? 0.5
                 : 0.42
-            : terrain3d
+            : effectiveTerrain3d
               ? 0.44
               : 0.36;
         const shadowColor = isDark
@@ -171,11 +228,11 @@ export function syncMapterhornTerrain(
         );
     }
 
-    if (terrain3d) {
+    if (effectiveTerrain3d && tilejsonUrl) {
         if (!map.getSource(MAPTERHORN_TERRAIN_SOURCE_ID)) {
             map.addSource(MAPTERHORN_TERRAIN_SOURCE_ID, {
                 type: 'raster-dem',
-                url: MAPTERHORN_TILEJSON_URL,
+                url: tilejsonUrl,
             });
         }
 

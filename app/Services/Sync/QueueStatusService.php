@@ -140,14 +140,20 @@ class QueueStatusService
             ];
         }
 
-        $awaitingStreams = Activity::query()
-            ->where('is_manual', false)
-            ->awaitingStreams()
-            ->count();
+        $garminConfigured = trim((string) config('services.garmin.key', '')) !== '';
+        $weatherEnabled = (bool) config('services.open_meteo.enabled', true);
+        $nominatimEnabled = (bool) config('services.nominatim.enabled', true);
+
+        $awaitingStreams = $garminConfigured
+            ? Activity::query()
+                ->where('is_manual', false)
+                ->awaitingStreams()
+                ->count()
+            : 0;
 
         $hasEnrichmentTables = Schema::hasTable('activity_streams') && Schema::hasTable('activity_weathers');
 
-        $missingWeather = $hasEnrichmentTables
+        $missingWeather = ($hasEnrichmentTables && $weatherEnabled)
             ? Activity::query()->awaitingWeather()->count()
             : 0;
 
@@ -165,16 +171,18 @@ class QueueStatusService
 
         $pendingGeocoding = 0;
 
-        if (Schema::hasColumn('activities', 'geocode_attempted_at')) {
-            $pendingGeocoding += Activity::query()->awaitingGeocoding()->count();
-        }
+        if ($nominatimEnabled) {
+            if (Schema::hasColumn('activities', 'geocode_attempted_at')) {
+                $pendingGeocoding += Activity::query()->awaitingGeocoding()->count();
+            }
 
-        if (Schema::hasTable('route_clusters') && Schema::hasColumn('route_clusters', 'geocode_attempted_at')) {
-            $pendingGeocoding += RouteCluster::query()->awaitingGeocoding()->count();
-        }
+            if (Schema::hasTable('route_clusters') && Schema::hasColumn('route_clusters', 'geocode_attempted_at')) {
+                $pendingGeocoding += RouteCluster::query()->awaitingGeocoding()->count();
+            }
 
-        if (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocode_attempted_at')) {
-            $pendingGeocoding += Segment::query()->awaitingGeocoding()->count();
+            if (Schema::hasTable('segments') && Schema::hasColumn('segments', 'geocode_attempted_at')) {
+                $pendingGeocoding += Segment::query()->awaitingGeocoding()->count();
+            }
         }
 
         return [

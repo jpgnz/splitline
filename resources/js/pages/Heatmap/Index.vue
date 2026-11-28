@@ -50,7 +50,8 @@ import {
 import {
     emptyFeatureCollection,
     ensureMapLibreWorker,
-    getMapStyleUrl,
+    getMapStyle,
+    resolveMapConfig,
     syncMapterhornTerrain,
     toLngLat,
 } from '@/lib/maplibre';
@@ -207,6 +208,14 @@ const ORDER_OPTIONS: Array<{
 ];
 
 const { isDark } = useChartTheme();
+const mapConfig = computed(() => resolveMapConfig(page.props.maps));
+const terrainEnabled = computed<boolean>(() => mapConfig.value.terrain_enabled);
+const hasExternalMapAttribution = computed<boolean>(
+    () => mapConfig.value.tiles_enabled || mapConfig.value.terrain_enabled,
+);
+const providerConfigured = computed<boolean>(() =>
+    Boolean(page.props.sync?.provider_configured),
+);
 
 const mapContainerRef = ref<HTMLElement | null>(null);
 const inspectorRef = ref<HTMLElement | null>(null);
@@ -622,6 +631,10 @@ function setExplorerTilesVisible(visible: boolean): void {
 }
 
 function selectViewMode(mode: '2d' | '3d'): void {
+    if (mode === '3d' && !terrainEnabled.value) {
+        return;
+    }
+
     if (viewMode.value === mode) {
         return;
     }
@@ -651,6 +664,10 @@ function selectViewMode(mode: '2d' | '3d'): void {
 }
 
 function toggleTerrain(): void {
+    if (!terrainEnabled.value) {
+        return;
+    }
+
     showTerrain.value = !showTerrain.value;
 }
 
@@ -663,6 +680,8 @@ function syncTerrainState(): void {
         hillshade: showTerrain.value,
         terrain3d: viewMode.value === '3d',
         isDark: isDark.value,
+        enabled: terrainEnabled.value,
+        tilejsonUrl: mapConfig.value.terrain_tilejson_url,
     });
 }
 
@@ -1322,7 +1341,7 @@ function initMap(): void {
 
     map = new MapLibreMap({
         container: mapContainerRef.value,
-        style: getMapStyleUrl(isDark.value),
+        style: getMapStyle(isDark.value, mapConfig.value),
         scrollZoom: true,
         maxPitch: 75,
         attributionControl: false,
@@ -1344,7 +1363,13 @@ function initMap(): void {
         new NavigationControl({ showCompass: true, visualizePitch: true }),
         'top-left',
     );
-    map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
+
+    if (hasExternalMapAttribution.value) {
+        map.addControl(
+            new AttributionControl({ compact: true }),
+            'bottom-right',
+        );
+    }
 
     map.on('style.load', () => {
         styleReady = true;
@@ -1396,7 +1421,7 @@ watch(isDark, (dark) => {
     }
 
     styleReady = false;
-    map.setStyle(getMapStyleUrl(dark), { diff: false });
+    map.setStyle(getMapStyle(dark, mapConfig.value), { diff: false });
 });
 
 watch(
@@ -1769,7 +1794,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div
-                    v-if="summary.unsynced_gnss_count > 0"
+                    v-if="summary.unsynced_gnss_count > 0 && providerConfigured"
                     class="flex flex-wrap items-center gap-2.5 text-xs text-zinc-500 dark:text-zinc-400"
                 >
                     <button
@@ -1823,6 +1848,7 @@ onBeforeUnmount(() => {
                     ]"
                 >
                     <div
+                        v-if="terrainEnabled"
                         class="inline-flex items-center rounded-lg border border-zinc-200/90 bg-white/95 p-0.5 font-mono text-[11px] shadow-xs backdrop-blur-xs dark:border-zinc-800/90 dark:bg-[#141417]/95"
                         role="group"
                         aria-label="Map view mode"
@@ -1856,6 +1882,7 @@ onBeforeUnmount(() => {
                     </div>
 
                     <button
+                        v-if="terrainEnabled"
                         type="button"
                         :aria-pressed="showTerrain"
                         title="Toggle Mapterhorn terrain hillshading"
@@ -2060,7 +2087,9 @@ onBeforeUnmount(() => {
                 </button>
 
                 <button
-                    v-else-if="summary.unsynced_gnss_count > 0"
+                    v-else-if="
+                        summary.unsynced_gnss_count > 0 && providerConfigured
+                    "
                     type="button"
                     :disabled="isQueueingSync"
                     class="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-zinc-900 bg-zinc-900 px-3.5 py-2 font-mono text-xs font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-100 dark:bg-zinc-100 dark:text-zinc-950 dark:hover:bg-zinc-200"

@@ -48,6 +48,10 @@ class HeatmapController extends Controller
 
     public function syncStreams(): RedirectResponse
     {
+        if (trim((string) config('services.garmin.key', '')) === '') {
+            return back()->with('status', 'Garmin API key is not configured. Set GARMIN_KEY to download FIT streams.');
+        }
+
         $ids = Activity::query()
             ->where('is_indoor', false)
             ->where('is_manual', false)

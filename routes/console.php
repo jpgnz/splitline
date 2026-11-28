@@ -5,7 +5,8 @@ use Illuminate\Support\Facades\Schedule;
 
 Schedule::command('garmin:sync')
     ->everyThirtyMinutes()
-    ->withoutOverlapping();
+    ->withoutOverlapping()
+    ->when(fn (): bool => trim((string) config('services.garmin.key', '')) !== '');
 
 Schedule::command('routes:match --queue')
     ->hourly()
@@ -21,7 +22,8 @@ Schedule::command('activities:compute-derived-metrics --queue')
 
 Schedule::command('geocode:sync --queue')
     ->hourly()
-    ->withoutOverlapping();
+    ->withoutOverlapping()
+    ->when(fn (): bool => (bool) config('services.nominatim.enabled', true));
 
 Schedule::command('import:scan')
     ->everyFiveMinutes()

@@ -124,16 +124,23 @@ it('applies sport and timeframe query filters and falls back invalid values', fu
         );
 });
 
-it('does not share external map API keys via Inertia props', function () {
+it('shares runtime map toggle and style config without API keys or secrets', function () {
     $this->get('/heatmap')
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
-            ->missing('maps'),
+            ->where('maps.tiles_enabled', true)
+            ->where('maps.terrain_enabled', true)
+            ->where('maps.style_light_url', 'https://tiles.openfreemap.org/styles/positron')
+            ->where('maps.style_dark_url', 'https://tiles.openfreemap.org/styles/dark')
+            ->where('maps.terrain_tilejson_url', 'https://tiles.mapterhorn.com/tilejson.json')
+            ->missing('maps.api_key')
+            ->missing('maps.token'),
         );
 });
 
 it('queues stream sync jobs on the streams queue for all unsynced outdoor non-manual activities without duplicating', function () {
     Queue::fake([SyncActivityStreamJob::class]);
+    config(['services.garmin.key' => 'test-garmin-key']);
 
     $firstOutdoor = Activity::factory()->create([
         'is_indoor' => false,
@@ -188,6 +195,25 @@ it('queues stream sync jobs on the streams queue for all unsynced outdoor non-ma
         SyncActivityStreamJob::class,
         fn (SyncActivityStreamJob $job): bool => $job->activityId === $secondOutdoor->id,
     );
+});
+
+it('does not queue heatmap stream sync jobs when GARMIN_KEY is unconfigured', function () {
+    Queue::fake([SyncActivityStreamJob::class]);
+    config(['services.garmin.key' => '']);
+
+    Activity::factory()->create([
+        'is_indoor' => false,
+        'is_manual' => false,
+        'streams_synced_at' => null,
+        'streams_unavailable_at' => null,
+    ]);
+
+    $this->from('/heatmap')
+        ->post('/heatmap/sync-streams')
+        ->assertRedirect('/heatmap')
+        ->assertSessionHas('status', 'Garmin API key is not configured. Set GARMIN_KEY to download FIT streams.');
+
+    Queue::assertNothingPushed();
 });
 
 it('supports stepped bounded windows, custom date ranges, and layer order options on the heatmap', function () {

@@ -72,6 +72,15 @@ return [
         'retry_failed_days' => (int) env('NOMINATIM_RETRY_FAILED_DAYS', 7),
     ],
 
+    'maps' => [
+        'enabled' => (bool) env('MAPS_ENABLED', true),
+        'tiles_enabled' => env('MAP_TILES_ENABLED'),
+        'terrain_enabled' => env('MAP_TERRAIN_ENABLED'),
+        'style_light_url' => env('MAP_STYLE_LIGHT_URL', 'https://tiles.openfreemap.org/styles/positron'),
+        'style_dark_url' => env('MAP_STYLE_DARK_URL', 'https://tiles.openfreemap.org/styles/dark'),
+        'terrain_tilejson_url' => env('MAP_TERRAIN_TILEJSON_URL', 'https://tiles.mapterhorn.com/tilejson.json'),
+    ],
+
     'auto_import' => [
         'dir' => env('AUTO_IMPORT_DIR'),
         'mode' => env('AUTO_IMPORT_MODE', 'keep'),

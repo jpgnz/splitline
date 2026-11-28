@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Head, Link, router } from '@inertiajs/vue3';
+import { Head, Link, router, usePage } from '@inertiajs/vue3';
 import {
     ArrowLeft,
     ArrowLeftRight,
@@ -1126,8 +1126,14 @@ const compareUrl = computed<string>(() =>
     compareActivities.url({ query: { ids: String(props.activity.id) } }),
 );
 
+const page = usePage();
+const weatherEnabled = computed<boolean>(
+    () => page.props.weatherEnabled ?? true,
+);
+
 const canSyncWeather = computed<boolean>(
     () =>
+        weatherEnabled.value &&
         !props.activity.is_indoor &&
         (props.weather !== null || hasCoordinates.value),
 );
@@ -1153,7 +1159,9 @@ const hasDerivedMetrics = computed<boolean>(() => {
 const hasSnapshotRail = computed<boolean>(
     () =>
         hasDerivedMetrics.value ||
-        canSyncWeather.value ||
+        (!props.activity.is_indoor &&
+            (props.weather !== null ||
+                (weatherEnabled.value && hasCoordinates.value))) ||
         (disciplineTelemetryTitle.value !== null &&
             disciplineTelemetryCells.value.length > 0),
 );
@@ -1783,6 +1791,7 @@ const tabs = computed<
                     :weather="weather"
                     :is-indoor="activity.is_indoor"
                     :has-coordinates="hasCoordinates"
+                    :weather-sync-enabled="weatherEnabled"
                     :syncing-weather="isSyncingWeather"
                     :discipline-title="disciplineTelemetryTitle"
                     :discipline-cells="disciplineTelemetryCells"
@@ -1843,6 +1852,7 @@ const tabs = computed<
                 :weather="weather"
                 :is-indoor="activity.is_indoor"
                 :has-coordinates="hasCoordinates"
+                :weather-sync-enabled="weatherEnabled"
                 :syncing="isSyncingWeather"
                 @sync="syncActivityWeather"
             />

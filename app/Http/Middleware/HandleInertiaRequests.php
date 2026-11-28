@@ -6,6 +6,7 @@ use App\Models\SyncRun;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\AppVersion;
+use App\Support\MapConfig;
 use App\Support\SportRegistry;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Schema;
@@ -18,6 +19,7 @@ class HandleInertiaRequests extends Middleware
         private readonly AppVersion $appVersion,
         private readonly SportRegistry $sports,
         private readonly QueueStatusService $queueStatus,
+        private readonly MapConfig $maps,
     ) {}
 
     /**
@@ -56,6 +58,8 @@ class HandleInertiaRequests extends Middleware
             'units' => fn (): string => $this->settings->unitSystem(),
             'timezone' => fn (): string => $this->settings->displayTimezone(),
             'sports' => fn (): array => $this->sports->sharedFrontendPayload(),
+            'maps' => fn (): array => $this->maps->sharedFrontendPayload(),
+            'weatherEnabled' => fn (): bool => (bool) config('services.open_meteo.enabled', true),
             'flash' => [
                 'syncStatus' => fn () => $request->session()->get('syncStatus'),
                 'status' => fn () => $request->session()->get('status'),

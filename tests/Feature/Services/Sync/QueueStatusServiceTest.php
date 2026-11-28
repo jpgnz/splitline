@@ -22,7 +22,10 @@ use Illuminate\Support\Facades\Queue;
 use Inertia\Testing\AssertableInertia as Assert;
 
 it('summarizes queued database jobs by queue and pending activity enrichments', function () {
-    config(['queue.default' => 'database']);
+    config([
+        'queue.default' => 'database',
+        'services.garmin.key' => 'test-garmin-key',
+    ]);
 
     // Queued jobs across default, streams, and weather queues
     $now = CarbonImmutable::now()->getTimestamp();
@@ -196,7 +199,10 @@ it('returns zero queued job counts gracefully when queue driver is not database'
 });
 
 it('exposes only cheap queued-job counts on the sync status endpoint and shared props, and full pending counts on the settings page', function () {
-    config(['queue.default' => 'database']);
+    config([
+        'queue.default' => 'database',
+        'services.garmin.key' => 'test-garmin-key',
+    ]);
 
     $now = CarbonImmutable::now()->getTimestamp();
     DB::table('jobs')->insert([
@@ -362,7 +368,7 @@ it('reports pending enrichments whose unique jobs are already queued instead of 
     Queue::assertPushed(SyncActivityStreamJob::class, 2);
 });
 
-it('skips disabled external enrichment providers and reports when nothing is pending', function () {
+it('skips disabled external enrichment providers and reports zero pending counts for disabled providers', function () {
     Queue::fake();
     config([
         'services.garmin.key' => '',
@@ -380,15 +386,26 @@ it('skips disabled external enrichment providers and reports when nothing is pen
         'streams_unavailable_at' => null,
     ]);
 
+    $summary = app(QueueStatusService::class)->summary();
+
+    expect($summary['pending'])->toBe([
+        'streams' => 0,
+        'weather' => 0,
+        'routes' => 0,
+        'segments' => 0,
+        'derived_metrics' => 0,
+        'geocoding' => 0,
+    ]);
+
     $this->postJson(route('sync.enrichments'))
         ->assertOk()
         ->assertJsonPath('queued.total', 0)
-        ->assertJsonPath('message', 'Remaining pending enrichments require a disabled or unconfigured provider.');
+        ->assertJsonPath('message', 'All activities are already enriched.');
 
     Queue::assertNothingPushed();
 
     $this->from(route('settings.index'))
         ->post(route('sync.enrichments'))
         ->assertRedirect(route('settings.index'))
-        ->assertSessionHas('syncStatus', 'Remaining pending enrichments require a disabled or unconfigured provider.');
+        ->assertSessionHas('syncStatus', 'All activities are already enriched.');
 });

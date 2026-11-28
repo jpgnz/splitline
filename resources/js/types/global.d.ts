@@ -13,6 +13,14 @@ declare module 'vite/client' {
 
 export type UnitSystem = 'metric' | 'imperial';
 
+export type SharedMapsConfig = {
+    tiles_enabled: boolean;
+    terrain_enabled: boolean;
+    style_light_url: string | null;
+    style_dark_url: string | null;
+    terrain_tilejson_url: string | null;
+};
+
 export type EnrichmentQueueJobs = {
     jobs: {
         default: number;
@@ -78,6 +86,8 @@ declare module '@inertiajs/core' {
             units: UnitSystem;
             timezone: string;
             sports?: SharedSportsMeta;
+            maps?: SharedMapsConfig;
+            weatherEnabled?: boolean;
             sync?: {
                 id: number | null;
                 status: string;

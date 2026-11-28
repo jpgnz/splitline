@@ -16,6 +16,7 @@ use App\Services\Ingestion\AutoImportService;
 use App\Services\Sync\QueueStatusService;
 use App\Support\AppSettings;
 use App\Support\HealthSourceRegistry;
+use App\Support\MapConfig;
 use App\Support\SportRegistry;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Schema;
@@ -30,9 +31,12 @@ class SettingsController extends Controller
         QueueStatusService $queueStatus,
         HealthSourceRegistry $healthSources,
         NominatimClient $nominatim,
+        MapConfig $maps,
         AutoImportService $autoImport,
         DataExportService $dataExport,
     ): Response {
+        $weatherHost = $this->resolveWeatherHost();
+
         return Inertia::render('settings/Index', [
             'unit_system' => $settings->unitSystem(),
             'timezone' => $settings->displayTimezone(),
@@ -49,6 +53,13 @@ class SettingsController extends Controller
                 'is_public_endpoint' => $nominatim->isPublicHost(),
                 'rate_limit_ms' => $nominatim->effectiveRateLimitMs(),
             ],
+            'weather' => [
+                'enabled' => (bool) config('services.open_meteo.enabled', true),
+                'auto_sync' => (bool) config('services.open_meteo.auto_sync', true),
+                'host' => $weatherHost,
+                'is_public_endpoint' => str_ends_with($weatherHost, 'open-meteo.com'),
+            ],
+            'maps_config' => $maps->settingsPayload(),
             'auto_import' => $autoImport->statusPayload(),
             'data_export' => $dataExport->summaryPayload(),
             'sports_settings' => $sports->settingsPayload(),
@@ -205,5 +216,15 @@ class SettingsController extends Controller
             'resume_until_date' => $canResume ? $latestBackfill->until_date : null,
             'last_error' => $latestBackfill?->status === 'failed' ? $latestBackfill->error_message : null,
         ];
+    }
+
+    private function resolveWeatherHost(): string
+    {
+        $configured = config('services.open_meteo.forecast_url', 'https://api.open-meteo.com/v1/forecast');
+        $host = is_string($configured) ? parse_url(trim($configured), PHP_URL_HOST) : null;
+
+        return is_string($host) && trim($host) !== ''
+            ? strtolower(trim($host))
+            : 'api.open-meteo.com';
     }
 }
