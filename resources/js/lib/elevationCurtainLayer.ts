@@ -27,9 +27,24 @@ export interface ElevationCurtainMarker {
     plumbColor?: string;
 }
 
+export interface ElevationCurtainArrow {
+    lng: number;
+    lat: number;
+    heightMeters: number;
+    aheadLng: number;
+    aheadLat: number;
+    aheadHeightMeters: number;
+    fillColor: string;
+    strokeColor: string;
+    sizePx: number;
+    strokeWidthPx: number;
+    alpha?: number;
+}
+
 export interface ElevationCurtainData {
     points: ElevationCurtainPoint[];
     markers?: ElevationCurtainMarker[];
+    arrows?: ElevationCurtainArrow[];
     hoverMarker?: ElevationCurtainMarker | null;
     isDark: boolean;
 }
@@ -214,6 +229,106 @@ void main() {
 }
 `;
 
+const ARROW_VERTEX_SHADER = `#version 300 es
+precision highp float;
+
+uniform mat4 u_matrix;
+uniform vec2 u_viewport;
+
+in vec3 a_pos;
+in vec3 a_ahead;
+in vec2 a_corner;
+in float a_size;
+in float a_stroke;
+in vec3 a_fillColor;
+in vec3 a_strokeColor;
+in float a_alpha;
+
+out vec2 v_localPx;
+out float v_size;
+out float v_stroke;
+out vec3 v_fillColor;
+out vec3 v_strokeColor;
+out float v_alpha;
+
+void main() {
+    vec4 clipPos = u_matrix * vec4(a_pos, 1.0);
+    vec4 clipAhead = u_matrix * vec4(a_ahead, 1.0);
+
+    float wPos = max(abs(clipPos.w), 0.0001);
+    float wAhead = max(abs(clipAhead.w), 0.0001);
+
+    vec2 screenPos = (clipPos.xy / wPos) * 0.5 * u_viewport;
+    vec2 screenAhead = (clipAhead.xy / wAhead) * 0.5 * u_viewport;
+
+    vec2 segDir = screenAhead - screenPos;
+    float segLen = length(segDir);
+    vec2 tangent = segLen > 0.001 ? segDir / segLen : vec2(1.0, 0.0);
+    vec2 normal = vec2(-tangent.y, tangent.x);
+
+    float extent = a_size + a_stroke + 2.0;
+    vec2 localPx = a_corner * extent;
+    vec2 pxOffset = tangent * localPx.x + normal * localPx.y;
+    vec2 ndcOffset = (pxOffset * 2.0) / max(u_viewport, vec2(1.0));
+
+    gl_Position = vec4(clipPos.xy + ndcOffset * clipPos.w, clipPos.z - 0.00004 * clipPos.w, clipPos.w);
+    v_localPx = localPx;
+    v_size = a_size;
+    v_stroke = a_stroke;
+    v_fillColor = a_fillColor;
+    v_strokeColor = a_strokeColor;
+    v_alpha = a_alpha;
+}
+`;
+
+const ARROW_FRAGMENT_SHADER = `#version 300 es
+precision mediump float;
+
+in vec2 v_localPx;
+in float v_size;
+in float v_stroke;
+in vec3 v_fillColor;
+in vec3 v_strokeColor;
+in float v_alpha;
+
+out vec4 fragColor;
+
+float distToSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a;
+    vec2 ba = b - a;
+    float h = clamp(dot(pa, ba) / max(dot(ba, ba), 0.0001), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+void main() {
+    vec2 p = vec2(v_localPx.x, abs(v_localPx.y));
+    vec2 A = vec2(-0.72, 0.96) * v_size;
+    vec2 B = vec2(0.92, 0.0) * v_size;
+    vec2 C = vec2(-0.22, 0.0) * v_size;
+
+    float uDist = min(distToSegment(p, A, B), distToSegment(p, A, C));
+    vec2 v1 = B - A;
+    vec2 v2 = C - A;
+    vec2 pa = p - A;
+    float c1 = v1.x * pa.y - v1.y * pa.x;
+    float c2 = v2.x * pa.y - v2.y * pa.x;
+    bool inside = (c1 <= 0.0) && (c2 >= 0.0);
+    float signedDist = inside ? -uDist : uDist;
+
+    float outerAlpha = 1.0 - smoothstep(v_stroke - 0.65, v_stroke + 0.55, signedDist);
+
+    if (outerAlpha < 0.005) {
+        discard;
+    }
+
+    float strokeMix = smoothstep(-0.55, 0.45, signedDist);
+    vec3 color = mix(v_fillColor, v_strokeColor, strokeMix);
+    float finalAlpha = outerAlpha * v_alpha;
+
+    fragColor = vec4(color * finalAlpha, finalAlpha);
+}
+`;
+
 function parseCssColorToRgb(color: string): [number, number, number] {
     const trimmed = color.trim();
 
@@ -279,6 +394,10 @@ function compileShader(
     gl.compileShader(shader);
 
     if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        console.warn(
+            '[ElevationCurtainLayer] Shader compile failed:',
+            gl.getShaderInfoLog(shader),
+        );
         gl.deleteShader(shader);
 
         return null;
@@ -324,6 +443,10 @@ function createProgram(
     gl.deleteShader(frag);
 
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        console.warn(
+            '[ElevationCurtainLayer] Program link failed:',
+            gl.getProgramInfoLog(program),
+        );
         gl.deleteProgram(program);
 
         return null;
@@ -411,6 +534,55 @@ function pushDotBillboard(
     out.push(x, y, z, -1, 1, radiusPx, strokePx, fr, fg, fb, sr, sg, sb);
 }
 
+const BILLBOARD_CORNERS: ReadonlyArray<readonly [number, number]> = [
+    [-1, -1],
+    [1, -1],
+    [-1, 1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+];
+
+function pushArrowBillboard(
+    out: number[],
+    x: number,
+    y: number,
+    z: number,
+    aheadX: number,
+    aheadY: number,
+    aheadZ: number,
+    sizePx: number,
+    strokePx: number,
+    fillRgb: [number, number, number],
+    strokeRgb: [number, number, number],
+    alpha: number,
+): void {
+    const [fr, fg, fb] = fillRgb;
+    const [sr, sg, sb] = strokeRgb;
+
+    for (const [cx, cy] of BILLBOARD_CORNERS) {
+        out.push(
+            x,
+            y,
+            z,
+            aheadX,
+            aheadY,
+            aheadZ,
+            cx,
+            cy,
+            sizePx,
+            strokePx,
+            fr,
+            fg,
+            fb,
+            sr,
+            sg,
+            sb,
+            alpha,
+        );
+    }
+}
+
 export class ElevationCurtainLayer implements CustomLayerInterface {
     public readonly id: string;
     public readonly type = 'custom' as const;
@@ -422,6 +594,7 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
     private curtainProgram: WebGLProgram | null = null;
     private ribbonProgram: WebGLProgram | null = null;
     private dotProgram: WebGLProgram | null = null;
+    private arrowProgram: WebGLProgram | null = null;
 
     private curtainVao: WebGLVertexArrayObject | null = null;
     private curtainBuffer: WebGLBuffer | null = null;
@@ -439,6 +612,10 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
     private dotBuffer: WebGLBuffer | null = null;
     private dotVertexCount = 0;
 
+    private arrowVao: WebGLVertexArrayObject | null = null;
+    private arrowBuffer: WebGLBuffer | null = null;
+    private arrowVertexCount = 0;
+
     private curtainUniforms: {
         matrix: WebGLUniformLocation | null;
         bottomAlpha: WebGLUniformLocation | null;
@@ -455,6 +632,11 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
         viewport: WebGLUniformLocation | null;
     } = { matrix: null, viewport: null };
 
+    private arrowUniforms: {
+        matrix: WebGLUniformLocation | null;
+        viewport: WebGLUniformLocation | null;
+    } = { matrix: null, viewport: null };
+
     private originX = 0;
     private originY = 0;
     private isDark = false;
@@ -462,12 +644,14 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
 
     private projectedPoints: ProjectedCurtainPoint[] = [];
     private staticMarkers: ElevationCurtainMarker[] = [];
+    private staticArrows: ElevationCurtainArrow[] = [];
     private hoverMarker: ElevationCurtainMarker | null = null;
 
     private curtainDataArray: Float32Array = new Float32Array(0);
     private ribbonDataArray: Float32Array = new Float32Array(0);
     private dynamicRibbonDataArray: Float32Array = new Float32Array(0);
     private dotDataArray: Float32Array = new Float32Array(0);
+    private arrowDataArray: Float32Array = new Float32Array(0);
 
     private routeDirty = false;
     private overlayDirty = false;
@@ -492,9 +676,11 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
     public setData(data: ElevationCurtainData): void {
         this.isDark = data.isDark;
         this.staticMarkers = data.markers ?? [];
+        this.staticArrows = data.arrows ?? [];
         this.hoverMarker = data.hoverMarker ?? null;
 
         this.rebuildRouteGeometry(data.points);
+        this.rebuildArrowGeometry();
         this.rebuildDynamicGeometry();
         this.routeDirty = true;
         this.overlayDirty = true;
@@ -616,6 +802,11 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
             gl,
             DOT_VERTEX_SHADER,
             DOT_FRAGMENT_SHADER,
+        );
+        this.arrowProgram = createProgram(
+            gl,
+            ARROW_VERTEX_SHADER,
+            ARROW_FRAGMENT_SHADER,
         );
 
         if (this.curtainProgram) {
@@ -918,6 +1109,126 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
             gl.bindVertexArray(null);
         }
 
+        if (this.arrowProgram) {
+            this.arrowUniforms = {
+                matrix: gl.getUniformLocation(this.arrowProgram, 'u_matrix'),
+                viewport: gl.getUniformLocation(
+                    this.arrowProgram,
+                    'u_viewport',
+                ),
+            };
+
+            this.arrowVao = gl.createVertexArray();
+            this.arrowBuffer = gl.createBuffer();
+            gl.bindVertexArray(this.arrowVao);
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.arrowBuffer);
+
+            const stride = 17 * 4;
+            const posLoc = gl.getAttribLocation(this.arrowProgram, 'a_pos');
+            const aheadLoc = gl.getAttribLocation(this.arrowProgram, 'a_ahead');
+            const cornerLoc = gl.getAttribLocation(
+                this.arrowProgram,
+                'a_corner',
+            );
+            const sizeLoc = gl.getAttribLocation(this.arrowProgram, 'a_size');
+            const strokeLoc = gl.getAttribLocation(
+                this.arrowProgram,
+                'a_stroke',
+            );
+            const fillColorLoc = gl.getAttribLocation(
+                this.arrowProgram,
+                'a_fillColor',
+            );
+            const strokeColorLoc = gl.getAttribLocation(
+                this.arrowProgram,
+                'a_strokeColor',
+            );
+            const alphaLoc = gl.getAttribLocation(this.arrowProgram, 'a_alpha');
+
+            if (posLoc >= 0) {
+                gl.enableVertexAttribArray(posLoc);
+                gl.vertexAttribPointer(posLoc, 3, gl.FLOAT, false, stride, 0);
+            }
+            if (aheadLoc >= 0) {
+                gl.enableVertexAttribArray(aheadLoc);
+                gl.vertexAttribPointer(
+                    aheadLoc,
+                    3,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    3 * 4,
+                );
+            }
+            if (cornerLoc >= 0) {
+                gl.enableVertexAttribArray(cornerLoc);
+                gl.vertexAttribPointer(
+                    cornerLoc,
+                    2,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    6 * 4,
+                );
+            }
+            if (sizeLoc >= 0) {
+                gl.enableVertexAttribArray(sizeLoc);
+                gl.vertexAttribPointer(
+                    sizeLoc,
+                    1,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    8 * 4,
+                );
+            }
+            if (strokeLoc >= 0) {
+                gl.enableVertexAttribArray(strokeLoc);
+                gl.vertexAttribPointer(
+                    strokeLoc,
+                    1,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    9 * 4,
+                );
+            }
+            if (fillColorLoc >= 0) {
+                gl.enableVertexAttribArray(fillColorLoc);
+                gl.vertexAttribPointer(
+                    fillColorLoc,
+                    3,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    10 * 4,
+                );
+            }
+            if (strokeColorLoc >= 0) {
+                gl.enableVertexAttribArray(strokeColorLoc);
+                gl.vertexAttribPointer(
+                    strokeColorLoc,
+                    3,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    13 * 4,
+                );
+            }
+            if (alphaLoc >= 0) {
+                gl.enableVertexAttribArray(alphaLoc);
+                gl.vertexAttribPointer(
+                    alphaLoc,
+                    1,
+                    gl.FLOAT,
+                    false,
+                    stride,
+                    16 * 4,
+                );
+            }
+            gl.bindVertexArray(null);
+        }
+
         this.routeDirty = true;
         this.overlayDirty = true;
     }
@@ -955,6 +1266,14 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
             gl.deleteVertexArray(this.dotVao);
             this.dotVao = null;
         }
+        if (this.arrowBuffer) {
+            gl.deleteBuffer(this.arrowBuffer);
+            this.arrowBuffer = null;
+        }
+        if (this.arrowVao) {
+            gl.deleteVertexArray(this.arrowVao);
+            this.arrowVao = null;
+        }
         if (this.curtainProgram) {
             gl.deleteProgram(this.curtainProgram);
             this.curtainProgram = null;
@@ -966,6 +1285,10 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
         if (this.dotProgram) {
             gl.deleteProgram(this.dotProgram);
             this.dotProgram = null;
+        }
+        if (this.arrowProgram) {
+            gl.deleteProgram(this.arrowProgram);
+            this.arrowProgram = null;
         }
 
         this.gl = null;
@@ -1075,6 +1398,21 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
             gl.bindVertexArray(null);
         }
 
+        // Pass 3.5: Elevated directional chevrons along the ridge
+        if (this.arrowProgram && this.arrowVao && this.arrowVertexCount > 0) {
+            gl.useProgram(this.arrowProgram);
+            gl.uniformMatrix4fv(this.arrowUniforms.matrix, false, matrix32);
+            gl.uniform2f(
+                this.arrowUniforms.viewport,
+                viewportWidth,
+                viewportHeight,
+            );
+
+            gl.bindVertexArray(this.arrowVao);
+            gl.drawArrays(gl.TRIANGLES, 0, this.arrowVertexCount);
+            gl.bindVertexArray(null);
+        }
+
         // Pass 4: Elevated start / finish / hover circular markers
         if (this.dotProgram && this.dotVao && this.dotVertexCount > 0) {
             gl.useProgram(this.dotProgram);
@@ -1108,6 +1446,14 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
                 gl.bufferData(
                     gl.ARRAY_BUFFER,
                     this.ribbonDataArray,
+                    gl.STATIC_DRAW,
+                );
+            }
+            if (this.arrowBuffer) {
+                gl.bindBuffer(gl.ARRAY_BUFFER, this.arrowBuffer);
+                gl.bufferData(
+                    gl.ARRAY_BUFFER,
+                    this.arrowDataArray,
                     gl.STATIC_DRAW,
                 );
             }
@@ -1269,6 +1615,46 @@ export class ElevationCurtainLayer implements CustomLayerInterface {
 
         this.ribbonDataArray = new Float32Array(combinedRibbonVerts);
         this.ribbonVertexCount = combinedRibbonVerts.length / 13;
+    }
+
+    private rebuildArrowGeometry(): void {
+        if (this.staticArrows.length === 0) {
+            this.arrowDataArray = new Float32Array(0);
+            this.arrowVertexCount = 0;
+
+            return;
+        }
+
+        const arrowVerts: number[] = [];
+
+        for (const arrow of this.staticArrows) {
+            const mc = MercatorCoordinate.fromLngLat(
+                [arrow.lng, arrow.lat],
+                Math.max(0, arrow.heightMeters),
+            );
+            const aheadMc = MercatorCoordinate.fromLngLat(
+                [arrow.aheadLng, arrow.aheadLat],
+                Math.max(0, arrow.aheadHeightMeters),
+            );
+
+            pushArrowBillboard(
+                arrowVerts,
+                mc.x - this.originX,
+                mc.y - this.originY,
+                mc.z,
+                aheadMc.x - this.originX,
+                aheadMc.y - this.originY,
+                aheadMc.z,
+                arrow.sizePx,
+                arrow.strokeWidthPx,
+                parseCssColorToRgb(arrow.fillColor),
+                parseCssColorToRgb(arrow.strokeColor),
+                arrow.alpha ?? 1.0,
+            );
+        }
+
+        this.arrowDataArray = new Float32Array(arrowVerts);
+        this.arrowVertexCount = arrowVerts.length / 17;
     }
 
     private rebuildDynamicGeometry(): void {
